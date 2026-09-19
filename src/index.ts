@@ -17,7 +17,14 @@ export { SOLAR_SYSTEM } from './solarSystemData'
 
 // World-position resolution (orbit + fixedPosition, hierarchical)
 export type { WorldVec } from './render'
-export { compressVec, resolveWorldPosition, resolveAllWorldPositions } from './render'
+export {
+  compressVec,
+  compressVecByRatio,
+  compressionRatio,
+  orbitCompressionRatio,
+  resolveWorldPosition,
+  resolveAllWorldPositions,
+} from './render'
 export { resolveAbsolutePosition, resolveAllPositions, coOrbitalReferenceAngle } from './resolve'
 
 // True-scale compression + the pixel-floor visibility system
@@ -43,7 +50,7 @@ export type { FocusTarget } from './camera'
 
 // Visibility / level of detail
 export { SECONDARY_REVEAL_FRACTION, computeVisibleBodyIds } from './visibility'
-export { apparentSize, sphereDetailFor, icosahedronDetailFor, torusDetailFor } from './levelOfDetail'
+export { apparentSize, sphereDetailFor, icosahedronDetailFor, torusDetailFor, orbitDetailFor } from './levelOfDetail'
 export type { SphereDetail } from './levelOfDetail'
 
 // Bubble-cursor proximity selection + label decluttering

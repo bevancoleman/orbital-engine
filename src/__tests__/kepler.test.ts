@@ -208,11 +208,30 @@ describe('orbitPath', () => {
   })
 
   it('is independent of time — the path shape does not depend on when you ask for it', () => {
-    // orbitPath samples by true anomaly, not time, so it should be a pure
-    // function of the orbital elements alone.
+    // orbitPath samples by eccentric anomaly, not time, so it should be a
+    // pure function of the orbital elements alone.
     const orbit = bodyOrbit('jupiter')
     const path1 = orbitPath(orbit, 32)
     const path2 = orbitPath(orbit, 32)
     expect(path1).toEqual(path2)
+  })
+
+  it('keeps consecutive-point spacing reasonably even even for a highly eccentric orbit', () => {
+    // The actual reported bug: Halley's Comet (e ≈ 0.967) rendered as
+    // visibly low-poly near apoapsis even at a high segment count, because
+    // the old true-anomaly sampling packed almost all the points into the
+    // tight periapsis arc. Sampling by eccentric anomaly instead keeps the
+    // largest and smallest gaps within a bounded ratio of each other — far
+    // from perfectly uniform, but nowhere near the ~60x disparity true
+    // anomaly produced for this same orbit.
+    const halley = bodyOrbit('halley')
+    const path = orbitPath(halley, 256)
+    const gaps: number[] = []
+    for (let i = 0; i < path.length - 1; i++) {
+      gaps.push(distanceKm(path[i]!, path[i + 1]!))
+    }
+    const maxGap = Math.max(...gaps)
+    const minGap = Math.min(...gaps)
+    expect(maxGap / minGap).toBeLessThan(10)
   })
 })

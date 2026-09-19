@@ -83,13 +83,36 @@ export function positionAtTime(orbit: OrbitalElements, date: Date): Vec3Km {
 }
 
 /**
- * Sample points around the full ellipse (by true anomaly, not time — an
- * even angular sweep, not an even time sweep, so a highly eccentric orbit's
- * fast-moving periapsis segment doesn't get under-sampled) for drawing the
- * orbit path itself, independent of where the body currently sits on it.
+ * Sample points around the full ellipse — by EVEN STEPS IN ECCENTRIC
+ * ANOMALY, not true anomaly and not time — for drawing the orbit path
+ * itself, independent of where the body currently sits on it.
+ *
+ * Real, observed bug this fixes: sampling evenly by true anomaly (the
+ * previous approach) does avoid under-sampling a fast-moving periapsis
+ * passage the way even TIME steps would, but it does NOT give evenly-
+ * spaced points along the actual curve — true anomaly is measured from the
+ * focus, so for any real eccentricity the same angular step corresponds to
+ * a much SMALLER real distance near periapsis (r is small there) than near
+ * apoapsis (r is large). For Halley's Comet (e ≈ 0.967) the gap between
+ * consecutive sampled points near apoapsis was measured at ~60x the gap
+ * near periapsis, at ANY fixed segment count — the far arc (which is most
+ * of what's actually visible on screen for an orbit this eccentric, since
+ * periapsis is tucked in tight near the star) rendered as visibly low-poly
+ * even at this engine's maximum adaptive detail level.
+ *
+ * The eccentric anomaly E parametrizes position directly (not via r and an
+ * angle from the focus) as a point on the ellipse's own auxiliary circle,
+ * scaled down along the minor axis: x = a(cosE − e), y = b·sinE. Points
+ * evenly spaced in E are close to evenly spaced in real arc length around
+ * the whole ellipse — for the same Halley orbit, the periapsis/apoapsis
+ * gap ratio drops from ~60x to under 4x, and the endpoints (E = 0 at
+ * periapsis, E = π at apoapsis) land at exactly the same real distances
+ * (a(1−e) and a(1+e)) true-anomaly sampling gave, so this is the same
+ * ellipse, just walked around more evenly.
  */
 export function orbitPath(orbit: OrbitalElements, segments = 128): Vec3Km[] {
   const { semiMajorAxisKm: a, eccentricity: e } = orbit
+  const b = a * Math.sqrt(1 - e * e)
   const i = orbit.inclinationDeg * DEG2RAD
   const raan = orbit.longitudeOfAscendingNodeDeg * DEG2RAD
   const argp = orbit.argumentOfPeriapsisDeg * DEG2RAD
@@ -103,10 +126,9 @@ export function orbitPath(orbit: OrbitalElements, segments = 128): Vec3Km[] {
 
   const points: Vec3Km[] = []
   for (let s = 0; s <= segments; s++) {
-    const trueAnomaly = (2 * Math.PI * s) / segments
-    const r = (a * (1 - e * e)) / (1 + e * Math.cos(trueAnomaly))
-    const xOrb = r * Math.cos(trueAnomaly)
-    const yOrb = r * Math.sin(trueAnomaly)
+    const E = (2 * Math.PI * s) / segments
+    const xOrb = a * (Math.cos(E) - e)
+    const yOrb = b * Math.sin(E)
 
     const x =
       (cosRaan * cosArgp - sinRaan * sinArgp * cosI) * xOrb +
