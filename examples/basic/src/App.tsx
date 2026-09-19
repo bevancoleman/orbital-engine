@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { OrbitalSystemScene, SOLAR_SYSTEM } from 'orbital-engine'
+import { OrbitalSystemScene } from 'orbital-engine/react'
+import { SOLAR_SYSTEM } from 'orbital-engine'
 import type { CelestialBody } from 'orbital-engine'
 import { FICTIONAL_SYSTEM } from './fictionalSystem'
 

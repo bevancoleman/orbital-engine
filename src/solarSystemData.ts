@@ -8,7 +8,7 @@ const J2000 = '2000-01-01T12:00:00Z'
  * and physical radii, sourced from well-established, independently
  * checkable astronomical constants (NASA JPL / IAU published values), used
  * to validate the orbital engine and this module's data contract before any
- * Star Citizen data gets mapped into it (see prompts/ for that reasoning).
+ * fictional or game-sourced data gets mapped into it.
  *
  * These are MEAN elements, not a precision ephemeris: real bodies perturb
  * each other and drift from these over time, and several moons here are
@@ -20,9 +20,9 @@ const J2000 = '2000-01-01T12:00:00Z'
  * Every body's `color` is its real, well-documented apparent colour (Io's
  * sulfur yellow, Titan's hazy orange, Neptune's deep blue, etc.) — genuine
  * astronomical common knowledge, not an arbitrary UI palette pick. This is
- * the one dataset honest enough to state that for; Star Citizen's own data
- * (star_systems.js, in the Data repo) has no real colour source for
- * anything, so it deliberately leaves `color` unset there instead.
+ * the one dataset honest enough to state that for; fictional or
+ * game-sourced data typically has no real colour source for anything, so
+ * it deliberately leaves `color` unset there instead.
  */
 export const SOLAR_SYSTEM: StarSystemData = {
   id: 'sol',

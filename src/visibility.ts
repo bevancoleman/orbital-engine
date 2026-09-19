@@ -3,8 +3,8 @@ import type { StarSystemData } from './types'
 // A system with dozens of moons/stations rendered all at once, at the same
 // zoomed-out level meant to frame the whole system, is unreadable —
 // overlapping labels with nothing distinguishable (this is what the map
-// actually looked like before this LOD gate existed, on real Star Citizen
-// data: ~56 Stanton bodies' labels all crammed together). Planets (and the
+// actually looked like before this LOD gate existed, on a real game
+// dataset: ~56 bodies in one system, labels all crammed together). Planets (and the
 // star) always show, since they're the top-level things worth seeing at any
 // zoom; everything else only reveals once the camera has zoomed in past a
 // fraction of the whole-system framing distance.

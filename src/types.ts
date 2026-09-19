@@ -1,11 +1,11 @@
 /**
  * Data contract for the orbital rendering engine.
  *
- * This is deliberately generic astronomy, not Star Citizen data — the whole
- * point of this module is to validate the engine (and this contract) against
- * real, independently-verifiable reference bodies (our actual Solar System)
- * before anything from the game gets mapped into it. See
- * lib/orbital-engine/solarSystemData.ts and prompts/ for the reasoning.
+ * This is deliberately generic astronomy, not data from any particular game
+ * or fictional setting — the whole point of this module is to validate the
+ * engine (and this contract) against real, independently-verifiable
+ * reference bodies (our actual Solar System) before any fictional or
+ * game-sourced data gets mapped into it. See solarSystemData.ts.
  *
  * Orbital elements are the standard 6 classical (Keplerian) elements used
  * throughout astronomy/aerospace — any source that publishes a body's orbit
@@ -88,10 +88,10 @@ export interface CelestialBody {
    * itself): `orbit` when real Keplerian elements are known (the Solar
    * System validation set — see solarSystemData.ts) and the body should
    * actually move over time; `fixedPosition` when only a single real
-   * position snapshot is known (e.g. Star Citizen data, sourced from a
-   * live-but-single-moment game-file dump — see
-   * pipeline/scripts/transform/locations.js in the Data repo) and the body
-   * should stay put rather than animate on a fabricated orbit.
+   * position snapshot is known (e.g. data extracted from a game's files, or
+   * any other source that gives a single point-in-time position rather than
+   * orbital elements) and the body should stay put rather than animate on a
+   * fabricated orbit.
    */
   orbit: OrbitalElements | null
   fixedPosition?: FixedPosition
@@ -99,12 +99,12 @@ export interface CelestialBody {
    * True when `parentId` is a labelling/grouping convenience only — this
    * body doesn't actually orbit that body locally, it shares that body's
    * OWN orbit around the star at a different point along it. The concrete
-   * real case this exists for: a Lagrange-point station (e.g. "CRU-L5
-   * Beautiful Glen Station") is grouped under its reference planet
-   * (Crusader) for labelling/routing, exactly like a real orbiting station
-   * would be, but it genuinely orbits the star independently, 60°/180°
-   * around from the planet — real millions-of-km away from it, not a
-   * nearby local satellite. Left unset (false) for every ordinary
+   * real case this exists for: a Lagrange-point station (e.g. a station at
+   * a planet's L4/L5 point) is grouped under its reference planet for
+   * labelling/routing, exactly like a real orbiting station would be, but
+   * it genuinely orbits the star independently, 60°/180° around from the
+   * planet — real millions-of-km away from it, not a nearby local
+   * satellite. Left unset (false) for every ordinary
    * child (a real moon, a station that really does orbit its planet).
    * Doesn't affect position math (fixedPosition/orbit already carry the
    * body's real position regardless) — only camera framing (see
@@ -119,16 +119,17 @@ export interface CelestialBody {
    * spin (e.g. Venus). Separate from orbital motion entirely: even a
    * `fixedPosition` body (no orbital motion, because we only have one
    * position snapshot for it) can still spin in place — this is what
-   * produces Star Citizen's day/night cycle despite its planets not
-   * actually orbiting in this engine. Optional; not yet used by the Solar
-   * System validation set.
+   * produces a day/night cycle for a fictional or game-sourced body despite
+   * it not actually orbiting in this engine. Optional; not yet used by the
+   * Solar System validation set.
    */
   rotationPeriodHours?: number
   /** Real, documented average colour, when one is actually known (e.g. the
    *  Solar System's planets/major moons) — used as-is instead of the
    *  generic per-type placeholder colour (see BODY_TYPE_COLOR_FALLBACK in
    *  OrbitalSystemScene.tsx). Left unset for anything with no real colour
-   *  data (all current Star Citizen bodies — no source publishes one). */
+   *  data (e.g. fictional or game-sourced bodies with no published
+   *  colour source). */
   color?: string
   /**
    * An optional real 3D model to render instead of this engine's generic
@@ -176,8 +177,8 @@ export interface BeltRegion {
   particleCount: number
   /**
    * Real individual positions (km, relative to `parentId`), when they're
-   * actually known — e.g. Star Citizen's asteroid fields, where the game's
-   * own data enumerates every real rock's exact position, unlike the Solar
+   * actually known — e.g. a game's asteroid fields, where the source data
+   * enumerates every real rock's exact position, unlike the Solar
    * System's asteroid belt (millions of real objects, none individually
    * catalogued here). When set, rendering uses these exact points instead
    * of statistically scattering `particleCount` points across

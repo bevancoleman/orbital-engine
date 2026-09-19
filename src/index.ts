@@ -57,6 +57,8 @@ export { formatDistanceKm } from './units'
 export { routeSegments } from './routeSegments'
 export { sliderPositionToDistance, distanceToSliderPosition } from './zoomSlider'
 
-// React / react-three-fiber renderer
-export { OrbitalSystemScene } from './react/OrbitalSystemScene'
-export type { OrbitalSystemSceneProps, ExternalFocusRequest, RoutePreview } from './react/OrbitalSystemScene'
+// The React / react-three-fiber renderer (OrbitalSystemScene) is a
+// separate entry point — 'orbital-engine/react' — not re-exported here.
+// It carries a 'use client' directive for Next.js/RSC-aware bundlers;
+// keeping it out of this entry means everything above stays usable from
+// server code / non-React contexts without pulling in a client boundary.

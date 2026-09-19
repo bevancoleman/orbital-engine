@@ -2,8 +2,8 @@
  * Bubble-cursor / proximity target selection.
  *
  * True-to-real-scale rendering (see scale.ts's trueRadius) makes most
- * bodies here tiny and, in a cluster (the Galilean moons, Stanton's
- * Lagrange stations), packed close together on screen — requiring a
+ * bodies here tiny and, in a cluster (the Galilean moons, a group of
+ * Lagrange-point stations), packed close together on screen — requiring a
  * pointer to land exactly on a target's own rendered footprint would make
  * precise selection nearly impossible, especially on a trackpad/touch
  * target. This instead picks whichever candidate's PROJECTED SCREEN

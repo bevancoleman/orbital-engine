@@ -28,7 +28,8 @@ npm install orbital-engine three @react-three/fiber @react-three/drei react reac
 ## Quickstart
 
 ```tsx
-import { OrbitalSystemScene, SOLAR_SYSTEM } from 'orbital-engine'
+import { OrbitalSystemScene } from 'orbital-engine/react'
+import { SOLAR_SYSTEM } from 'orbital-engine'
 
 export default function App() {
   return (
@@ -70,18 +71,18 @@ A body has *exactly one* of `orbit` or `fixedPosition` (neither, for the system'
 
 ## API
 
-The full public surface is exported from the package root — see [`src/index.ts`](./src/index.ts) for the exact list. The main pieces:
+The engine — types, math, and reference data — is exported from the package root (`orbital-engine`); see [`src/index.ts`](./src/index.ts) for the exact list. The R3F component is a separate entry point, `orbital-engine/react` (see [`src/react/index.ts`](./src/react/index.ts)) — it carries a `'use client'` directive for Next.js/RSC-aware bundlers, so it's kept out of the main entry to avoid pulling a client boundary into server-safe code. The main pieces:
 
-| Export | What it's for |
-| --- | --- |
-| `OrbitalSystemScene` | The R3F component — drop it in a `<Canvas>`-capable tree. |
-| `positionAtTime`, `orbitPath` | Real Keplerian propagation, given `OrbitalElements` and a `Date`. |
-| `resolveAllWorldPositions` | Resolves every body's current world position (orbit or fixed), respecting parent hierarchy. |
-| `compressDistance`, `trueRadius` | The true-scale compression math — real km in, render-space units out. |
-| `computeFocusForBody`, `computeFocusForSystem` | Camera framing targets for a fly-to. |
-| `findNearestCandidate` | Bubble-cursor proximity selection, given screen-space candidates. |
-| `computeVisibleLabels`, `computeOrbitalDepth` | Label decluttering, prioritized by structural depth. |
-| `SOLAR_SYSTEM` | The real reference dataset. |
+| Export | Entry point | What it's for |
+| --- | --- | --- |
+| `OrbitalSystemScene` | `orbital-engine/react` | The R3F component — drop it in a `<Canvas>`-capable tree. |
+| `positionAtTime`, `orbitPath` | `orbital-engine` | Real Keplerian propagation, given `OrbitalElements` and a `Date`. |
+| `resolveAllWorldPositions` | `orbital-engine` | Resolves every body's current world position (orbit or fixed), respecting parent hierarchy. |
+| `compressDistance`, `trueRadius` | `orbital-engine` | The true-scale compression math — real km in, render-space units out. |
+| `computeFocusForBody`, `computeFocusForSystem` | `orbital-engine` | Camera framing targets for a fly-to. |
+| `findNearestCandidate` | `orbital-engine` | Bubble-cursor proximity selection, given screen-space candidates. |
+| `computeVisibleLabels`, `computeOrbitalDepth` | `orbital-engine` | Label decluttering, prioritized by structural depth. |
+| `SOLAR_SYSTEM` | `orbital-engine` | The real reference dataset. |
 
 ## Development
 

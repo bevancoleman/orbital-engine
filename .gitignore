@@ -6,3 +6,5 @@ coverage/
 
 examples/**/node_modules/
 examples/**/dist/
+
+*.tgz

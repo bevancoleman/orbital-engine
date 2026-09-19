@@ -415,8 +415,8 @@ function BeltPoints({ belt, system, simDate }: { belt: BeltRegion; system: StarS
  * The generic, always-available geometry for a body, distinct by type — a
  * sphere reads fine for a real celestial body (star/planet/moon/dwarf
  * planet), but every type here shares the exact same placeholder radius as
- * every other of its kind (see PLACEHOLDER_RADIUS_KM in the Data repo's
- * star_systems.js — no source publishes real sizes), so shape is the only
+ * every other of its kind (a consuming app's own data source may not
+ * publish real sizes for every body type), so shape is the only
  * cue that actually distinguishes "a station" from "a jump point" from "a
  * bare nav marker" at a glance, not size. No real texture imagery exists in
  * any current data source for planets/the star either (same
@@ -1468,7 +1468,8 @@ export function OrbitalSystemScene({
   }
 
   // Frame the whole system on first load, and again whenever a different
-  // system is loaded in (e.g. switching the Stanton/Pyro/Nyx tab) — without
+  // system is loaded in (e.g. switching between star systems in a
+  // multi-system app) — without
   // this, a newly-loaded system keeps whatever camera position the
   // previous one left behind, which is almost never a sane framing for it.
   useEffect(() => {
