@@ -1,0 +1,55 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug: examples/basic (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/examples/basic",
+      "sourceMaps": true,
+      "preLaunchTask": "examples/basic: dev server"
+    },
+    {
+      "name": "Debug: examples/with-models (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5174",
+      "webRoot": "${workspaceFolder}/examples/with-models",
+      "sourceMaps": true,
+      "preLaunchTask": "examples/with-models: dev server"
+    },
+    {
+      "name": "Attach to running dev server (basic, :5173)",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9222,
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/examples/basic"
+    },
+    {
+      "name": "Debug: Jest tests",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["--experimental-vm-modules"],
+      "program": "${workspaceFolder}/node_modules/.bin/jest",
+      "args": ["--runInBand", "--no-coverage"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "disableOptimisticBPs": true
+    },
+    {
+      "name": "Debug: current Jest test file",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["--experimental-vm-modules"],
+      "program": "${workspaceFolder}/node_modules/.bin/jest",
+      "args": ["--runInBand", "--no-coverage", "${fileBasenameNoExtension}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "disableOptimisticBPs": true
+    }
+  ]
+}
