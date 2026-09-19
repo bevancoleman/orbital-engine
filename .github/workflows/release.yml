@@ -7,12 +7,22 @@ on:
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
+  # Version-bump / changelog PR only — no publish command here. The npm
+  # trusted-publisher configured for this repo is stage-only (see
+  # npmjs.com/package/orbital-engine/access): a plain `npm publish`, which
+  # is what changesets' own `publish` subcommand calls internally, gets
+  # rejected outright under that config. The separate `publish` job below
+  # runs `npm stage publish` directly instead, which the trusted publisher
+  # does accept — staged releases still need a maintainer's own 2FA
+  # approval (on npmjs.com, or `npm stage approve <id>`) before they're
+  # actually installable, which is the whole point of staged publishing:
+  # a compromised CI run can stage a malicious version, but can't make it
+  # live on its own.
   release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,17 +31,40 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          registry-url: https://registry.npmjs.org
-      # npm trusted publishing (OIDC, no stored token) needs npm CLI
-      # >=11.5.1 — newer than what Node 22's runner image ships by default.
-      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - name: Create release PR or publish to npm
+      - name: Create/update the "Version Packages" release PR
         uses: changesets/action@v1
-        with:
-          publish: npx changeset publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      # OIDC token for npm trusted publishing — no NPM_TOKEN secret needed
+      # or used anywhere in this job.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      # Staged publishing (npm stage publish) needs npm CLI >=11.15.0 —
+      # newer than what the runner image ships by default.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm run build
+      - name: Stage publish if this version isn't on npm yet
+        run: |
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED_VERSION=$(npm view orbital-engine version 2>/dev/null || echo "none")
+          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
+            echo "orbital-engine@$LOCAL_VERSION is already published — nothing to do."
+          else
+            echo "Staging orbital-engine@$LOCAL_VERSION (needs maintainer 2FA approval — npmjs.com or 'npm stage list'/'npm stage approve <id>')."
+            npm stage publish
+          fi

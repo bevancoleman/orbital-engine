@@ -51,6 +51,10 @@ If you're adding a feature that touches rendering behavior (not just pure math i
 - If you changed rendering behavior, `npx playwright test` passes too.
 - Add a changeset describing the change: `npx changeset` — pick patch/minor/major and write a one-line summary. This drives the version bump and changelog entry on release; PRs without one are assumed to need no release note (docs/CI-only changes, etc).
 
+## Releasing
+
+Merging changesets into `main` makes the release workflow open/update a "Version Packages" PR (bumps `package.json` and `CHANGELOG.md`, no publish yet). Merging *that* PR is what triggers an actual release — but publishing itself is staged, not automatic: CI runs `npm stage publish`, and a maintainer still has to separately approve the staged version with their own 2FA, either on `npmjs.com/package/orbital-engine/access` or via `npm stage approve <stage-id>` (`npm stage list` shows what's pending). This is deliberate — it means a compromised CI run can stage a bad version but can't make it live unattended.
+
 ## Design principles this codebase holds to
 
 Worth reading before a non-trivial change, since these shape a lot of decisions in the code and its comments:
