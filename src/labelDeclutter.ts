@@ -2,7 +2,7 @@ import type { CelestialBody } from './types'
 
 /**
  * Each body's depth in its own orbital hierarchy — the star is 0, anything
- * that orbits the star directly (a planet, or a Star Citizen body anchored
+ * that orbits the star directly (a planet, or any other body anchored
  * straight to the star) is 1, a moon of that planet is 2, and so on. Purely
  * structural (parentId chains), not based on `body.type` at all — a deeply
  * nested station ranks below a shallow moon even though "moon" and

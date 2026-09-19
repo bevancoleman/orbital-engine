@@ -246,9 +246,9 @@ function OrbitPathLine({ body, color, parentWorldPos }: { body: CelestialBody; c
 }
 
 /**
- * A body with only a `fixedPosition` (see CelestialBody — real Star Citizen
- * data has no orbital elements to draw a true path from) still has a real,
- * known distance from its parent. Drawing a flat circle at that radius,
+ * A body with only a `fixedPosition` (see CelestialBody — a single known
+ * snapshot has no orbital elements to draw a true path from) still has a
+ * real, known distance from its parent. Drawing a flat circle at that radius,
  * passing exactly through the body's own current position, gives the same
  * "this is roughly where it orbits" reference the real Keplerian orbit path
  * gives for the Solar System — honest about being a simplification (flat,
@@ -1018,8 +1018,7 @@ function ProximitySelector({
 /** Owns the OrbitControls target and smoothly flies the camera to a new
  *  focus (position + distance) when one is set — moving the camera only
  *  radially (along its current viewing direction) so the view doesn't
- *  suddenly reorient, just pans and zooms, the same way the Star Citizen
- *  map's own CameraRig flies to a selected location. */
+ *  suddenly reorient, just pans and zooms. */
 interface FlyAnimation {
   startCameraPos: THREE.Vector3
   startTarget: THREE.Vector3

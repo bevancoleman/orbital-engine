@@ -114,9 +114,8 @@ export function distanceToFit(worldRadius: number, marginFactor = 2.2): number {
  * genuinely close — see CelestialBody.coOrbitalWithParent) rather than a
  * fixed zoom level. A leaf body with nothing orbiting it just frames close
  * on itself. Uses the dataset's own parent/child links directly — no
- * geometric "what's nearby" heuristic needed, unlike the Star Citizen map,
- * because this engine's bodies carry their real orbital relationship
- * already.
+ * geometric "what's nearby" heuristic needed, because this engine's bodies
+ * already carry their real orbital relationship.
  *
  * A child with `coOrbitalWithParent: true` (a Lagrange-point station,
  * grouped under its reference planet for labelling but really orbiting the
@@ -161,10 +160,10 @@ export function computeFocusForBody(body: CelestialBody, system: StarSystemData,
  * "children" (planets, plus anything else anchored straight to the star,
  * e.g. a deep-space jump point). The fixed default camera position this
  * replaced ([0, 60, 120], tuned for the Solar System's ~180-unit span out
- * to Neptune) badly over-framed a much smaller system — a Star Citizen
- * system's real extent compresses to single-digit world units, so
- * everything rendered as an indistinguishable cluster of overlapping
- * labels near the centre of a mostly-empty view. Reusing
+ * to Neptune) badly over-framed any much smaller system — a system whose
+ * real extent compresses to single-digit world units rendered as an
+ * indistinguishable cluster of overlapping labels near the centre of a
+ * mostly-empty view. Reusing
  * computeFocusForBody on the star itself scales correctly to whatever
  * system is actually loaded.
  */

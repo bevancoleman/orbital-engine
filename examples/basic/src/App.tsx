@@ -27,9 +27,9 @@ const FLY_TARGETS: Record<SystemId, { id: string; label: string }[]> = {
 
 const DESCRIPTIONS: Record<SystemId, string> = {
   solar:
-    'Real J2000 Keplerian orbital elements — every body actually orbits over time, at its real physical size and real distance. Zoom in on the ISS: it is genuinely smaller than a pixel at Earth-orbit scale, and the pixel-floor system is what keeps it visible at all.',
+    'J2000 Keplerian orbital elements. Every body orbits over time, at its actual physical size and distance. Try flying to the ISS — it\'s smaller than a pixel at Earth-orbit scale, which is what the pixel-floor system is for.',
   fictional:
-    'The same component, fed data with NO orbital elements at all — just one known position per body (`fixedPosition`). This is the shape a game world or a one-time survey snapshot takes: real coordinates, no motion. Bodies here sit still; nothing here is simulated or guessed.',
+    'Same component, different input: no orbital elements at all, just one fixedPosition per body. This is the shape a game world or a one-off survey takes — coordinates with no motion, nothing simulated.',
 }
 
 export function App() {

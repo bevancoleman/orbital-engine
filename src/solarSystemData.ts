@@ -4,25 +4,22 @@ const AU_KM = 149_597_870.7
 const J2000 = '2000-01-01T12:00:00Z'
 
 /**
- * Real Solar System reference data — mean orbital elements (J2000 epoch)
- * and physical radii, sourced from well-established, independently
- * checkable astronomical constants (NASA JPL / IAU published values), used
- * to validate the orbital engine and this module's data contract before any
- * fictional or game-sourced data gets mapped into it.
+ * Solar System reference data — mean orbital elements (J2000 epoch) and
+ * physical radii, sourced from published NASA JPL / IAU constants. Used to
+ * check the engine and this module's data contract against real astronomy
+ * before anything else gets mapped into it.
  *
  * These are MEAN elements, not a precision ephemeris: real bodies perturb
  * each other and drift from these over time, and several moons here are
  * simplified to their inclination against the ecliptic rather than their
  * planet's true (and sometimes precessing) reference plane. Good enough to
- * validate rendering/scale/LOD, not good enough for real astronomy — that
- * honesty is the point of the `note` field on the less-precise entries.
+ * check rendering/scale/LOD, not good enough for real astronomy — the
+ * `note` field flags the less-precise entries.
  *
- * Every body's `color` is its real, well-documented apparent colour (Io's
- * sulfur yellow, Titan's hazy orange, Neptune's deep blue, etc.) — genuine
- * astronomical common knowledge, not an arbitrary UI palette pick. This is
- * the one dataset honest enough to state that for; fictional or
- * game-sourced data typically has no real colour source for anything, so
- * it deliberately leaves `color` unset there instead.
+ * Every body's `color` is its documented apparent colour (Io's sulfur
+ * yellow, Titan's hazy orange, Neptune's deep blue, etc.), not a picked UI
+ * palette. Other datasets typically have no real colour source for
+ * anything and leave `color` unset instead.
  */
 export const SOLAR_SYSTEM: StarSystemData = {
   id: 'sol',

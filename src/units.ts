@@ -1,14 +1,12 @@
 /**
- * Distance display formatting — km/Mm/Gm, the units Star Citizen's own UI
- * uses (a quantum travel readout says "12.4 Mm", not "0.00008 AU"), for
- * Star Citizen system data. This is deliberately separate from the AU
- * formatting used for the Solar System reference dataset (see
- * OrbitalSystemScene.tsx's info panel) — AU is the right convention for
- * real astronomy, but reads as a wall of leading zeros at Star Citizen's
- * much smaller, sub-AU system scale, exactly the "0.00–0.01 AU" belt
- * readout this exists to replace.
+ * Distance display formatting — km/Mm/Gm, scaled to whichever unit keeps
+ * the number readable. AU (used elsewhere for the Solar System reference
+ * dataset — see OrbitalSystemScene.tsx's info panel) is the right
+ * convention for real astronomy, but for a dataset whose distances are all
+ * well under 1 AU, it reads as a wall of leading zeros ("0.0003 AU"). This
+ * exists for that case.
  *
- * Display-only: this never touches the underlying km values used by the
+ * Display-only: it never touches the underlying km values used by the
  * rest of the engine (rendering, camera-fit, orbital math all keep working
  * in km/AU as before) — same principle as the pixel floor in pixelFloor.ts,
  * a presentation-layer concern kept out of the real data.

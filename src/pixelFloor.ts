@@ -1,7 +1,7 @@
 /**
  * Minimum on-screen size for true-scale bodies (see scale.ts's trueRadius)
- * that would otherwise render at literally sub-pixel size — a station like
- * Seraphim, an asteroid, anything genuinely tiny at real-world proportions.
+ * that would otherwise render at literally sub-pixel size — a small
+ * station, an asteroid, anything genuinely tiny at real-world proportions.
  *
  * This floor is applied ONLY to the visual mesh radius handed to BodyShape
  * (see OrbitalSystemScene.tsx's BodyMarker). It must never leak into

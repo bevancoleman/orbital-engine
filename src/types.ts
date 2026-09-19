@@ -20,14 +20,13 @@ export type BodyType =
   | 'dwarf_planet'
   | 'moon'
   | 'station'
-  /** A real, flyable quantum-travel jump point (Star Citizen data only) —
-   *  rendered distinctly from an ordinary station: it's a hole between
-   *  systems, not a structure. */
+  /** A travel gateway between systems — e.g. a wormhole or a game's fast-
+   *  travel jump point. Rendered distinctly from an ordinary station: it's
+   *  a hole between systems, not a structure. */
   | 'jump_point'
-  /** A named quantum-travel marker with no physical structure of its own
-   *  (Star Citizen's NavPoint entities — "OM-1"-style markers around a
-   *  body) — visually the least substantial marker, since it isn't really
-   *  a "thing" at all, just a labelled point in space. */
+  /** A named navigation marker with no physical structure of its own —
+   *  visually the least substantial type, since it isn't a "thing" at all,
+   *  just a labelled point in space. */
   | 'nav_point'
   | 'asteroid'
   | 'comet'
@@ -60,12 +59,12 @@ export interface OrbitalElements {
 }
 
 /**
- * A real position snapshot, relative to the parent, that does NOT animate
- * with time — the whole point of the 6 classical elements is that they let
+ * A position snapshot, relative to the parent, that does NOT animate with
+ * time — the whole point of the 6 classical elements is that they let
  * position be *computed* at any date, which needs either a real ephemeris
- * or enough independent observations to fit an orbit; a single snapshot (all
- * Star Citizen gives us — one x/y/z per body, not a time series) is neither.
- * Rather than inventing fictitious elements to force a body into the
+ * or enough independent observations to fit an orbit. A data source that
+ * only publishes one x/y/z per body, not a time series, can't support
+ * that. Rather than inventing fictitious elements to force a body into the
  * Keplerian shape, a fixed body just stays where it was captured. See
  * CelestialBody.orbit/fixedPosition.
  */

@@ -6,15 +6,14 @@
  * a linear scale would either crush the inner planets into the star or push
  * the outer ones off-screen. Log compression keeps everything visible and
  * orderable (closer really does plot closer) without claiming to be
- * true-to-scale — this is a legibility aid, not real distance, exactly like
- * the existing system map's own scale normalisation.
+ * true-to-scale — this is a legibility aid, not real distance.
  *
  * RADIUS is NOT compressed — every body's rendered size is genuinely
  * proportional to its real km radius (trueRadius, below), with no floor, no
- * log curve, no per-dataset opt-in. This used to be conditional (an
- * artificially-floored `compressRadius`, used only for Star Citizen's
- * placeholder data, that a `StarSystemData.radiiAreReal` flag switched away
- * from for the Solar System) — genuinely the wrong default. Every single
+ * log curve, no per-dataset opt-in. An earlier version of this engine made
+ * that conditional (an artificially-floored `compressRadius` for datasets
+ * with placeholder-only body sizes, switched off per-dataset via a flag) —
+ * the wrong default. Every single
  * observed rendering bug this engine has hit (Earth and the Moon rendering
  * at an identical size; the ISS/Hubble rendering inside Earth's own sphere;
  * a station's geometry ending up 4x the size of the planet it orbits) traces

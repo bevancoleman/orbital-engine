@@ -1,21 +1,23 @@
 # orbital-engine
 
-A true-scale orbital mechanics rendering engine for [react-three-fiber](https://github.com/pmndrs/react-three-fiber). Real Keplerian orbits and single-snapshot "fixed position" data share one component and one data contract, so a real solar system and a fictional universe can be rendered by the same code.
+An orbital mechanics rendering engine for [react-three-fiber](https://github.com/pmndrs/react-three-fiber), built around true physical scale. Bodies are sized and positioned at their actual real-world proportions, and a Kepler orbit or a single fixed position both render through the same component.
 
-## Why this exists
+## Comparison
 
-Most three.js solar system projects on GitHub are one-off demos: a hardcoded scene, artistic/exaggerated scale (because true scale makes almost everything invisible), and no importable API. The one real prior art in this space, [spacekit.js](https://github.com/typpo/spacekit), proved that combining real orbital data with fixed-position objects in one engine is worth doing — but it's vanilla three.js (no React/R3F component model), defaults to artistic scale, and has been dormant for years.
+Almost every three.js solar system project on GitHub is a standalone demo: one hardcoded scene, no published package, and scale exaggerated because true scale makes most of a solar system invisible at any one zoom level.
 
-`orbital-engine` is narrower and more specific: it's the true-to-scale problem, solved, as a reusable R3F component, plus the UX layer (selection, labels, camera) that turns real orbital math into something a person can actually click around in.
+[spacekit.js](https://github.com/typpo/spacekit) is the exception — a real library, combining Kepler orbits and fixed-position objects in one engine years before this one. It's vanilla three.js rather than a React component, defaults to artistic scale, and hasn't had a release in a while.
 
-## What it does
+This library solves the same true-scale problem spacekit.js didn't attempt, and ships it as an R3F component with selection, labels, and camera handling included.
 
-- **True physical scale** — real radius *and* real orbital distance, not artistic exaggeration. A pixel-floor system (`minVisibleWorldRadius`/`renderRadius`) keeps a true-to-scale tiny body (the ISS next to Earth, say) visible as a point even when its actual projected size is sub-pixel.
-- **One data contract, two position models** — a body either has real Keplerian [`OrbitalElements`](./src/types.ts) (and actually animates over time) or a single-snapshot [`FixedPosition`](./src/types.ts) (for a dataset where only one real position is known — a game world, a satellite catalog at epoch, anything that isn't the validated Solar System). Both render in the same `<OrbitalSystemScene>`.
-- **Bubble-cursor selection + label decluttering** — the pointer snaps to the nearest visible body within a screen-space radius (not a raycast hit-test, which fails for anything sub-pixel), and labels avoid overlapping by yielding to whichever body is structurally shallower (star > planet > moon).
-- **Belts and rings** — either real per-object positions (an asteroid field where every rock's position is known) or synthetic scattered particles within a radius range, including co-orbital populations (Trojan-style clusters that track a reference body's current position).
-- **Camera fly-to with live tracking** — flies to a selection with an eased animation, then keeps tracking it if it's still moving (a real orbital body doesn't stop moving just because the camera arrived).
-- **Level of detail tied to apparent size** — polygon budgets scale with how much of the view a body actually fills, not just raw camera distance.
+## Features
+
+- **True physical scale.** Radius and orbital distance are both the real figures, log-compressed for distance and floored at a minimum pixel size for radius (`compressDistance`/`trueRadius`, `minVisibleWorldRadius`/`renderRadius`) — a body like the ISS stays visible next to Earth even though its actual size is a fraction of a pixel at that distance.
+- **Two position models, one contract.** A body carries either [`OrbitalElements`](./src/types.ts) (animates over time via Kepler propagation) or a single [`FixedPosition`](./src/types.ts) snapshot (for data with no known orbit — a game world, a one-time survey). Both render through the same `<OrbitalSystemScene>`.
+- **Proximity selection and label decluttering.** Clicking snaps to the nearest body within a screen-space radius rather than raycasting, which fails once a body's on-screen size drops below a pixel. Labels that would overlap hide the structurally deeper one (a moon yields to its planet, a planet to its star).
+- **Belts and rings.** Either plotted from real per-object positions (a field where every object's position is known) or scattered synthetically within a radius range, including co-orbital clusters that track a reference body's current angle.
+- **Camera fly-to.** Animates to a selected body and keeps tracking it afterward if it's still moving.
+- **Distance-adjusted level of detail.** Polygon count follows how much of the view a body actually fills, not raw camera distance.
 
 ## Install
 
@@ -23,7 +25,7 @@ Most three.js solar system projects on GitHub are one-off demos: a hardcoded sce
 npm install orbital-engine three @react-three/fiber @react-three/drei react react-dom
 ```
 
-`three`, `@react-three/fiber`, `@react-three/drei`, `react`, and `react-dom` are peer dependencies — bring your own versions.
+`three`, `@react-three/fiber`, `@react-three/drei`, `react`, and `react-dom` are peer dependencies.
 
 ## Quickstart
 
@@ -40,9 +42,9 @@ export default function App() {
 }
 ```
 
-`SOLAR_SYSTEM` is a real, NASA/JPL-sourced reference dataset (see [`src/solarSystemData.ts`](./src/solarSystemData.ts)) — it exists primarily to validate the engine against real astronomy, and doubles as a working example.
+`SOLAR_SYSTEM` is a reference dataset sourced from NASA JPL/IAU published elements (see [`src/solarSystemData.ts`](./src/solarSystemData.ts)), used to check the engine against real astronomy and to double as a working example.
 
-See [`examples/`](./examples) for a runnable demo, including a fictional (non-Solar-System) dataset using `fixedPosition` bodies.
+[`examples/basic`](./examples/basic) is a runnable demo, including a fictional system built entirely from `fixedPosition` bodies.
 
 ## Data contract
 
@@ -53,10 +55,10 @@ interface CelestialBody {
   type: BodyType // 'star' | 'planet' | 'moon' | 'station' | 'jump_point' | ...
   parentId: string | null
   radiusKm: number
-  orbit: OrbitalElements | null   // real Kepler elements — animates over time
-  fixedPosition?: FixedPosition   // OR a single known snapshot — stays put
+  orbit: OrbitalElements | null   // Kepler elements — animates over time
+  fixedPosition?: FixedPosition   // or a single known snapshot — stays put
   color?: string
-  modelUrl?: string               // optional real 3D model; falls back to a placeholder shape
+  modelUrl?: string               // optional 3D model; falls back to a placeholder shape
 }
 
 interface StarSystemData {
@@ -67,32 +69,32 @@ interface StarSystemData {
 }
 ```
 
-A body has *exactly one* of `orbit` or `fixedPosition` (neither, for the system's star). Everything else — rendering, selection, camera framing, label decluttering — works identically regardless of which one a body has.
+A body sets exactly one of `orbit` or `fixedPosition` (the system's star sets neither). Rendering, selection, camera framing, and label decluttering all work the same regardless of which one it has.
 
 ## API
 
-The engine — types, math, and reference data — is exported from the package root (`orbital-engine`); see [`src/index.ts`](./src/index.ts) for the exact list. The R3F component is a separate entry point, `orbital-engine/react` (see [`src/react/index.ts`](./src/react/index.ts)) — it carries a `'use client'` directive for Next.js/RSC-aware bundlers, so it's kept out of the main entry to avoid pulling a client boundary into server-safe code. The main pieces:
+Types, math, and reference data are exported from the package root (`orbital-engine`) — see [`src/index.ts`](./src/index.ts) for the full list. The R3F component is a separate entry point, `orbital-engine/react` (see [`src/react/index.ts`](./src/react/index.ts)), because it needs a `'use client'` directive for Next.js/RSC bundlers and the plain-data exports don't.
 
 | Export | Entry point | What it's for |
 | --- | --- | --- |
 | `OrbitalSystemScene` | `orbital-engine/react` | The R3F component — drop it in a `<Canvas>`-capable tree. |
-| `ExternalFocusRequest` | `orbital-engine/react` | The type for `<OrbitalSystemScene>`'s `externalFocus` prop — flies the camera to a body id from outside the component (see [`examples/basic`](./examples/basic)'s "Fly to" buttons). |
-| `RoutePreview` | `orbital-engine/react` | The type for the `routePreview` prop — draws a line through an ordered chain of body ids, e.g. a planned route. |
-| `positionAtTime`, `orbitPath` | `orbital-engine` | Real Keplerian propagation, given `OrbitalElements` and a `Date`. |
-| `resolveAllWorldPositions` | `orbital-engine` | Resolves every body's current world position (orbit or fixed), respecting parent hierarchy. |
-| `compressDistance`, `trueRadius` | `orbital-engine` | The true-scale compression math — real km in, render-space units out. |
+| `ExternalFocusRequest` | `orbital-engine/react` | Type for the `externalFocus` prop — flies the camera to a body id from outside the component (see [`examples/basic`](./examples/basic)'s "Fly to" buttons). |
+| `RoutePreview` | `orbital-engine/react` | Type for the `routePreview` prop — draws a line through an ordered chain of body ids. |
+| `positionAtTime`, `orbitPath` | `orbital-engine` | Kepler propagation, given `OrbitalElements` and a `Date`. |
+| `resolveAllWorldPositions` | `orbital-engine` | Every body's current world position (orbit or fixed), respecting parent hierarchy. |
+| `compressDistance`, `trueRadius` | `orbital-engine` | The scale math — km in, render-space units out. |
 | `computeFocusForBody`, `computeFocusForSystem` | `orbital-engine` | Camera framing targets for a fly-to. |
-| `findNearestCandidate` | `orbital-engine` | Bubble-cursor proximity selection, given screen-space candidates. |
+| `findNearestCandidate` | `orbital-engine` | Proximity selection, given screen-space candidates. |
 | `computeVisibleLabels`, `computeOrbitalDepth` | `orbital-engine` | Label decluttering, prioritized by structural depth. |
-| `SOLAR_SYSTEM` | `orbital-engine` | The real reference dataset. |
+| `SOLAR_SYSTEM` | `orbital-engine` | The reference dataset. |
 
-Full generated API reference (every export, with parameters and the same doc comments as the source): **[bevancoleman.github.io/orbital-engine/docs](https://bevancoleman.github.io/orbital-engine/docs/)**. The live example itself is at [bevancoleman.github.io/orbital-engine](https://bevancoleman.github.io/orbital-engine/).
+Generated API reference, every export with parameters: **[bevancoleman.github.io/orbital-engine/docs](https://bevancoleman.github.io/orbital-engine/docs/)**. Live example: [bevancoleman.github.io/orbital-engine](https://bevancoleman.github.io/orbital-engine/).
 
 ## Development
 
 ```bash
 npm install
-npm test        # 218 tests — the Solar System reference data is checked against real ephemeris positions
+npm test        # 218 tests, including the reference data checked against ephemeris positions
 npm run typecheck
 npm run build    # tsup — emits ESM + CJS + .d.ts to dist/
 npm run docs     # typedoc — generates the API reference site into docs-site/
