@@ -1,8 +1,18 @@
 import { positionAtTime, type Vec3Km } from './kepler'
 import { compressDistance } from './scale'
-import type { CelestialBody, StarSystemData } from './types'
+import type { CelestialBody, OrbitalElements, StarSystemData } from './types'
 
 export type WorldVec = [number, number, number]
+
+/** The scale factor `compressVec` would apply to a vector of magnitude `r`
+ *  — exposed separately so a whole SET of related points (e.g. every
+ *  sample around an orbit path) can be compressed by one shared ratio
+ *  instead of each computing its own from its own magnitude. See
+ *  `compressVecByRatio`'s own comment for why that distinction matters. */
+export function compressionRatio(r: number): number {
+  if (r === 0) return 0
+  return compressDistance(r) / r
+}
 
 /**
  * Compress a real km vector into world-render units, preserving its true
@@ -14,10 +24,42 @@ export type WorldVec = [number, number, number]
  * convention: orbital z (out of the reference plane) becomes world y.
  */
 export function compressVec(p: Vec3Km): WorldVec {
-  const r = Math.hypot(p.x, p.y, p.z)
-  if (r === 0) return [0, 0, 0]
-  const scale = compressDistance(r) / r
-  return [p.x * scale, p.z * scale, p.y * scale]
+  return compressVecByRatio(p, compressionRatio(Math.hypot(p.x, p.y, p.z)))
+}
+
+/**
+ * Compress a real km vector using an EXTERNALLY SUPPLIED ratio, rather than
+ * one derived from the vector's own magnitude. Needed anywhere a set of
+ * related points has to compress consistently as one shape rather than
+ * each point picking its own scale — `compressDistance` is a log curve,
+ * not linear, so two points at different true radii (e.g. an orbit's
+ * periapsis and apoapsis) get compressed by measurably different ratios if
+ * each computes its own from `compressVec` directly. For a single position
+ * that's invisible (there's only one point), but for a whole orbit path —
+ * 128 samples around the ellipse, each at a different true radius for any
+ * real (non-zero) eccentricity — independently-compressed points don't lie
+ * on a scaled copy of the true ellipse at all; the rendered ring was
+ * visibly warped and, because the ratio a body's own LIVE position used
+ * (via plain `compressVec`, tied to whatever radius it happened to be at,
+ * at that instant) never matched the ring's own per-point ratios either,
+ * the moving body visibly didn't sit on its own drawn orbit path. Both are
+ * fixed by using one shared ratio (see `orbitCompressionRatio`) for the
+ * whole orbit — the body's live position AND every point of its drawn
+ * path — so the rendered shape is a uniformly-scaled, correctly-proportioned
+ * copy of the true ellipse, and the body stays exactly on its own line.
+ */
+export function compressVecByRatio(p: Vec3Km, ratio: number): WorldVec {
+  return [p.x * ratio, p.z * ratio, p.y * ratio]
+}
+
+/** The single compression ratio an orbit's own live position AND its drawn
+ *  path should both use — derived from the orbit's semi-major axis (its
+ *  defining scale, fixed regardless of where the body currently sits along
+ *  the ellipse) rather than the body's own instantaneous distance, which is
+ *  exactly what varies around a real (non-circular) orbit and is the thing
+ *  that needs to NOT independently drive the compression per point. */
+export function orbitCompressionRatio(orbit: OrbitalElements): number {
+  return compressionRatio(orbit.semiMajorAxisKm)
 }
 
 /**
@@ -67,10 +109,16 @@ export function resolveWorldPosition(
   // A fixed body (see CelestialBody.fixedPosition) has no time-varying
   // motion to compute — its relative offset compresses the same way on
   // every date, since it's the same real km vector regardless of `date`.
-  const relativeKm = body.orbit
-    ? positionAtTime(body.orbit, date)
-    : { x: body.fixedPosition!.xKm, y: body.fixedPosition!.yKm, z: body.fixedPosition!.zKm }
-  const [rx, ry, rz] = compressVec(relativeKm)
+  //
+  // An orbiting body compresses via the orbit's OWN fixed ratio (see
+  // orbitCompressionRatio/compressVecByRatio), not its instantaneous
+  // distance the way compressVec alone would — otherwise this position
+  // wouldn't land on the same rendered ellipse OrbitPathLine draws for it,
+  // since that also has to use one ratio for the whole shape rather than
+  // one per sampled point (see compressVecByRatio's own comment).
+  const [rx, ry, rz] = body.orbit
+    ? compressVecByRatio(positionAtTime(body.orbit, date), orbitCompressionRatio(body.orbit))
+    : compressVec({ x: body.fixedPosition!.xKm, y: body.fixedPosition!.yKm, z: body.fixedPosition!.zKm })
   const world: WorldVec = [parentWorld[0] + rx, parentWorld[1] + ry, parentWorld[2] + rz]
   cache.set(body.id, world)
   return world

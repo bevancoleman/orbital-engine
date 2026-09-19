@@ -16,7 +16,7 @@ import { Html, Line, OrbitControls, Points, PointMaterial, useGLTF, useTexture }
 import * as THREE from 'three'
 import { orbitPath } from '../kepler'
 import { coOrbitalReferenceAngle } from '../resolve'
-import { compressVec, resolveAllWorldPositions, resolveWorldPosition, type WorldVec } from '../render'
+import { compressVec, compressVecByRatio, orbitCompressionRatio, resolveAllWorldPositions, resolveWorldPosition, type WorldVec } from '../render'
 import { compressDistance, trueRadius } from '../scale'
 import {
   DEFAULT_CAMERA_DISTANCE,
@@ -231,13 +231,21 @@ function hashSeed(id: string): number {
 function OrbitPathLine({ body, color, parentWorldPos }: { body: CelestialBody; color: string; parentWorldPos: WorldVec }) {
   const points = useMemo(() => {
     if (!body.orbit) return null
-    // Each sampled point is a parent-relative offset (see kepler.ts's
-    // orbitPath) — compress it on its own terms, same as a live position,
-    // then anchor the whole path at the parent's actual current world
-    // position. Without that offset, a moon's orbit ring would be drawn
-    // centred on the origin instead of around its planet.
+    // Every sampled point compresses by the SAME ratio (the orbit's own,
+    // fixed by its semi-major axis — see orbitCompressionRatio), not each
+    // one independently by its own instantaneous radius (compressVec) —
+    // periapsis and apoapsis sit at different true radii for any real
+    // eccentricity, and compressDistance is a log curve, not linear, so
+    // per-point ratios visibly warp the ellipse into the wrong shape. This
+    // is also exactly the ratio resolveWorldPosition now uses for this
+    // same body's own live position, so the moving marker stays on this
+    // line instead of drifting off it. Then anchor the whole path at the
+    // parent's actual current world position — without that offset, a
+    // moon's orbit ring would be drawn centred on the origin instead of
+    // around its planet.
+    const ratio = orbitCompressionRatio(body.orbit)
     return orbitPath(body.orbit).map((p) => {
-      const [rx, ry, rz] = compressVec(p)
+      const [rx, ry, rz] = compressVecByRatio(p, ratio)
       return [parentWorldPos[0] + rx, parentWorldPos[1] + ry, parentWorldPos[2] + rz] as WorldVec
     })
   }, [body.orbit, parentWorldPos])

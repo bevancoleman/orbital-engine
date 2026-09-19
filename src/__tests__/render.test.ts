@@ -1,5 +1,5 @@
-import { compressVec, resolveWorldPosition, resolveAllWorldPositions } from '../render'
-import { positionAtTime } from '../kepler'
+import { compressVec, compressVecByRatio, compressionRatio, orbitCompressionRatio, resolveWorldPosition, resolveAllWorldPositions } from '../render'
+import { orbitPath, positionAtTime } from '../kepler'
 import { compressDistance, trueRadius } from '../scale'
 import { SOLAR_SYSTEM } from '../solarSystemData'
 import type { CelestialBody } from '../types'
@@ -70,12 +70,16 @@ describe('resolveWorldPosition', () => {
   })
 
   it("a moon's world position equals its parent's world position plus its own compressed relative offset", () => {
+    // Compressed via the orbit's own fixed ratio (orbitCompressionRatio),
+    // not compressVec's instantaneous-magnitude one — see
+    // compressVecByRatio's own comment for why an orbiting body has to use
+    // the same ratio as its drawn orbit path, not its own current radius.
     const earth = SOLAR_SYSTEM.bodies.find((b) => b.id === 'earth')!
     const moon = SOLAR_SYSTEM.bodies.find((b) => b.id === 'moon')!
     const earthPos = resolveWorldPosition(earth, SOLAR_SYSTEM.bodies, DATE)
     const moonPos = resolveWorldPosition(moon, SOLAR_SYSTEM.bodies, DATE)
     const relativeKm = positionAtTime(moon.orbit!, DATE)
-    const [rx, ry, rz] = compressVec(relativeKm)
+    const [rx, ry, rz] = compressVecByRatio(relativeKm, orbitCompressionRatio(moon.orbit!))
     expect(moonPos[0]).toBeCloseTo(earthPos[0] + rx, 9)
     expect(moonPos[1]).toBeCloseTo(earthPos[1] + ry, 9)
     expect(moonPos[2]).toBeCloseTo(earthPos[2] + rz, 9)
@@ -103,7 +107,7 @@ describe('resolveWorldPosition', () => {
     const t = new Date('2000-03-01T00:00:00Z')
 
     const planetWorld = resolveWorldPosition(planet, bodies, t)
-    const moonRelative = compressVec(positionAtTime(moon.orbit!, t))
+    const moonRelative = compressVecByRatio(positionAtTime(moon.orbit!, t), orbitCompressionRatio(moon.orbit!))
     const expected: [number, number, number] = [
       planetWorld[0] + moonRelative[0],
       planetWorld[1] + moonRelative[1],
@@ -257,6 +261,87 @@ describe('resolveWorldPosition — a body with no parent but a real fixedPositio
     const pos = resolveWorldPosition(orphanBody, bodies, DATE)
     const distanceFromStar = Math.hypot(pos[0], pos[1], pos[2])
     expect(distanceFromStar).toBeGreaterThan(0)
+  })
+})
+
+describe('compressVecByRatio / orbitCompressionRatio — a real orbit path renders as an undistorted ellipse', () => {
+  // Real, observed bug: OrbitPathLine used to compress each of the 128
+  // sampled points around an orbit independently via plain compressVec,
+  // which derives its ratio from EACH point's own instantaneous magnitude.
+  // compressDistance is a log curve, not linear, so periapsis and apoapsis
+  // (different true radii for any real eccentricity) got compressed by
+  // measurably different ratios — the rendered ring wasn't a uniformly-
+  // scaled copy of the true ellipse, and didn't pass through the same
+  // point the body's own (also independently-compressed) live position
+  // used, so the moving marker visibly didn't sit on its own drawn line.
+  const mercury = SOLAR_SYSTEM.bodies.find((b) => b.id === 'mercury')!
+
+  it("compresses every sampled point around the orbit by the exact same ratio — proportional to the raw path, not warped", () => {
+    const ratio = orbitCompressionRatio(mercury.orbit!)
+    const rawPoints = orbitPath(mercury.orbit!, 32)
+    const compressedPoints = rawPoints.map((p) => compressVecByRatio(p, ratio))
+
+    for (let i = 0; i < rawPoints.length; i++) {
+      const rawR = Math.hypot(rawPoints[i]!.x, rawPoints[i]!.y, rawPoints[i]!.z)
+      const compressedR = Math.hypot(...compressedPoints[i]!)
+      // Every point's compressed-to-raw magnitude ratio must be identical
+      // (the single, shared orbitCompressionRatio) — not each point's own
+      // compressionRatio(rawR), which is what the old, buggy per-point
+      // compressVec call effectively used.
+      expect(compressedR / rawR).toBeCloseTo(ratio, 9)
+    }
+  })
+
+  it("does NOT match plain compressVec's per-point ratio at periapsis/apoapsis for a real eccentric orbit", () => {
+    // Confirms the two approaches are genuinely different for a real,
+    // non-circular orbit (Mercury, e ≈ 0.206) — if this ever started
+    // passing with toBeCloseTo, the fix would have silently regressed back
+    // to the old per-point behavior.
+    const { eccentricity: e, semiMajorAxisKm: a } = mercury.orbit!
+    expect(e).toBeGreaterThan(0.1) // sanity: this test needs real eccentricity to mean anything
+    const periapsisR = a * (1 - e)
+    const apoapsisR = a * (1 + e)
+    const orbitRatio = orbitCompressionRatio(mercury.orbit!)
+    const periapsisOwnRatio = compressionRatio(periapsisR)
+    const apoapsisOwnRatio = compressionRatio(apoapsisR)
+    // Relative difference, not absolute — these ratios are all ~1e-7 in
+    // magnitude, so an absolute toBeCloseTo tolerance loose enough to be
+    // readable would also swallow the real (but small-in-absolute-terms)
+    // difference this test exists to catch.
+    expect(Math.abs(periapsisOwnRatio / orbitRatio - 1)).toBeGreaterThan(0.001)
+    expect(Math.abs(apoapsisOwnRatio / orbitRatio - 1)).toBeGreaterThan(0.001)
+  })
+
+  it("a moving body's live world position lands exactly on its own drawn orbit path, at the moment it passes through a sampled point", () => {
+    // The actual end-to-end "stays on the line" property this fix
+    // guarantees. Uses a synthetic CIRCULAR orbit (e = 0) so true anomaly
+    // and mean anomaly coincide — that lets this test pick a real DATE
+    // that lands the body exactly on a known orbitPath sample index,
+    // without inverting Kepler's equation just to set up the test.
+    const circularOrbit = {
+      semiMajorAxisKm: 10_000_000, eccentricity: 0, inclinationDeg: 0,
+      longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 0,
+      orbitalPeriodDays: 100, epoch: '2000-01-01T00:00:00Z',
+    }
+    const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+    const body: CelestialBody = { id: 'b', name: 'B', type: 'planet', parentId: 's', radiusKm: 100, orbit: circularOrbit }
+    const bodies = [star, body]
+
+    const segments = 32
+    const sampleIndex = 5
+    // Mean anomaly = true anomaly here (e = 0) — sampleIndex/segments of a
+    // full orbit past epoch lands exactly on that path sample.
+    const daysPastEpoch = (sampleIndex / segments) * circularOrbit.orbitalPeriodDays
+    const date = new Date(new Date(circularOrbit.epoch).getTime() + daysPastEpoch * 86_400_000)
+
+    const liveWorldPos = resolveWorldPosition(body, bodies, date)
+    const ratio = orbitCompressionRatio(circularOrbit)
+    const rawPathPoint = orbitPath(circularOrbit, segments)[sampleIndex]!
+    const expectedWorldPos = compressVecByRatio(rawPathPoint, ratio)
+
+    expect(liveWorldPos[0]).toBeCloseTo(expectedWorldPos[0], 6)
+    expect(liveWorldPos[1]).toBeCloseTo(expectedWorldPos[1], 6)
+    expect(liveWorldPos[2]).toBeCloseTo(expectedWorldPos[2], 6)
   })
 })
 
