@@ -343,6 +343,37 @@ describe('compressVecByRatio / orbitCompressionRatio — a real orbit path rende
     expect(liveWorldPos[1]).toBeCloseTo(expectedWorldPos[1], 6)
     expect(liveWorldPos[2]).toBeCloseTo(expectedWorldPos[2], 6)
   })
+
+  it("a tight orbit around a body far from the origin compresses to a small, LOCAL magnitude — independent of the parent's own distance", () => {
+    // Real, observed bug: OrbitPathLine used to bake the parent's absolute
+    // world position into every sampled point BEFORE handing them to
+    // three.js's <Line>, which stores vertex data in a Float32Array. Earth
+    // sits ~31 (compressed) world units from the origin; float32 has only
+    // ~7 significant decimal digits total, so baking that large shared
+    // offset into every vertex left almost none of them for the ISS's own
+    // tiny, tight orbit — visible as jittering/faceting at true-scale zoom
+    // that got WORSE the closer the camera got, exactly backwards from what
+    // should happen. The fix keeps orbitPath's compressed points local
+    // (this function's job) and lets a wrapping <group position=...>
+    // (double-precision Object3D transform, not a Float32Array) carry the
+    // parent's own large offset instead — this test guards the data-layer
+    // half of that contract: compressVecByRatio's own output must stay
+    // proportional to the orbit's REAL scale, never inflated by where the
+    // parent itself happens to sit.
+    const iss = SOLAR_SYSTEM.bodies.find((b) => b.id === 'iss')!
+    const earth = SOLAR_SYSTEM.bodies.find((b) => b.id === 'earth')!
+    const ratio = orbitCompressionRatio(iss.orbit!)
+    const path = orbitPath(iss.orbit!, 64)
+    const compressed = path.map((p) => compressVecByRatio(p, ratio))
+    const maxMag = Math.max(...compressed.map((p) => Math.hypot(...p)))
+
+    // Earth's own compressed distance from the sun — orders of magnitude
+    // bigger than a low-altitude station's orbit ever should be.
+    const earthWorldPos = resolveWorldPosition(earth, SOLAR_SYSTEM.bodies, DATE)
+    const earthMag = Math.hypot(...earthWorldPos)
+
+    expect(maxMag).toBeLessThan(earthMag / 1000)
+  })
 })
 
 describe('resolveAllWorldPositions', () => {

@@ -39,7 +39,14 @@ import {
   type LabelCandidate,
   type ScreenCandidate,
 } from '../labelDeclutter'
-import { apparentSize, icosahedronDetailFor, orbitDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
+import {
+  apparentSize,
+  icosahedronDetailFor,
+  orbitDetailFor,
+  sphereDetailFor,
+  torusDetailFor,
+  type SphereDetail,
+} from '../levelOfDetail'
 import { renderRadius } from '../pixelFloor'
 import { formatDistanceKm } from '../units'
 import { routeSegments } from '../routeSegments'
@@ -256,10 +263,24 @@ function OrbitPathLine({
     // per-point ratios visibly warp the ellipse into the wrong shape. This
     // is also exactly the ratio resolveWorldPosition now uses for this
     // same body's own live position, so the moving marker stays on this
-    // line instead of drifting off it. Then anchor the whole path at the
-    // parent's actual current world position — without that offset, a
-    // moon's orbit ring would be drawn centred on the origin instead of
-    // around its planet.
+    // line instead of drifting off it.
+    //
+    // Points stay PARENT-RELATIVE here — the parent's own (potentially
+    // large) offset is applied via the wrapping <group> below, not baked
+    // into each vertex. A real, observed bug this fixes: baking the
+    // absolute position into the Float32Array vertex buffer this <Line>
+    // ultimately builds wastes almost all of float32's ~7 significant
+    // digits on the shared large offset (e.g. Earth's own ~31-unit
+    // distance from the star), leaving almost none for the orbit's actual
+    // shape — for a tight, low-altitude orbit like the ISS's, this showed
+    // up as visible jittering/faceting that changed frame to frame as the
+    // camera moved. THREE.Object3D positions (regular JS numbers, i.e.
+    // double precision, composed via CPU-side Matrix4 math) don't have
+    // this problem — only converting to float32 for the final GPU upload,
+    // by which point the camera-relative subtraction has already happened
+    // in full precision — so moving the large offset onto the group
+    // instead of the vertices fixes it without needing any custom
+    // floating-origin machinery.
     const ratio = orbitCompressionRatio(body.orbit)
     // The ring's own world-space scale (its semi-major axis, compressed)
     // is what apparentSize needs here — this is a large loop the camera
@@ -269,13 +290,14 @@ function OrbitPathLine({
     // straight facets rather than a smooth curve (see orbitDetailFor).
     const ringWorldRadius = compressDistance(body.orbit.semiMajorAxisKm)
     const segments = orbitDetailFor(apparentSize(ringWorldRadius, cameraDistance))
-    return orbitPath(body.orbit, segments).map((p) => {
-      const [rx, ry, rz] = compressVecByRatio(p, ratio)
-      return [parentWorldPos[0] + rx, parentWorldPos[1] + ry, parentWorldPos[2] + rz] as WorldVec
-    })
-  }, [body.orbit, parentWorldPos, cameraDistance])
+    return orbitPath(body.orbit, segments).map((p) => compressVecByRatio(p, ratio))
+  }, [body.orbit, cameraDistance])
   if (!points) return null
-  return <Line points={points} color={color} opacity={0.25} transparent lineWidth={1} />
+  return (
+    <group position={parentWorldPos}>
+      <Line points={points} color={color} opacity={0.25} transparent lineWidth={1} />
+    </group>
+  )
 }
 
 /**
@@ -305,17 +327,25 @@ function ReferenceOrbitRing({
     const dz = position[2] - parentWorldPos[2]
     const radius = Math.hypot(dx, dz)
     if (radius < 1e-4) return null
-    const y = position[1]
+    // Parent-relative, not absolute — see OrbitPathLine's own comment on
+    // why baking a large absolute offset into these vertices (rather than
+    // the wrapping <group> below) causes visible float32 precision loss
+    // up close.
+    const y = position[1] - parentWorldPos[1]
     const segments = orbitDetailFor(apparentSize(radius, cameraDistance))
     const pts: WorldVec[] = []
     for (let i = 0; i <= segments; i++) {
       const a = (2 * Math.PI * i) / segments
-      pts.push([parentWorldPos[0] + radius * Math.cos(a), y, parentWorldPos[2] + radius * Math.sin(a)])
+      pts.push([radius * Math.cos(a), y, radius * Math.sin(a)])
     }
     return pts
   }, [position, parentWorldPos, cameraDistance])
   if (!points) return null
-  return <Line points={points} color={color} opacity={0.18} transparent lineWidth={1} />
+  return (
+    <group position={parentWorldPos}>
+      <Line points={points} color={color} opacity={0.18} transparent lineWidth={1} />
+    </group>
+  )
 }
 
 /**
@@ -456,6 +486,46 @@ function BeltPoints({ belt, system, simDate }: { belt: BeltRegion; system: StarS
 }
 
 /**
+ * A soft additive rim just outside the surface, sized from the body's real
+ * CelestialBody.atmosphereHeightKm rather than one fixed ratio applied to
+ * every planet — Venus's real ~250km cloud tops read as visibly thicker
+ * than Earth's ~100km "edge of space," and a body with no real substantial
+ * atmosphere (Mercury, the dwarf planets, any gas/ice giant — none of
+ * which set the field) gets no rim at all instead of an identical glow
+ * implying an atmosphere that doesn't exist. Shared between the placeholder
+ * sphere and a real-textured one (TexturedSphereBody) so a body doesn't
+ * lose its atmosphere just because a real surface photo is available for
+ * it.
+ */
+function AtmosphereRim({
+  body,
+  radius,
+  color,
+  sphere,
+}: {
+  body: CelestialBody
+  radius: number
+  color: string
+  sphere: SphereDetail
+}) {
+  if (!body.atmosphereHeightKm) return null
+  const ratio = 1 + body.atmosphereHeightKm / body.radiusKm
+  return (
+    <mesh>
+      <sphereGeometry args={[radius * ratio, sphere.widthSegments, sphere.heightSegments]} />
+      <meshBasicMaterial
+        color={color}
+        transparent
+        opacity={0.12}
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+        side={THREE.BackSide}
+      />
+    </mesh>
+  )
+}
+
+/**
  * The generic, always-available geometry for a body, distinct by type — a
  * sphere reads fine for a real celestial body (star/planet/moon/dwarf
  * planet), but every type here shares the exact same placeholder radius as
@@ -525,19 +595,7 @@ function PlaceholderBodyShape({
             <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
             <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
           </mesh>
-          {/* A soft additive rim just outside the surface — reads as a thin
-              atmosphere without claiming any real atmospheric data. */}
-          <mesh>
-            <sphereGeometry args={[radius * 1.2, sphere.widthSegments, sphere.heightSegments]} />
-            <meshBasicMaterial
-              color={color}
-              transparent
-              opacity={0.12}
-              blending={THREE.AdditiveBlending}
-              depthWrite={false}
-              side={THREE.BackSide}
-            />
-          </mesh>
+          <AtmosphereRim body={body} radius={radius} color={color} sphere={sphere} />
         </>
       )
 
@@ -706,18 +764,36 @@ const TEXTURABLE_BODY_TYPES = new Set(['planet', 'dwarf_planet', 'moon'])
 
 /** Loads a real surface texture (see CelestialBody.textureUrl) and wraps it
  *  around a sphere — real imagery standing in for the full 3D model this
- *  body doesn't have, rather than a flat colour. */
-function TexturedSphereBody({ radius, textureUrl, detailSize }: { radius: number; textureUrl: string; detailSize: number }) {
+ *  body doesn't have, rather than a flat colour. Still gets the same real,
+ *  height-based AtmosphereRim as the placeholder sphere (see that
+ *  component) — a real photo of Earth or Venus shouldn't lose its
+ *  atmosphere just because a texture was available for it. */
+function TexturedSphereBody({
+  body,
+  radius,
+  color,
+  textureUrl,
+  detailSize,
+}: {
+  body: CelestialBody
+  radius: number
+  color: string
+  textureUrl: string
+  detailSize: number
+}) {
   const texture = useTexture(textureUrl)
   useMemo(() => {
     texture.colorSpace = THREE.SRGBColorSpace
   }, [texture])
   const sphere = sphereDetailFor(detailSize)
   return (
-    <mesh>
-      <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
-      <meshStandardMaterial map={texture} roughness={0.9} metalness={0.05} />
-    </mesh>
+    <>
+      <mesh>
+        <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
+        <meshStandardMaterial map={texture} roughness={0.9} metalness={0.05} />
+      </mesh>
+      <AtmosphereRim body={body} radius={radius} color={color} sphere={sphere} />
+    </>
   )
 }
 
@@ -759,7 +835,7 @@ function BodyShape({
     return (
       <ModelErrorBoundary fallback={placeholder}>
         <Suspense fallback={placeholder}>
-          <TexturedSphereBody radius={radius} textureUrl={body.textureUrl} detailSize={detailSize} />
+          <TexturedSphereBody body={body} radius={radius} color={color} textureUrl={body.textureUrl} detailSize={detailSize} />
         </Suspense>
       </ModelErrorBoundary>
     )
