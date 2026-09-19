@@ -33,7 +33,7 @@ import {
 import { computeVisibleBodyIds } from '../visibility'
 import { findNearestCandidate, type ProximityCandidate } from '../proximitySelection'
 import { computeOrbitalDepth, computeVisibleLabels, type LabelCandidate } from '../labelDeclutter'
-import { apparentSize, icosahedronDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
+import { apparentSize, icosahedronDetailFor, orbitDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
 import { renderRadius } from '../pixelFloor'
 import { formatDistanceKm } from '../units'
 import { routeSegments } from '../routeSegments'
@@ -228,7 +228,18 @@ function hashSeed(id: string): number {
   return Math.abs(h)
 }
 
-function OrbitPathLine({ body, color, parentWorldPos }: { body: CelestialBody; color: string; parentWorldPos: WorldVec }) {
+function OrbitPathLine({
+  body,
+  color,
+  parentWorldPos,
+  cameraDistance,
+}: {
+  body: CelestialBody
+  color: string
+  parentWorldPos: WorldVec
+  /** Drives how many points the path samples — see orbitDetailFor. */
+  cameraDistance: number
+}) {
   const points = useMemo(() => {
     if (!body.orbit) return null
     // Every sampled point compresses by the SAME ratio (the orbit's own,
@@ -244,11 +255,19 @@ function OrbitPathLine({ body, color, parentWorldPos }: { body: CelestialBody; c
     // moon's orbit ring would be drawn centred on the origin instead of
     // around its planet.
     const ratio = orbitCompressionRatio(body.orbit)
-    return orbitPath(body.orbit).map((p) => {
+    // The ring's own world-space scale (its semi-major axis, compressed)
+    // is what apparentSize needs here — this is a large loop the camera
+    // views from outside, not a solid body the camera zooms into, so
+    // "large apparent size" means the ring's curve spans a lot of the
+    // view, exactly when a fixed segment count starts showing as visible
+    // straight facets rather than a smooth curve (see orbitDetailFor).
+    const ringWorldRadius = compressDistance(body.orbit.semiMajorAxisKm)
+    const segments = orbitDetailFor(apparentSize(ringWorldRadius, cameraDistance))
+    return orbitPath(body.orbit, segments).map((p) => {
       const [rx, ry, rz] = compressVecByRatio(p, ratio)
       return [parentWorldPos[0] + rx, parentWorldPos[1] + ry, parentWorldPos[2] + rz] as WorldVec
     })
-  }, [body.orbit, parentWorldPos])
+  }, [body.orbit, parentWorldPos, cameraDistance])
   if (!points) return null
   return <Line points={points} color={color} opacity={0.25} transparent lineWidth={1} />
 }
@@ -263,21 +282,32 @@ function OrbitPathLine({ body, color, parentWorldPos }: { body: CelestialBody; c
  * not tilted to whatever the body's true — currently unknown — inclination
  * is) rather than omitting the reference entirely.
  */
-function ReferenceOrbitRing({ position, parentWorldPos, color }: { position: WorldVec; parentWorldPos: WorldVec; color: string }) {
+function ReferenceOrbitRing({
+  position,
+  parentWorldPos,
+  color,
+  cameraDistance,
+}: {
+  position: WorldVec
+  parentWorldPos: WorldVec
+  color: string
+  /** Drives how many points the ring samples — see orbitDetailFor. */
+  cameraDistance: number
+}) {
   const points = useMemo(() => {
     const dx = position[0] - parentWorldPos[0]
     const dz = position[2] - parentWorldPos[2]
     const radius = Math.hypot(dx, dz)
     if (radius < 1e-4) return null
     const y = position[1]
-    const segments = 96
+    const segments = orbitDetailFor(apparentSize(radius, cameraDistance))
     const pts: WorldVec[] = []
     for (let i = 0; i <= segments; i++) {
       const a = (2 * Math.PI * i) / segments
       pts.push([parentWorldPos[0] + radius * Math.cos(a), y, parentWorldPos[2] + radius * Math.sin(a)])
     }
     return pts
-  }, [position, parentWorldPos])
+  }, [position, parentWorldPos, cameraDistance])
   if (!points) return null
   return <Line points={points} color={color} opacity={0.18} transparent lineWidth={1} />
 }
@@ -932,9 +962,21 @@ function SceneContent({
         const showsOrbitReference = !NON_ORBITING_MARKER_TYPES.has(body.type) && body.parentId
         return (
           <group key={body.id}>
-            {body.orbit && <OrbitPathLine body={body} color={body.color ?? '#64748b'} parentWorldPos={parentWorldPos} />}
+            {body.orbit && (
+              <OrbitPathLine
+                body={body}
+                color={body.color ?? '#64748b'}
+                parentWorldPos={parentWorldPos}
+                cameraDistance={cameraDistance}
+              />
+            )}
             {!body.orbit && bodyVisible && showsOrbitReference && (
-              <ReferenceOrbitRing position={pos} parentWorldPos={parentWorldPos} color={body.color ?? '#64748b'} />
+              <ReferenceOrbitRing
+                position={pos}
+                parentWorldPos={parentWorldPos}
+                color={body.color ?? '#64748b'}
+                cameraDistance={cameraDistance}
+              />
             )}
             <BodyMarker
               body={body}

@@ -1,4 +1,4 @@
-import { apparentSize, icosahedronDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
+import { apparentSize, icosahedronDetailFor, orbitDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
 
 describe('apparentSize', () => {
   it('is radius divided by camera distance', () => {
@@ -83,5 +83,40 @@ describe('torusDetailFor', () => {
     const detail = torusDetailFor(0)
     expect(detail.radialSegments).toBeGreaterThan(0)
     expect(detail.tubularSegments).toBeGreaterThan(0)
+  })
+})
+
+describe('orbitDetailFor', () => {
+  it('returns more segments for a larger apparent size', () => {
+    // The actual reported bug this fixes: a fixed 128-segment orbit ring
+    // showed visible straight facets once the ring itself occupied a large
+    // part of the view — more segments are needed exactly then, not just
+    // when a solid body is zoomed into (see this function's own doc
+    // comment for why "apparent size" means something different for a
+    // ring than for a sphere).
+    const large = orbitDetailFor(0.5)
+    const small = orbitDetailFor(0.001)
+    expect(large).toBeGreaterThan(small)
+  })
+
+  it('never returns zero or negative segments, even for apparent size 0', () => {
+    expect(orbitDetailFor(0)).toBeGreaterThan(0)
+  })
+
+  it('defaults to the original fixed segment count (128) at a typical, moderate apparent size', () => {
+    // Not a hard requirement, just confirms this change doesn't regress
+    // the common case that was already working fine before adaptive
+    // detail existed.
+    expect(orbitDetailFor(0.02)).toBe(128)
+  })
+
+  it('is monotonically non-decreasing as apparent size grows', () => {
+    const samples = [0, 0.001, 0.01, 0.05, 0.1, 0.3, 1]
+    let prev = 0
+    for (const s of samples) {
+      const segments = orbitDetailFor(s)
+      expect(segments).toBeGreaterThanOrEqual(prev)
+      prev = segments
+    }
   })
 })

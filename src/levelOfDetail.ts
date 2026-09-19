@@ -76,3 +76,28 @@ export function torusDetailFor(size: number): { radialSegments: number; tubularS
   const level = TORUS_LEVELS.find((l) => size >= l.minApparentSize)
   return { radialSegments: level!.radialSegments, tubularSegments: level!.tubularSegments }
 }
+
+const ORBIT_LEVELS: { minApparentSize: number; segments: number }[] = [
+  { minApparentSize: 0.3, segments: 512 },
+  { minApparentSize: 0.05, segments: 256 },
+  { minApparentSize: 0.01, segments: 128 },
+  { minApparentSize: 0, segments: 48 },
+]
+
+/**
+ * Point count for a drawn orbit path (or the flat reference ring for a
+ * fixedPosition body) — same reasoning as sphereDetailFor, but for a
+ * shape where "large apparent size" doesn't mean "close to filling the
+ * screen" (nothing here is a solid body the camera zooms into), it means
+ * the ring's own curve spans a large part of the view, which is exactly
+ * when a fixed, modest segment count starts showing as visible straight
+ * facets rather than a smooth curve. Call with `apparentSize(ringWorldRadius,
+ * cameraDistance)`, the same as any other body — the ring is still
+ * fundamentally a polyline at any segment count (no renderer draws a true
+ * analytic curve), this just keeps the facets smaller than a pixel at
+ * whatever scale the ring is actually being viewed at.
+ */
+export function orbitDetailFor(size: number): number {
+  const level = ORBIT_LEVELS.find((l) => size >= l.minApparentSize)
+  return level!.segments
+}
