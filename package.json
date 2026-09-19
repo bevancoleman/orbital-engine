@@ -39,6 +39,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "provenance": true
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=18"
