@@ -30,7 +30,7 @@ import {
   nearPlaneForRadius,
   type FocusTarget,
 } from '../camera'
-import { computeVisibleBodyIds } from '../visibility'
+import { computeVisibleBodyIds, isAlwaysVisible } from '../visibility'
 import { findNearestCandidate, type ProximityCandidate } from '../proximitySelection'
 import {
   computeOrbitalDepth,
@@ -406,6 +406,10 @@ function useBeltShape(belt: BeltRegion): Float32Array {
       arr[i * 3 + 2] = (Math.random() - 0.5) * spreadRad
     }
     return arr
+    // Deliberately NOT depending on belt.innerRadiusKm/outerRadiusKm/
+    // inclinationSpreadDeg/coOrbital/particleCount — this scatter is meant
+    // to stay fixed per belt (see this function's own comment on avoiding
+    // "sparkling" from re-randomizing every tick), keyed only on belt.id.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [belt.id])
 }
@@ -1038,15 +1042,13 @@ function SceneContent({
   // computed once per system rather than every frame.
   const depthById = useMemo(() => computeOrbitalDepth(system.bodies), [system])
   // Exempt from screen-space proximity thinning (see ProximitySelector) —
-  // mirrors computeVisibleBodyIds' own "always visible" rule: primaries,
-  // the current selection, and its direct children never disappear just
-  // because something else happens to sit nearby on screen right now.
+  // the exact same "always visible" rule computeVisibleBodyIds itself uses
+  // (isAlwaysVisible, visibility.ts) — shared, not hand-copied, so the two
+  // can't silently drift apart the way a duplicated inline version would.
   const alwaysVisibleIds = useMemo(() => {
     const ids = new Set<string>()
     for (const body of system.bodies) {
-      const isPrimary = body.type === 'star' || body.type === 'planet'
-      const isChildOfSelection = !!selectedId && body.parentId === selectedId
-      if (isPrimary || body.id === selectedId || isChildOfSelection) ids.add(body.id)
+      if (isAlwaysVisible(body, selectedId)) ids.add(body.id)
     }
     return ids
   }, [system, selectedId])
@@ -1406,6 +1408,12 @@ function CameraRig({
     const endCameraPos = endTarget.clone().addScaledVector(direction, focus.distance)
     const trackingStart = trackedPosition ? new THREE.Vector3(...trackedPosition) : null
     flight.current = { startCameraPos, startTarget, endCameraPos, endTarget, startTimeMs: performance.now(), trackingStart }
+    // Deliberately NOT depending on trackedPosition — a new flight should
+    // only start when `focus` itself changes (a fresh selection/fly-to),
+    // not on every frame trackedPosition ticks during an already-in-progress
+    // flight (that's what the useFrame tracking block below is for). See
+    // this effect's own comment above for why a stable start/end pair
+    // matters here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus])
 
@@ -1766,6 +1774,9 @@ export function OrbitalSystemScene({
     setHoveredId(null)
     hoveredIdRef.current = null
     setVisibleLabelIds(new Set())
+    // Deliberately keyed on system.id alone, not simDate (which ticks every
+    // frame) or the setters (stable) — this must re-run only when a
+    // genuinely different system loads in, not on every simulation tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [system.id])
 
@@ -1782,6 +1793,11 @@ export function OrbitalSystemScene({
     // an already-chosen location's camera catching up, not a fresh user
     // pick, so it must not re-fire onSelectBody.
     if (body) focusOnBody(body)
+    // Deliberately NOT depending on focusOnBody itself (a new closure every
+    // render, capturing system/simDate — including it would re-run this
+    // effect constantly and fight the intentional ordering described
+    // above) — externalFocus.bodyId/token and system.id are the only
+    // things that should actually trigger a fresh fly-to.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalFocus?.bodyId, externalFocus?.token, system.id])
 

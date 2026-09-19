@@ -45,6 +45,22 @@ function prominence(body: CelestialBody, cameraDistance: number): number {
 }
 
 /**
+ * True for a body that renders regardless of zoom/ranking — a primary body
+ * (star/planet), the current selection itself, or one of its direct
+ * children. Exported (not just inlined in computeVisibleBodyIds below) so
+ * OrbitalSystemScene.tsx's ProximitySelector can skip screen-space
+ * proximity thinning (see thinByScreenProximity in labelDeclutter.ts) for
+ * exactly the same set of bodies, from one definition — the two used to be
+ * hand-copied in both places, which is exactly the kind of thing that
+ * silently drifts out of sync the moment either one changes.
+ */
+export function isAlwaysVisible(body: CelestialBody, selectedId: string | null): boolean {
+  const isPrimary = body.type === 'star' || body.type === 'planet'
+  const isChildOfSelection = !!selectedId && body.parentId === selectedId
+  return isPrimary || body.id === selectedId || isChildOfSelection
+}
+
+/**
  * Which bodies actually render/are selectable at the current zoom — pure so
  * both the render loop (OrbitalSystemScene.tsx's SceneContent) and the
  * bubble-cursor proximity hit-test (proximitySelection.ts) work from
@@ -69,7 +85,6 @@ export function computeVisibleBodyIds(
   const beltGroups = new Map<string, CelestialBody[]>()
 
   for (const body of system.bodies) {
-    const isPrimary = body.type === 'star' || body.type === 'planet'
     // A selection's own children reveal unconditionally, independent of the
     // ranking below — the "fit" distance for a selection is driven by its
     // farthest real child, which doesn't reliably clear a prominence
@@ -77,8 +92,7 @@ export function computeVisibleBodyIds(
     // what orbits it, so that has to be guaranteed, not just probable. The
     // selected body itself renders regardless too, so a zoomed-out
     // selection doesn't disappear on you.
-    const isChildOfSelection = !!selectedId && body.parentId === selectedId
-    if (isPrimary || body.id === selectedId || isChildOfSelection) {
+    if (isAlwaysVisible(body, selectedId)) {
       visible.add(body.id)
       continue
     }

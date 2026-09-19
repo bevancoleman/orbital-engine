@@ -49,7 +49,7 @@ export {
 export type { FocusTarget } from './camera'
 
 // Visibility / level of detail
-export { MAX_VISIBLE_SECONDARY, computeVisibleBodyIds } from './visibility'
+export { MAX_VISIBLE_SECONDARY, computeVisibleBodyIds, isAlwaysVisible } from './visibility'
 export { apparentSize, sphereDetailFor, icosahedronDetailFor, torusDetailFor, orbitDetailFor } from './levelOfDetail'
 export type { SphereDetail } from './levelOfDetail'
 

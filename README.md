@@ -206,7 +206,7 @@ Generated API reference, every export with parameters: **[bevancoleman.github.io
 
 ```bash
 npm install
-npm test        # 233 tests, including the reference data checked against ephemeris positions
+npm test        # the unit suite, including the reference data checked against ephemeris positions
 npm run typecheck
 npm run build    # tsup — emits ESM + CJS + .d.ts to dist/
 npm run docs     # typedoc — generates the API reference site into docs-site/

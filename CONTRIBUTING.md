@@ -13,7 +13,7 @@ npm install
 ```bash
 npm run typecheck
 npm run lint
-npm test          # 218+ unit tests
+npm test          # the unit suite
 npm run build     # tsup — emits ESM + CJS + .d.ts to dist/
 ```
 

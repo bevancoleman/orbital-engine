@@ -1,4 +1,4 @@
-import { computeVisibleBodyIds } from '../visibility'
+import { computeVisibleBodyIds, isAlwaysVisible } from '../visibility'
 import type { CelestialBody, StarSystemData } from '../types'
 
 function body(overrides: Partial<CelestialBody> & Pick<CelestialBody, 'id' | 'parentId' | 'type'>): CelestialBody {
@@ -8,6 +8,42 @@ function body(overrides: Partial<CelestialBody> & Pick<CelestialBody, 'id' | 'pa
 function system(bodies: CelestialBody[]): StarSystemData {
   return { id: 'test', name: 'Test', bodies }
 }
+
+describe('isAlwaysVisible', () => {
+  // The single shared source of truth computeVisibleBodyIds AND
+  // OrbitalSystemScene.tsx's ProximitySelector both call — previously
+  // hand-copied in both places, which is exactly the kind of thing that
+  // silently drifts out of sync the moment either one changes.
+  const star = body({ id: 'star', parentId: null, type: 'star' })
+  const planet = body({ id: 'planet', parentId: 'star', type: 'planet' })
+  const dwarfPlanet = body({ id: 'ceres', parentId: 'star', type: 'dwarf_planet' })
+  const moon = body({ id: 'moon', parentId: 'planet', type: 'moon' })
+  const station = body({ id: 'station', parentId: 'planet', type: 'station' })
+
+  it('is true for a star or planet regardless of selection', () => {
+    expect(isAlwaysVisible(star, null)).toBe(true)
+    expect(isAlwaysVisible(planet, null)).toBe(true)
+  })
+
+  it('is false for a non-primary type with nothing selected', () => {
+    expect(isAlwaysVisible(dwarfPlanet, null)).toBe(false)
+    expect(isAlwaysVisible(moon, null)).toBe(false)
+    expect(isAlwaysVisible(station, null)).toBe(false)
+  })
+
+  it('is true for the body that is itself currently selected', () => {
+    expect(isAlwaysVisible(station, 'station')).toBe(true)
+  })
+
+  it("is true for a direct child of the current selection", () => {
+    expect(isAlwaysVisible(moon, 'planet')).toBe(true)
+    expect(isAlwaysVisible(station, 'planet')).toBe(true)
+  })
+
+  it('is false for a body unrelated to the current selection', () => {
+    expect(isAlwaysVisible(moon, 'station')).toBe(false)
+  })
+})
 
 describe('computeVisibleBodyIds', () => {
   const star = body({ id: 'star', parentId: null, type: 'star' })
