@@ -20,6 +20,7 @@ import { formatDistanceKm } from '../units'
 import { distanceToSliderPosition, sliderPositionToDistance } from '../zoomSlider'
 import type { BeltRegion, CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
+import { StarLight } from './StarLight'
 import { CameraRig } from './CameraRig'
 import { UI_COLORS, uiStyles, buttonStyle } from './theme'
 
@@ -77,12 +78,26 @@ export interface OrbitalSystemSceneProps {
   externalFocus?: ExternalFocusRequest | null
   /** See RoutePreview. Null draws nothing. */
   routePreview?: RoutePreview | null
+  /**
+   * Light the scene from the system's actual star position (see
+   * StarLight.tsx) instead of the default fixed-direction light — every
+   * other body gets real day/night shading, the hemisphere facing the
+   * star lit and the far side dark, rather than a constant, position-
+   * independent light. Off by default: the fixed light is a simpler,
+   * always-available legibility aid that doesn't depend on the system
+   * having a real star body at all (a purely `fixedPosition`-based
+   * fictional system might not). If `true` and the system genuinely has
+   * no `type: 'star'` body, this safely renders no star-based light
+   * (falls back to just the ambient fill light) rather than guessing.
+   */
+  lightFromStar?: boolean
 }
 
 export function OrbitalSystemScene({
   system,
   onSelectBody,
   externalFocus,
+  lightFromStar,
   routePreview,
 }: OrbitalSystemSceneProps) {
   const [simDate, setSimDate] = useState(() => new Date())
@@ -359,13 +374,20 @@ export function OrbitalSystemScene({
         >
           <color attach="background" args={['#000000']} />
           <ambientLight intensity={0.45} />
-          {/* A single fixed-direction light so lit bodies (planets/moons/
-              asteroids/stations — see BodyShape) read as shaded 3D spheres
-              instead of flat colour discs. Not tied to any body's real
-              position (this engine has no per-frame "which way is the
-              star" concept for a fixed-position body) — a plain, honest
-              legibility aid, not a claim about real lighting direction. */}
-          <directionalLight position={[40, 60, 30]} intensity={1.1} />
+          {lightFromStar ? (
+            // Real day/night shading, from the system's actual star
+            // position — see StarLight's own comment for the reasoning
+            // and the star-less-system fallback.
+            <StarLight system={system} simDate={simDate} />
+          ) : (
+            /* A single fixed-direction light so lit bodies (planets/moons/
+               asteroids/stations — see BodyShape) read as shaded 3D spheres
+               instead of flat colour discs. Not tied to any body's real
+               position (this engine has no per-frame "which way is the
+               star" concept for a fixed-position body) — a plain, honest
+               legibility aid, not a claim about real lighting direction. */
+            <directionalLight position={[40, 60, 30]} intensity={1.1} />
+          )}
           {hasOrbitalMotion && (
             <TimeDriver
               playing={playing}

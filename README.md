@@ -22,6 +22,7 @@ This library solves the same true-scale problem spacekit.js didn't attempt, and 
 - **Camera fly-to.** Animates to a selected body and keeps tracking it afterward if it's still moving.
 - **Distance-adjusted level of detail.** Polygon count follows how much of the view a body actually fills, not raw camera distance.
 - **Real 3D models and textures, opt-in per body.** `CelestialBody.modelUrl` loads a real glTF model; `textureUrl` wraps a real surface photo around the built-in sphere instead. Both fall back to the placeholder shape if unset or if loading fails. See [`examples/with-models`](./examples/with-models), built entirely from NASA's public-domain 3D Resources collection.
+- **Optional real day/night shading.** `<OrbitalSystemScene lightFromStar>` lights the scene from the system's actual star position instead of a fixed direction — every other body gets a real lit/dark hemisphere split, correct for wherever it currently sits relative to the star. Off by default (a fixed light is simpler and works even for a system with no real star body).
 
 ## Install
 

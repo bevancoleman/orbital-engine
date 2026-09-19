@@ -36,6 +36,7 @@ export function App() {
   const [systemId, setSystemId] = useState<SystemId>('solar')
   const [selected, setSelected] = useState<CelestialBody | null>(null)
   const [externalFocus, setExternalFocus] = useState<ExternalFocusRequest | null>(null)
+  const [lightFromStar, setLightFromStar] = useState(false)
   const system = systemId === 'solar' ? SOLAR_SYSTEM : FICTIONAL_SYSTEM
 
   function switchSystem(next: SystemId) {
@@ -74,7 +75,11 @@ export function App() {
           <button onClick={() => switchSystem('fictional')} disabled={systemId === 'fictional'}>
             Fictional system (fixed positions)
           </button>
-          <a href="./with-models/" style={{ color: '#22d3ee', marginLeft: 'auto', fontSize: 13 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto', fontSize: 13 }}>
+            <input type="checkbox" checked={lightFromStar} onChange={(e) => setLightFromStar(e.target.checked)} />
+            Light from star (real day/night)
+          </label>
+          <a href="./with-models/" style={{ color: '#22d3ee', fontSize: 13 }}>
             Real NASA models/textures example →
           </a>
           <a href="./docs/" style={{ color: '#22d3ee', fontSize: 13 }}>
@@ -101,6 +106,7 @@ export function App() {
           system={system}
           onSelectBody={setSelected}
           externalFocus={externalFocus}
+          lightFromStar={lightFromStar}
         />
       </div>
     </div>
