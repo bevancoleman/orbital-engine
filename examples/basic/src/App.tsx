@@ -74,7 +74,10 @@ export function App() {
           <button onClick={() => switchSystem('fictional')} disabled={systemId === 'fictional'}>
             Fictional system (fixed positions)
           </button>
-          <a href="./docs/" style={{ color: '#22d3ee', marginLeft: 'auto', fontSize: 13 }}>
+          <a href="./with-models/" style={{ color: '#22d3ee', marginLeft: 'auto', fontSize: 13 }}>
+            Real NASA models/textures example →
+          </a>
+          <a href="./docs/" style={{ color: '#22d3ee', fontSize: 13 }}>
             API reference →
           </a>
         </div>

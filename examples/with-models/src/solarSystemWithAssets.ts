@@ -1,6 +1,13 @@
 import { SOLAR_SYSTEM } from 'orbital-engine'
 import type { StarSystemData } from 'orbital-engine'
 
+// Vite's BASE_URL (always trailing-slash-terminated) rather than a
+// hardcoded leading slash — a hardcoded '/models/iss.glb' resolves against
+// the domain root, which breaks the moment this app is served from a
+// subpath (e.g. GitHub Pages' /orbital-engine/with-models/), exactly the
+// real bug found deploying this example there.
+const BASE = import.meta.env.BASE_URL
+
 /**
  * Real 3D models (glTF) — NASA's own spacecraft/instrument collection
  * (github.com/nasa/NASA-3D-Resources), public domain. NASA's collection
@@ -8,8 +15,8 @@ import type { StarSystemData } from 'orbital-engine'
  * this list is short (ISS, Hubble) while TEXTURE_URLS below is long.
  */
 const MODEL_URLS: Record<string, string> = {
-  iss: '/models/iss.glb',
-  hubble: '/models/hubble.glb',
+  iss: `${BASE}models/iss.glb`,
+  hubble: `${BASE}models/hubble.glb`,
 }
 
 /**
@@ -20,25 +27,25 @@ const MODEL_URLS: Record<string, string> = {
  * it stays a flat-colour placeholder rather than a fabricated texture.
  */
 const TEXTURE_URLS: Record<string, string> = {
-  earth: '/textures/earth.jpg',
-  moon: '/textures/moon.jpg',
-  venus: '/textures/venus.jpg',
-  mars: '/textures/mars.jpg',
-  phobos: '/textures/phobos.jpg',
-  deimos: '/textures/deimos.jpg',
-  jupiter: '/textures/jupiter.jpg',
-  io: '/textures/io.jpg',
-  europa: '/textures/europa.jpg',
-  ganymede: '/textures/ganymede.jpg',
-  callisto: '/textures/callisto.jpg',
-  saturn: '/textures/saturn.jpg',
-  titan: '/textures/titan.jpg',
-  rhea: '/textures/rhea.jpg',
-  titania: '/textures/titania.jpg',
-  neptune: '/textures/neptune.jpg',
-  triton: '/textures/triton.jpg',
-  pluto: '/textures/pluto.jpg',
-  charon: '/textures/charon.jpg',
+  earth: `${BASE}textures/earth.jpg`,
+  moon: `${BASE}textures/moon.jpg`,
+  venus: `${BASE}textures/venus.jpg`,
+  mars: `${BASE}textures/mars.jpg`,
+  phobos: `${BASE}textures/phobos.jpg`,
+  deimos: `${BASE}textures/deimos.jpg`,
+  jupiter: `${BASE}textures/jupiter.jpg`,
+  io: `${BASE}textures/io.jpg`,
+  europa: `${BASE}textures/europa.jpg`,
+  ganymede: `${BASE}textures/ganymede.jpg`,
+  callisto: `${BASE}textures/callisto.jpg`,
+  saturn: `${BASE}textures/saturn.jpg`,
+  titan: `${BASE}textures/titan.jpg`,
+  rhea: `${BASE}textures/rhea.jpg`,
+  titania: `${BASE}textures/titania.jpg`,
+  neptune: `${BASE}textures/neptune.jpg`,
+  triton: `${BASE}textures/triton.jpg`,
+  pluto: `${BASE}textures/pluto.jpg`,
+  charon: `${BASE}textures/charon.jpg`,
 }
 
 export const HAS_REAL_ASSET = new Set([...Object.keys(MODEL_URLS), ...Object.keys(TEXTURE_URLS)])

@@ -34,9 +34,18 @@ jobs:
         working-directory: examples/basic
         env:
           GITHUB_PAGES: "true"
-      # One Pages site, two things in it: the example app at the root,
-      # the generated API reference under /docs/.
+      - run: npm ci
+        working-directory: examples/with-models
+      - run: npm run build
+        working-directory: examples/with-models
+        env:
+          GITHUB_PAGES: "true"
+      # One Pages site, several things in it: the basic example app at the
+      # root, the real-NASA-assets example under /with-models/ (its own
+      # vite base is already set to that subpath — see its vite.config.ts),
+      # and the generated API reference under /docs/.
       - run: cp -r docs-site examples/basic/dist/docs
+      - run: cp -r examples/with-models/dist examples/basic/dist/with-models
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
