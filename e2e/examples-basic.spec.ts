@@ -125,6 +125,48 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     expect(errors).toEqual([])
   })
 
+  test('secondary bodies in a sparse system are visible at a normal system-framing zoom', async ({ page }) => {
+    // Regression test for a real, reported bug: the old visibility gate was
+    // a single hard distance-ratio cliff, applied identically regardless of
+    // how many bodies a system actually has — a body could vanish entirely
+    // on what looked like a trivial zoom change, even in a 4-body system
+    // with plenty of empty screen space around it (see visibility.ts's own
+    // comment on computeVisibleBodyIds/isAlwaysVisible for the full
+    // history). This fictional system has exactly the shape that exposed
+    // it: "Aurum High Station" and "Outbound Gateway" are both secondary
+    // (non-primary) bodies, well under any reasonable per-system cap, so
+    // both should be visible together at a normal, whole-system-ish zoom —
+    // not just the primary star.
+    //
+    // Deliberately checked at ONE verified zoom level, not swept across a
+    // range: label TEXT visibility (as opposed to the body's own dot,
+    // which isn't independently DOM-queryable) is also subject to
+    // ordinary screen-space label decluttering (see labelDeclutter.ts),
+    // which legitimately hides a label when two land close together on
+    // screen at some other zoom level — a real, separate, working feature,
+    // not the bug this test guards against.
+    const errors = consoleErrors(page)
+    await page.goto('http://localhost:5173/')
+    await page.waitForTimeout(800)
+    await page.getByRole('button', { name: /Fictional system/ }).click()
+    await page.waitForTimeout(1000)
+
+    const slider = page.locator('input[type=range]').first()
+    await slider.evaluate((el) => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+      setter.call(el, '700')
+      el.dispatchEvent(new window.Event('input', { bubbles: true }))
+    })
+    await page.waitForTimeout(700)
+
+    // The toolbar's own "Fly to" buttons share the same text as the
+    // in-canvas labels this test actually cares about — scope to <div>
+    // (the label) rather than <button> (the toolbar) to avoid ambiguity.
+    await expect(page.getByText('Aurum High Station', { exact: true }).and(page.locator('div'))).toBeVisible()
+    await expect(page.getByText('Outbound Gateway', { exact: true }).and(page.locator('div'))).toBeVisible()
+    expect(errors).toEqual([])
+  })
+
   test('camera tracks a fast-orbiting selected body through the zoom-in and afterward, without needing Recenter', async ({ page }) => {
     // Regression test for a real, reported bug: selecting a body and
     // zooming in from the whole-system view used to leave the camera

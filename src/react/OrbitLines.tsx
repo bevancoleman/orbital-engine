@@ -140,19 +140,34 @@ export function RoutePreviewLine({
 
   return (
     <>
-      {segments.map((points, i) => (
-        <Line
-          key={i}
-          points={points}
-          color={color}
-          transparent
-          opacity={dashed ? 0.55 : 0.9}
-          lineWidth={dashed ? 1.5 : 2.5}
-          dashed={dashed}
-          dashScale={dashed ? 6 : undefined}
-          gapSize={dashed ? 3 : undefined}
-        />
-      ))}
+      {segments.map((points, i) => {
+        // Parent-relative, not absolute — same reasoning as OrbitPathLine's
+        // own comment: baking each point's absolute (potentially far from
+        // the origin) position directly into <Line>'s Float32Array vertex
+        // buffer wastes most of float32's ~7 significant digits on whatever
+        // that shared magnitude is, leaving little precision for the
+        // segment's own shape. A route can span from the star out to a
+        // distant planet's moon, so there's no single natural "parent" the
+        // way an orbit has one — anchor each segment at its own first
+        // point instead, via a wrapping <group>, and keep the vertices
+        // themselves as small offsets from that anchor.
+        const anchor = points[0]!
+        const localPoints = points.map(([x, y, z]) => [x - anchor[0], y - anchor[1], z - anchor[2]] as WorldVec)
+        return (
+          <group key={i} position={anchor}>
+            <Line
+              points={localPoints}
+              color={color}
+              transparent
+              opacity={dashed ? 0.55 : 0.9}
+              lineWidth={dashed ? 1.5 : 2.5}
+              dashed={dashed}
+              dashScale={dashed ? 6 : undefined}
+              gapSize={dashed ? 3 : undefined}
+            />
+          </group>
+        )
+      })}
     </>
   )
 }
