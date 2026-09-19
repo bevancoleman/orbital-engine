@@ -1,0 +1,49 @@
+name: Deploy example
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Builds the root package's dist/ — examples/basic depends on it via
+      # `file:../..`, so it has to exist before the example's own install
+      # (which runs the package's `prepare` script) can succeed.
+      - run: npm ci
+      - run: npm run build
+      - run: npm ci
+        working-directory: examples/basic
+      - run: npm run build
+        working-directory: examples/basic
+        env:
+          GITHUB_PAGES: "true"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: examples/basic/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
