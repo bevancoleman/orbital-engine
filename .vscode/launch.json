@@ -2,9 +2,16 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // No google-chrome/chromium binary on this machine — VS Code's
+      // "chrome" debug type only auto-detects specific known binary names,
+      // so it silently fails to launch without runtimeExecutable pointing
+      // it at an actual browser. Vivaldi (this machine's real default
+      // browser, /usr/bin/vivaldi) is Chromium-based and speaks the same
+      // remote-debugging protocol, so it works as a drop-in target.
       "name": "Debug: examples/basic (Chrome)",
       "type": "chrome",
       "request": "launch",
+      "runtimeExecutable": "vivaldi",
       "url": "http://localhost:5173",
       "webRoot": "${workspaceFolder}/examples/basic",
       "sourceMaps": true,
@@ -14,6 +21,7 @@
       "name": "Debug: examples/with-models (Chrome)",
       "type": "chrome",
       "request": "launch",
+      "runtimeExecutable": "vivaldi",
       "url": "http://localhost:5174",
       "webRoot": "${workspaceFolder}/examples/with-models",
       "sourceMaps": true,
