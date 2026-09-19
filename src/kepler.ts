@@ -82,33 +82,46 @@ export function positionAtTime(orbit: OrbitalElements, date: Date): Vec3Km {
   return { x, y, z }
 }
 
+// How many raw points to walk the ellipse's own auxiliary circle at (see
+// orbitPath) before resampling down to the requested segment count — needs
+// to comfortably out-resolve the highest segment tier this engine ever
+// requests (512 — see levelOfDetail.ts's ORBIT_LEVELS) so the arc-length
+// resampling below is limited by segments, not by this oversample density.
+const ARC_LENGTH_OVERSAMPLE = 4000
+
 /**
- * Sample points around the full ellipse — by EVEN STEPS IN ECCENTRIC
- * ANOMALY, not true anomaly and not time — for drawing the orbit path
+ * Sample points around the full ellipse EVENLY BY REAL ARC LENGTH — not by
+ * true anomaly, eccentric anomaly, or time — for drawing the orbit path
  * itself, independent of where the body currently sits on it.
  *
- * Real, observed bug this fixes: sampling evenly by true anomaly (the
- * previous approach) does avoid under-sampling a fast-moving periapsis
- * passage the way even TIME steps would, but it does NOT give evenly-
- * spaced points along the actual curve — true anomaly is measured from the
- * focus, so for any real eccentricity the same angular step corresponds to
- * a much SMALLER real distance near periapsis (r is small there) than near
- * apoapsis (r is large). For Halley's Comet (e ≈ 0.967) the gap between
- * consecutive sampled points near apoapsis was measured at ~60x the gap
- * near periapsis, at ANY fixed segment count — the far arc (which is most
- * of what's actually visible on screen for an orbit this eccentric, since
- * periapsis is tucked in tight near the star) rendered as visibly low-poly
- * even at this engine's maximum adaptive detail level.
+ * Real, observed bug history: sampling evenly by true anomaly packed
+ * points tightly near periapsis and left apoapsis badly undersampled (for
+ * Halley's Comet, e ≈ 0.967, a ~60x gap-size disparity at any fixed
+ * segment count). Switching to even steps in ECCENTRIC anomaly narrowed
+ * that to ~4x — better, but for a large, eccentric, real-scale orbit
+ * (Eris, e ≈ 0.44; worse for Halley) that remaining ~4x still showed up as
+ * a visible gap between the body's own live position and its nearest
+ * point on the drawn line, worst right at apoapsis — exactly where a
+ * body spends most of its time, since it moves slowest there.
  *
- * The eccentric anomaly E parametrizes position directly (not via r and an
- * angle from the focus) as a point on the ellipse's own auxiliary circle,
- * scaled down along the minor axis: x = a(cosE − e), y = b·sinE. Points
- * evenly spaced in E are close to evenly spaced in real arc length around
- * the whole ellipse — for the same Halley orbit, the periapsis/apoapsis
- * gap ratio drops from ~60x to under 4x, and the endpoints (E = 0 at
- * periapsis, E = π at apoapsis) land at exactly the same real distances
- * (a(1−e) and a(1+e)) true-anomaly sampling gave, so this is the same
- * ellipse, just walked around more evenly.
+ * Arc length is the actual, direct fix: points evenly spaced by real
+ * distance traveled along the curve are, by construction, evenly spaced
+ * everywhere, for any eccentricity. There's no closed form for an
+ * ellipse's arc length (it's an elliptic integral), so this walks a dense
+ * oversample of the curve (ARC_LENGTH_OVERSAMPLE raw points, evenly spaced
+ * in eccentric anomaly — plenty fine-grained to approximate true arc
+ * length well past what any requested segment count could resolve) and
+ * resamples that at even cumulative-distance intervals. Computed in the
+ * perifocal (pre-rotation) plane — the same 3D rotation into the parent's
+ * reference frame applied afterward is a rigid transform, which preserves
+ * arc length exactly, so measuring distance before rotating gives the same
+ * answer as after, more cheaply.
+ *
+ * This also means the resulting spacing is even in RENDERED (compressed)
+ * space too, not just real km — orbit-to-world compression
+ * (orbitCompressionRatio, in render.ts) is one uniform scale factor for the
+ * whole orbit, and uniform scaling preserves relative arc-length
+ * proportions exactly.
  */
 export function orbitPath(orbit: OrbitalElements, segments = 128): Vec3Km[] {
   const { semiMajorAxisKm: a, eccentricity: e } = orbit
@@ -124,11 +137,36 @@ export function orbitPath(orbit: OrbitalElements, segments = 128): Vec3Km[] {
   const cosI = Math.cos(i)
   const sinI = Math.sin(i)
 
+  // Dense raw walk of the perifocal-plane ellipse, plus its cumulative arc
+  // length at each point (rawCumLength[k] = distance travelled from k=0 to
+  // point k).
+  const rawX = new Float64Array(ARC_LENGTH_OVERSAMPLE + 1)
+  const rawY = new Float64Array(ARC_LENGTH_OVERSAMPLE + 1)
+  const rawCumLength = new Float64Array(ARC_LENGTH_OVERSAMPLE + 1)
+  for (let k = 0; k <= ARC_LENGTH_OVERSAMPLE; k++) {
+    const E = (2 * Math.PI * k) / ARC_LENGTH_OVERSAMPLE
+    rawX[k] = a * (Math.cos(E) - e)
+    rawY[k] = b * Math.sin(E)
+    if (k > 0) {
+      const dx = rawX[k]! - rawX[k - 1]!
+      const dy = rawY[k]! - rawY[k - 1]!
+      rawCumLength[k] = rawCumLength[k - 1]! + Math.hypot(dx, dy)
+    }
+  }
+  const totalLength = rawCumLength[ARC_LENGTH_OVERSAMPLE]!
+
   const points: Vec3Km[] = []
+  let searchFrom = 0 // cumLength is monotonic increasing and so is the target — walk forward, never restart
   for (let s = 0; s <= segments; s++) {
-    const E = (2 * Math.PI * s) / segments
-    const xOrb = a * (Math.cos(E) - e)
-    const yOrb = b * Math.sin(E)
+    const targetLength = (s / segments) * totalLength
+    // Advance to the raw segment straddling targetLength.
+    while (searchFrom < ARC_LENGTH_OVERSAMPLE && rawCumLength[searchFrom + 1]! < targetLength) searchFrom++
+    const segStart = rawCumLength[searchFrom]!
+    const segEnd = rawCumLength[Math.min(searchFrom + 1, ARC_LENGTH_OVERSAMPLE)]!
+    const segFrac = segEnd > segStart ? (targetLength - segStart) / (segEnd - segStart) : 0
+    const k1 = Math.min(searchFrom + 1, ARC_LENGTH_OVERSAMPLE)
+    const xOrb = rawX[searchFrom]! + (rawX[k1]! - rawX[searchFrom]!) * segFrac
+    const yOrb = rawY[searchFrom]! + (rawY[k1]! - rawY[searchFrom]!) * segFrac
 
     const x =
       (cosRaan * cosArgp - sinRaan * sinArgp * cosI) * xOrb +

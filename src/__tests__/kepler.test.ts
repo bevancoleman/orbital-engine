@@ -216,22 +216,60 @@ describe('orbitPath', () => {
     expect(path1).toEqual(path2)
   })
 
-  it('keeps consecutive-point spacing reasonably even even for a highly eccentric orbit', () => {
-    // The actual reported bug: Halley's Comet (e ≈ 0.967) rendered as
-    // visibly low-poly near apoapsis even at a high segment count, because
-    // the old true-anomaly sampling packed almost all the points into the
-    // tight periapsis arc. Sampling by eccentric anomaly instead keeps the
-    // largest and smallest gaps within a bounded ratio of each other — far
-    // from perfectly uniform, but nowhere near the ~60x disparity true
-    // anomaly produced for this same orbit.
-    const halley = bodyOrbit('halley')
-    const path = orbitPath(halley, 256)
-    const gaps: number[] = []
-    for (let i = 0; i < path.length - 1; i++) {
-      gaps.push(distanceKm(path[i]!, path[i + 1]!))
+  it.each(['halley', 'eris'])(
+    'keeps consecutive-point spacing near-perfectly even for a highly eccentric orbit (%s)',
+    (id) => {
+      // Real, observed bug history: true-anomaly sampling packed almost all
+      // points into the tight periapsis arc (a ~60x gap disparity for
+      // Halley, e ≈ 0.967). Switching to even steps in eccentric anomaly
+      // narrowed that to ~4x — better, but still visible: Eris (e ≈ 0.44,
+      // semi-major axis ~68 AU) reportedly rendered with a clearly visible
+      // gap between its own live position and its nearest point on the
+      // drawn orbit line, worst right at apoapsis, exactly where the ~4x
+      // disparity was largest and where a body spends most of its time.
+      // Sampling by real ARC LENGTH instead (this function's current
+      // approach) is the actual fix — evenly spaced by construction,
+      // regardless of eccentricity — so the gap ratio should now be close
+      // to 1, not merely "bounded."
+      const orbit = bodyOrbit(id)
+      const path = orbitPath(orbit, 256)
+      const gaps: number[] = []
+      for (let i = 0; i < path.length - 1; i++) {
+        gaps.push(distanceKm(path[i]!, path[i + 1]!))
+      }
+      const maxGap = Math.max(...gaps)
+      const minGap = Math.min(...gaps)
+      expect(maxGap / minGap).toBeLessThan(1.05)
     }
-    const maxGap = Math.max(...gaps)
-    const minGap = Math.min(...gaps)
-    expect(maxGap / minGap).toBeLessThan(10)
+  )
+
+  it("keeps a body's live position close to its nearest sampled orbit point, even right at apoapsis of a large, eccentric orbit", () => {
+    // The exact end-to-end regression reported: Eris's own rendered sphere
+    // visibly off its own drawn orbit line, worst near apoapsis. Checked at
+    // a real date where Eris sits almost exactly at apoapsis (its slowest,
+    // most-time-spent point — see the docstring above) — the previous
+    // eccentric-anomaly-only sampling left a ~4x-larger-than-typical gap
+    // exactly here; arc-length sampling should not.
+    const eris = bodyOrbit('eris')
+    // Apoapsis: mean anomaly 180° — solve for the date that puts it there
+    // starting from epoch, same technique the periapsis/apoapsis physical-
+    // invariant tests above use.
+    const daysToApoapsis = (180 - eris.meanAnomalyAtEpochDeg + 360) % 360 / (360 / eris.orbitalPeriodDays)
+    const date = new Date(new Date(eris.epoch).getTime() + daysToApoapsis * 86_400_000)
+    const live = positionAtTime(eris, date)
+
+    const segments = 256
+    const path = orbitPath(eris, segments)
+    let nearestGapKm = Infinity
+    for (const p of path) {
+      nearestGapKm = Math.min(nearestGapKm, distanceKm(p, live))
+    }
+    // Half the (now near-uniform) per-segment arc length is the worst case
+    // for "how far can a point on the true curve be from the nearest
+    // sample" — apoapsis distance is a(1+e); circumference of an ellipse
+    // this eccentric is a bit more than 4a, so a generous bound on
+    // half-a-segment is (4.5 * a / segments) / 2.
+    const worstCaseGapKm = (4.5 * eris.semiMajorAxisKm) / segments / 2
+    expect(nearestGapKm).toBeLessThan(worstCaseGapKm)
   })
 })
