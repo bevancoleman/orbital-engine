@@ -45,7 +45,10 @@ export const FICTIONAL_SYSTEM: StarSystemData = {
       id: 'jump-point-1',
       name: 'Outbound Gateway',
       type: 'jump_point',
-      parentId: null,
+      // parentId is documented as "null only for the system's star" (see
+      // CelestialBody) — a deep-space body still anchors to the star, even
+      // though it doesn't orbit it in any meaningful local sense.
+      parentId: 'star',
       radiusKm: 5,
       orbit: null,
       fixedPosition: { xKm: 80_000_000, yKm: 12_000_000, zKm: 0 },

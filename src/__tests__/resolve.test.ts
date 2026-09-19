@@ -127,6 +127,24 @@ describe('resolveAbsolutePosition — fixed (non-orbiting) bodies', () => {
   })
 })
 
+describe('resolveAbsolutePosition — a body with no parent but a real fixedPosition', () => {
+  // Same real, observed bug as render.test.ts's matching describe block —
+  // "no parent" (parentId: null) alone used to be treated as "no position
+  // data at all", discarding a real fixedPosition and collapsing the body
+  // to the origin.
+  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+  const orphanBody: CelestialBody = {
+    id: 'orphan', name: 'Orphan', type: 'jump_point', parentId: null, radiusKm: 5, orbit: null,
+    fixedPosition: { xKm: 80_000_000, yKm: 12_000_000, zKm: 0 },
+  }
+  const bodies = [star, orphanBody]
+
+  it('returns its own fixedPosition, not the origin', () => {
+    const pos = resolveAbsolutePosition(orphanBody, bodies, DATE)
+    expect(pos).toEqual({ x: 80_000_000, y: 12_000_000, z: 0 })
+  })
+})
+
 describe('coOrbitalReferenceAngle', () => {
   const jupiterTrojansL4 = SOLAR_SYSTEM.belts!.find((b) => b.id === 'jupiter-trojans-l4')!
   const jupiterTrojansL5 = SOLAR_SYSTEM.belts!.find((b) => b.id === 'jupiter-trojans-l5')!

@@ -230,6 +230,36 @@ describe('resolveWorldPosition — fixed (non-orbiting) bodies', () => {
   })
 })
 
+describe('resolveWorldPosition — a body with no parent but a real fixedPosition', () => {
+  // Real, observed bug: a body not anchored to any specific parent (e.g. a
+  // deep-space jump point, `parentId: null`) but with a real known position
+  // was rendering AT THE ORIGIN — the same shortcut meant for "no position
+  // data at all" (the star) was also matching "no parent, but a real
+  // position", discarding fixedPosition entirely. Confirmed as the actual
+  // cause of a real-world case: a fictional system's "Outbound Gateway"
+  // (parentId: null, fixedPosition far from the star) rendered on top of
+  // the star itself.
+  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+  const orphanBody: CelestialBody = {
+    id: 'orphan', name: 'Orphan', type: 'jump_point', parentId: null, radiusKm: 5, orbit: null,
+    fixedPosition: { xKm: 80_000_000, yKm: 12_000_000, zKm: 0 },
+  }
+  const bodies = [star, orphanBody]
+
+  it('renders at its own fixedPosition, not the origin', () => {
+    const pos = resolveWorldPosition(orphanBody, bodies, DATE)
+    expect(pos).not.toEqual([0, 0, 0])
+    const expected = compressVec({ x: 80_000_000, y: 12_000_000, z: 0 })
+    expect(pos).toEqual(expected)
+  })
+
+  it('does not collide with the star at the origin', () => {
+    const pos = resolveWorldPosition(orphanBody, bodies, DATE)
+    const distanceFromStar = Math.hypot(pos[0], pos[1], pos[2])
+    expect(distanceFromStar).toBeGreaterThan(0)
+  })
+})
+
 describe('resolveAllWorldPositions', () => {
   it('returns a finite position for every body', () => {
     const positions = resolveAllWorldPositions(SOLAR_SYSTEM, DATE)

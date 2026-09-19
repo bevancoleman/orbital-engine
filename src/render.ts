@@ -47,7 +47,15 @@ export function resolveWorldPosition(
   const cached = cache.get(body.id)
   if (cached) return cached
 
-  if ((!body.orbit && !body.fixedPosition) || !body.parentId) {
+  if (!body.orbit && !body.fixedPosition) {
+    // No position data at all — the system's own star, or any other body
+    // with genuinely nothing known about where it sits. NOT the same case
+    // as `parentId: null` with a real fixedPosition set (a deep-space body
+    // not anchored to any specific parent, but still positioned relative
+    // to the system's own origin, e.g. a jump point) — that case falls
+    // through below, where `parent` resolves to undefined and
+    // `parentWorld` correctly defaults to the origin on its own, without
+    // discarding the body's real relativeKm offset from it.
     const origin: WorldVec = [0, 0, 0]
     cache.set(body.id, origin)
     return origin

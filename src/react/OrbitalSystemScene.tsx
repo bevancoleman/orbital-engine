@@ -1067,6 +1067,12 @@ interface FlyAnimation {
   endCameraPos: THREE.Vector3
   endTarget: THREE.Vector3
   startTimeMs: number
+  /** The tracked body's live position at the moment this flight started —
+   *  null if nothing trackable is selected (e.g. flying to a belt). Lets
+   *  the flight keep endTarget/endCameraPos chasing the body's real motion
+   *  while the animation is still in progress — see the tracking block in
+   *  useFrame below for why a fixed endpoint isn't good enough here. */
+  trackingStart: THREE.Vector3 | null
 }
 
 const FLY_DURATION_MS = 900
@@ -1175,7 +1181,8 @@ function CameraRig({
     lastGoodDirection.current = direction.clone()
     const endTarget = new THREE.Vector3(...focus.position)
     const endCameraPos = endTarget.clone().addScaledVector(direction, focus.distance)
-    flight.current = { startCameraPos, startTarget, endCameraPos, endTarget, startTimeMs: performance.now() }
+    const trackingStart = trackedPosition ? new THREE.Vector3(...trackedPosition) : null
+    flight.current = { startCameraPos, startTarget, endCameraPos, endTarget, startTimeMs: performance.now(), trackingStart }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus])
 
@@ -1198,6 +1205,24 @@ function CameraRig({
 
     const anim = flight.current
     if (anim) {
+      // If the target is a moving body (trackingStart set at flight start —
+      // see FlyAnimation's own comment), shift the flight's endpoint by
+      // however far the body has moved since the flight began, every frame,
+      // BEFORE lerping toward it. Without this, a body under simulated
+      // motion keeps moving during the ~900ms flight while the flight aims
+      // at a fixed snapshot of where it was at selection time — at the
+      // extremely tight zoom a true-scale body needs, even the body's
+      // ordinary motion over less than a second is enough to land the
+      // camera pointed at empty space the instant the flight completes,
+      // the exact bug this fixes: the body visibly vanishing right as the
+      // camera finishes arriving.
+      if (anim.trackingStart && trackedPosition) {
+        const live = new THREE.Vector3(...trackedPosition)
+        const movedSinceLastFrame = live.clone().sub(anim.trackingStart)
+        anim.endTarget.copy(live)
+        anim.endCameraPos.add(movedSinceLastFrame)
+        anim.trackingStart.copy(live)
+      }
       const t = Math.min(1, (performance.now() - anim.startTimeMs) / FLY_DURATION_MS)
       const eased = easeOutCubic(t)
       controlsTarget.lerpVectors(anim.startTarget, anim.endTarget, eased)

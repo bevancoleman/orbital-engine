@@ -223,6 +223,30 @@ describe('computeFocusForSystem', () => {
     expect(focus.position).toEqual([0, 0, 0])
     expect(focus.distance).toBe(134)
   })
+
+  it('still finds the star by type when another body also has parentId: null', () => {
+    // Real, observed bug: the star used to be identified by "has no
+    // parentId" alone, which also matches any other body not anchored to a
+    // specific parent (e.g. a deep-space jump point — see CelestialBody.
+    // parentId's own docs, which reserve null for the star, but nothing
+    // enforced that). Listed BEFORE the star here specifically to catch a
+    // naive `.find()`-by-parentId picking the wrong one.
+    const system: StarSystemData = {
+      id: 'test',
+      name: 'Test',
+      bodies: [
+        body({ id: 'orphan', parentId: null, type: 'jump_point', radiusKm: 5, fixedPosition: { xKm: 80_000_000, yKm: 12_000_000, zKm: 0 } }),
+        body({ id: 'star', parentId: null, type: 'star', radiusKm: 600_000, fixedPosition: undefined }),
+        body({ id: 'planet', parentId: 'star', type: 'planet', radiusKm: 6_371, fixedPosition: { xKm: 10_000_000, yKm: 0, zKm: 0 } }),
+      ],
+    }
+    const focus = computeFocusForSystem(system, DATE)
+    // Framing the star (correct) fits the planet at 10M km out; framing the
+    // orphan jump point instead (the bug) would fit nothing (no children of
+    // its own) and produce a tiny, wrong distance close to the minimum.
+    expect(focus.position).toEqual([0, 0, 0])
+    expect(focus.distance).toBeGreaterThan(10)
+  })
 })
 
 describe('computeFocusForBelt', () => {

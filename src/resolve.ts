@@ -19,7 +19,13 @@ export function resolveAbsolutePosition(
   const cached = cache.get(body.id)
   if (cached) return cached
 
-  if ((!body.orbit && !body.fixedPosition) || !body.parentId) {
+  if (!body.orbit && !body.fixedPosition) {
+    // No position data at all (e.g. the star). A body with `parentId: null`
+    // but a real `fixedPosition` — a deep-space body not anchored to any
+    // specific parent, still positioned relative to the system's own
+    // origin — falls through below instead; `parent` resolves to undefined
+    // there and `parentPos` correctly defaults to the origin on its own,
+    // without discarding the body's real relative offset from it.
     const origin = { x: 0, y: 0, z: 0 }
     cache.set(body.id, origin)
     return origin

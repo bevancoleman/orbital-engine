@@ -168,7 +168,11 @@ export function computeFocusForBody(body: CelestialBody, system: StarSystemData,
  * system is actually loaded.
  */
 export function computeFocusForSystem(system: StarSystemData, simDate: Date): FocusTarget {
-  const star = system.bodies.find((b) => !b.parentId)
+  // Identified by type, not by "has no parentId" — a body not anchored to
+  // any specific parent (e.g. a deep-space jump point, see CelestialBody.
+  // parentId) can ALSO have parentId: null without being the star, so that
+  // check alone doesn't reliably pick the star out among other bodies.
+  const star = system.bodies.find((b) => b.type === 'star')
   if (!star) return { position: [0, 0, 0], distance: DEFAULT_CAMERA_DISTANCE }
   return computeFocusForBody(star, system, simDate)
 }
