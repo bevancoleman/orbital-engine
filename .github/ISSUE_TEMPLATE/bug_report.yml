@@ -1,0 +1,32 @@
+name: Bug report
+description: Something isn't working as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected instead, and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: A minimal `CelestialBody`/`StarSystemData` snippet or a link to a reproduction (a fork of examples/basic is ideal) that shows the issue.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: orbital-engine version
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: react-three-fiber / three.js / React versions, browser, OS.
+    validations:
+      required: false

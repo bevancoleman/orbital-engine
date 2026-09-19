@@ -1,5 +1,8 @@
 # orbital-engine
 
+[![CI](https://github.com/bevancoleman/orbital-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bevancoleman/orbital-engine/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
 An orbital mechanics rendering engine for [react-three-fiber](https://github.com/pmndrs/react-three-fiber), built around true physical scale. Bodies are sized and positioned at their actual real-world proportions, and a Kepler orbit or a single fixed position both render through the same component.
 
 ## Comparison
@@ -111,6 +114,10 @@ npm ci --prefix examples/with-models
 npx playwright install chromium
 npx playwright test
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Bug reports and feature requests: [open an issue](https://github.com/bevancoleman/orbital-engine/issues). This project follows a [Code of Conduct](./CODE_OF_CONDUCT.md). Security issues: see [SECURITY.md](./SECURITY.md), please don't open a public issue for those.
 
 ## License
 
