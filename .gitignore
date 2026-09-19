@@ -9,3 +9,7 @@ examples/**/node_modules/
 examples/**/dist/
 
 *.tgz
+
+test-results/
+playwright-report/
+blob-report/

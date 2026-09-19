@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Html, Line, OrbitControls, Points, PointMaterial, useGLTF } from '@react-three/drei'
+import { Html, Line, OrbitControls, Points, PointMaterial, useGLTF, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { orbitPath } from '../kepler'
 import { coOrbitalReferenceAngle } from '../resolve'
@@ -653,12 +653,40 @@ function LoadedBodyModel({ url, radius }: { url: string; radius: number }) {
   return <primitive object={prepared} />
 }
 
+/** Body types a sphere-with-real-texture actually makes sense for — the
+ *  same set PlaceholderBodyShape renders as a sphereGeometry to begin
+ *  with. Texturing an icosahedron/torus/octahedron would just look wrong,
+ *  so textureUrl is silently ignored for those types (see CelestialBody.
+ *  textureUrl). */
+const TEXTURABLE_BODY_TYPES = new Set(['planet', 'dwarf_planet', 'moon'])
+
+/** Loads a real surface texture (see CelestialBody.textureUrl) and wraps it
+ *  around a sphere — real imagery standing in for the full 3D model this
+ *  body doesn't have, rather than a flat colour. */
+function TexturedSphereBody({ radius, textureUrl, detailSize }: { radius: number; textureUrl: string; detailSize: number }) {
+  const texture = useTexture(textureUrl)
+  useMemo(() => {
+    texture.colorSpace = THREE.SRGBColorSpace
+  }, [texture])
+  const sphere = sphereDetailFor(detailSize)
+  return (
+    <mesh>
+      <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
+      <meshStandardMaterial map={texture} roughness={0.9} metalness={0.05} />
+    </mesh>
+  )
+}
+
 /**
- * The rendered shape for a body: a real, provided model (CelestialBody.
- * modelUrl — e.g. a real ISS model instead of the generic station torus)
- * when one's set and loads successfully, the generic per-type placeholder
- * (PlaceholderBodyShape) otherwise — either because no model was provided
- * (the default for every current body) or because loading one failed.
+ * The rendered shape for a body, in priority order:
+ * 1. A real 3D model (CelestialBody.modelUrl — e.g. a real ISS model
+ *    instead of the generic station torus), if set and it loads.
+ * 2. A real surface texture wrapped around a sphere (CelestialBody.
+ *    textureUrl), if set, it loads, and the body's type is one
+ *    PlaceholderBodyShape would otherwise render as a plain sphere.
+ * 3. The generic per-type placeholder (PlaceholderBodyShape) — the
+ *    default for every body, and the fallback if 1 or 2 were set but
+ *    failed to load.
  */
 function BodyShape({
   body,
@@ -672,14 +700,28 @@ function BodyShape({
   detailSize: number
 }) {
   const placeholder = <PlaceholderBodyShape body={body} radius={radius} color={color} detailSize={detailSize} />
-  if (!body.modelUrl) return placeholder
-  return (
-    <ModelErrorBoundary fallback={placeholder}>
-      <Suspense fallback={placeholder}>
-        <LoadedBodyModel url={body.modelUrl} radius={radius} />
-      </Suspense>
-    </ModelErrorBoundary>
-  )
+
+  if (body.modelUrl) {
+    return (
+      <ModelErrorBoundary fallback={placeholder}>
+        <Suspense fallback={placeholder}>
+          <LoadedBodyModel url={body.modelUrl} radius={radius} />
+        </Suspense>
+      </ModelErrorBoundary>
+    )
+  }
+
+  if (body.textureUrl && TEXTURABLE_BODY_TYPES.has(body.type)) {
+    return (
+      <ModelErrorBoundary fallback={placeholder}>
+        <Suspense fallback={placeholder}>
+          <TexturedSphereBody radius={radius} textureUrl={body.textureUrl} detailSize={detailSize} />
+        </Suspense>
+      </ModelErrorBoundary>
+    )
+  }
+
+  return placeholder
 }
 
 function BodyMarker({

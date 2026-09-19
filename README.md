@@ -18,6 +18,7 @@ This library solves the same true-scale problem spacekit.js didn't attempt, and 
 - **Belts and rings.** Either plotted from real per-object positions (a field where every object's position is known) or scattered synthetically within a radius range, including co-orbital clusters that track a reference body's current angle.
 - **Camera fly-to.** Animates to a selected body and keeps tracking it afterward if it's still moving.
 - **Distance-adjusted level of detail.** Polygon count follows how much of the view a body actually fills, not raw camera distance.
+- **Real 3D models and textures, opt-in per body.** `CelestialBody.modelUrl` loads a real glTF model; `textureUrl` wraps a real surface photo around the built-in sphere instead. Both fall back to the placeholder shape if unset or if loading fails. See [`examples/with-models`](./examples/with-models), built entirely from NASA's public-domain 3D Resources collection.
 
 ## Install
 
@@ -44,7 +45,7 @@ export default function App() {
 
 `SOLAR_SYSTEM` is a reference dataset sourced from NASA JPL/IAU published elements (see [`src/solarSystemData.ts`](./src/solarSystemData.ts)), used to check the engine against real astronomy and to double as a working example.
 
-[`examples/basic`](./examples/basic) is a runnable demo, including a fictional system built entirely from `fixedPosition` bodies.
+[`examples/basic`](./examples/basic) is a runnable demo, including a fictional system built entirely from `fixedPosition` bodies. [`examples/with-models`](./examples/with-models) demonstrates `modelUrl`/`textureUrl` against real NASA assets, toggled against the plain placeholder shapes.
 
 ## Data contract
 
@@ -58,7 +59,8 @@ interface CelestialBody {
   orbit: OrbitalElements | null   // Kepler elements — animates over time
   fixedPosition?: FixedPosition   // or a single known snapshot — stays put
   color?: string
-  modelUrl?: string               // optional 3D model; falls back to a placeholder shape
+  modelUrl?: string                // optional 3D model; falls back to a placeholder shape
+  textureUrl?: string              // optional real surface texture on the placeholder sphere
 }
 
 interface StarSystemData {
@@ -98,6 +100,16 @@ npm test        # 218 tests, including the reference data checked against epheme
 npm run typecheck
 npm run build    # tsup — emits ESM + CJS + .d.ts to dist/
 npm run docs     # typedoc — generates the API reference site into docs-site/
+```
+
+End-to-end tests exercise both example apps against a real browser (real 3D model/texture loading, mode switching, camera controls, and the ErrorBoundary fallback when an asset fails to load):
+
+```bash
+npm run build
+npm ci --prefix examples/basic
+npm ci --prefix examples/with-models
+npx playwright install chromium
+npx playwright test
 ```
 
 ## License

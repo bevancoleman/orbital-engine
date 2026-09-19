@@ -141,6 +141,16 @@ export interface CelestialBody {
    * body. Falls back to the placeholder shape if the model fails to load.
    */
   modelUrl?: string
+  /**
+   * An optional real surface texture (an equirectangular JPG/PNG) to wrap
+   * around this engine's placeholder sphere, for a 'planet' | 'dwarf_planet'
+   * | 'moon' body with no full 3D model available — real imagery instead
+   * of a flat colour, without claiming actual surface geometry the way
+   * `modelUrl` does. Ignored for every other body type, and ignored
+   * whenever `modelUrl` is also set (a full model always wins). Falls back
+   * to the flat-colour placeholder if the texture fails to load.
+   */
+  textureUrl?: string
   /** Free-text provenance note — where this body's numbers came from and
    *  how precise they're meant to be (mean orbital elements are inherently
    *  approximate/epoch-dependent; this keeps that honest in the data itself

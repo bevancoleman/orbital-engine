@@ -8,4 +8,5 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   base: process.env.GITHUB_PAGES ? '/orbital-engine/' : '/',
   plugins: [react()],
+  server: { port: 5173, strictPort: true },
 })

@@ -51,20 +51,22 @@ export function App() {
   }
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', fontFamily: 'system-ui, sans-serif' }}>
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          left: 12,
-          right: 12,
-          zIndex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          color: '#e2e8f0',
-        }}
-      >
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
+        fontFamily: 'system-ui, sans-serif',
+      }}
+    >
+      {/* A normal-flow header above the canvas, not an absolute overlay —
+          OrbitalSystemScene renders its own toolbar at the top of ITS OWN
+          container, so overlaying this on top of it visually collided with
+          (and intercepted clicks on) the engine's own Up/Down/Recenter/Reset
+          buttons. Giving the header real layout height instead means the
+          two toolbars never share the same space. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, color: '#e2e8f0', flexShrink: 0 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
           <button onClick={() => switchSystem('solar')} disabled={systemId === 'solar'}>
             Real Solar System (Kepler orbits)
@@ -90,12 +92,14 @@ export function App() {
         </div>
       </div>
 
-      <OrbitalSystemScene
-        key={system.id}
-        system={system}
-        onSelectBody={setSelected}
-        externalFocus={externalFocus}
-      />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <OrbitalSystemScene
+          key={system.id}
+          system={system}
+          onSelectBody={setSelected}
+          externalFocus={externalFocus}
+        />
+      </div>
     </div>
   )
 }
