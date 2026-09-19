@@ -38,6 +38,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "prepare": "npm run build",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch",
     "typecheck": "tsc --noEmit",
