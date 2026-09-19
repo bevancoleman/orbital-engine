@@ -63,6 +63,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 6051.8,
       color: '#e5c07b',
+      atmosphereHeightKm: 250, // thick, hazy cloud tops visible from space
       orbit: {
         semiMajorAxisKm: 0.72333566 * AU_KM,
         eccentricity: 0.00677672,
@@ -84,6 +85,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 6371.0,
       // The real, famous "Blue Marble" colour — ocean-dominant from orbit.
       color: '#3b82f6',
+      atmosphereHeightKm: 100, // the Kármán line — conventional "edge of space"
       orbit: {
         semiMajorAxisKm: 1.00000261 * AU_KM,
         eccentricity: 0.01671123,
@@ -168,6 +170,8 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 3389.5,
       color: '#f87171',
+      atmosphereHeightKm: 100,
+      note: "Atmosphere reaches a comparable height to Earth's before thinning to nothing, but is only ~1% as dense at the surface — thin throughout, not just short.",
       orbit: {
         semiMajorAxisKm: 1.52371034 * AU_KM,
         eccentricity: 0.0933941,

@@ -170,6 +170,22 @@ export interface CelestialBody {
    * belt-associated.
    */
   beltId?: string
+  /**
+   * Real height (km) of this body's visible atmosphere above its surface —
+   * e.g. Earth's ~100km (the Kármán line, the conventional "edge of
+   * space"), Venus's ~250km (thick, hazy cloud tops visible from space).
+   * Drives the translucent atmosphere rim's real size relative to the
+   * body's own radius (see BodyShape/PlaceholderBodyShape in
+   * OrbitalSystemScene.tsx) rather than an arbitrary fixed ratio applied to
+   * every planet regardless of whether it actually has an atmosphere.
+   * Unset (no rim rendered) for anything with no real, substantial
+   * atmosphere — Mercury, the Moon, and the dwarf planets in this
+   * dataset all genuinely have none/negligible. Deliberately not set for
+   * the gas/ice giants either: they have no real surface/atmosphere
+   * boundary to draw a rim around at all, so one wouldn't represent
+   * anything real about them.
+   */
+  atmosphereHeightKm?: number
 }
 
 /**
