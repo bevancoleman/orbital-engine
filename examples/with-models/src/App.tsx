@@ -20,6 +20,7 @@ export function App() {
   const [mode, setMode] = useState<Mode>('real-assets')
   const [selected, setSelected] = useState<CelestialBody | null>(null)
   const [externalFocus, setExternalFocus] = useState<ExternalFocusRequest | null>(null)
+  const [lightFromStar, setLightFromStar] = useState(false)
   const system = mode === 'real-assets' ? SOLAR_SYSTEM_WITH_ASSETS : SOLAR_SYSTEM
 
   function switchMode(next: Mode) {
@@ -53,7 +54,11 @@ export function App() {
           <button onClick={() => switchMode('placeholders')} disabled={mode === 'placeholders'}>
             Built-in placeholder shapes only
           </button>
-          <a href="../" style={{ color: '#22d3ee', marginLeft: 'auto', fontSize: 13 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto', fontSize: 13 }}>
+            <input type="checkbox" checked={lightFromStar} onChange={(e) => setLightFromStar(e.target.checked)} />
+            Light from star (real day/night)
+          </label>
+          <a href="../" style={{ color: '#22d3ee', fontSize: 13 }}>
             ← other example
           </a>
         </div>
@@ -77,7 +82,13 @@ export function App() {
       </div>
 
       <div style={{ flex: 1, minHeight: 0 }}>
-        <OrbitalSystemScene key={mode} system={system} onSelectBody={setSelected} externalFocus={externalFocus} />
+        <OrbitalSystemScene
+          key={mode}
+          system={system}
+          onSelectBody={setSelected}
+          externalFocus={externalFocus}
+          lightFromStar={lightFromStar}
+        />
       </div>
     </div>
   )
