@@ -41,7 +41,7 @@ export function computeOrbitalDepth(bodies: readonly CelestialBody[]): Map<strin
   return depth
 }
 
-export interface LabelCandidate {
+export interface ScreenCandidate {
   id: string
   x: number
   y: number
@@ -49,35 +49,54 @@ export interface LabelCandidate {
   priority: number
 }
 
+/** @deprecated use ScreenCandidate — kept as an alias so existing imports
+ *  of LabelCandidate keep working unchanged. */
+export type LabelCandidate = ScreenCandidate
+
 /**
- * Greedy label declutter: processes candidates from highest priority
- * (lowest number) to lowest, showing a label unless it falls within
- * minSeparationPx of an already-shown, higher-priority label. This is
- * exactly what makes "Sun > Earth > Moon" work when their labels would
- * otherwise land on top of each other — the Sun's label claims its spot
- * first, and anything lower-priority too close to it is suppressed, not
- * the other way around. Ties (equal priority, e.g. two sibling moons)
- * resolve by whichever appears first in the input.
+ * Greedy screen-space declutter: processes candidates from highest priority
+ * (lowest number) to lowest, keeping one unless it falls within
+ * minSeparationPx of an already-kept, higher-priority candidate. This is
+ * the shared algorithm behind both label declutter (computeVisibleLabels,
+ * below — "Sun > Earth > Moon" wins when their labels would otherwise land
+ * on top of each other) and body-visibility proximity thinning (see
+ * ProximitySelector in OrbitalSystemScene.tsx, which runs this same pass
+ * over rendered body dots, not just their text labels) — both are exactly
+ * the same problem: too many things projected too close together on
+ * screen, thin by priority, don't care what the things actually are. Ties
+ * (equal priority, e.g. two sibling moons) resolve by whichever appears
+ * first in the input.
  */
-export function computeVisibleLabels(
-  candidates: readonly LabelCandidate[],
+export function thinByScreenProximity(
+  candidates: readonly ScreenCandidate[],
   minSeparationPx: number
 ): Set<string> {
   const sorted = [...candidates].sort((a, b) => a.priority - b.priority)
-  const shown: LabelCandidate[] = []
+  const kept: ScreenCandidate[] = []
   const visible = new Set<string>()
   const minSepSq = minSeparationPx * minSeparationPx
 
   for (const candidate of sorted) {
-    const overlapsShown = shown.some((s) => {
+    const overlapsKept = kept.some((s) => {
       const dx = candidate.x - s.x
       const dy = candidate.y - s.y
       return dx * dx + dy * dy <= minSepSq
     })
-    if (overlapsShown) continue
-    shown.push(candidate)
+    if (overlapsKept) continue
+    kept.push(candidate)
     visible.add(candidate.id)
   }
 
   return visible
+}
+
+/** Label declutter specifically — see thinByScreenProximity, which this
+ *  wraps directly; kept as its own named export since it's established
+ *  public API and reads clearly at call sites that are specifically about
+ *  labels. */
+export function computeVisibleLabels(
+  candidates: readonly ScreenCandidate[],
+  minSeparationPx: number
+): Set<string> {
+  return thinByScreenProximity(candidates, minSeparationPx)
 }

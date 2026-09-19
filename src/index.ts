@@ -49,15 +49,15 @@ export {
 export type { FocusTarget } from './camera'
 
 // Visibility / level of detail
-export { SECONDARY_REVEAL_FRACTION, computeVisibleBodyIds } from './visibility'
+export { MAX_VISIBLE_SECONDARY, computeVisibleBodyIds } from './visibility'
 export { apparentSize, sphereDetailFor, icosahedronDetailFor, torusDetailFor, orbitDetailFor } from './levelOfDetail'
 export type { SphereDetail } from './levelOfDetail'
 
 // Bubble-cursor proximity selection + label decluttering
 export { findNearestCandidate } from './proximitySelection'
 export type { ProximityCandidate } from './proximitySelection'
-export { computeOrbitalDepth, computeVisibleLabels } from './labelDeclutter'
-export type { LabelCandidate } from './labelDeclutter'
+export { computeOrbitalDepth, computeVisibleLabels, thinByScreenProximity } from './labelDeclutter'
+export type { LabelCandidate, ScreenCandidate } from './labelDeclutter'
 
 // Misc utilities
 export { formatDistanceKm } from './units'

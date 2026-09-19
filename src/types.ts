@@ -156,6 +156,20 @@ export interface CelestialBody {
    *  approximate/epoch-dependent; this keeps that honest in the data itself
    *  rather than presenting it as more precise than it is). */
   note?: string
+  /**
+   * id of a BeltRegion (see StarSystemData.belts) this body is physically a
+   * member of — e.g. a named main-belt asteroid (Ceres, Vesta) that's ALSO
+   * plotted as its own tracked body, on top of the belt's own scattered
+   * population. Purely a visibility-system hint (see computeVisibleBodyIds
+   * in visibility.ts): a belt-linked body doesn't compete individually for
+   * a secondary-object slot against unrelated bodies elsewhere in the
+   * system — every body sharing the same beltId shares one slot instead,
+   * since the belt itself already reads as "there's a population here."
+   * Doesn't affect position math or the belt's own particle-cloud
+   * rendering at all, only this ranking. Unset for anything not
+   * belt-associated.
+   */
+  beltId?: string
 }
 
 /**

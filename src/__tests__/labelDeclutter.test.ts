@@ -1,4 +1,4 @@
-import { computeOrbitalDepth, computeVisibleLabels, type LabelCandidate } from '../labelDeclutter'
+import { computeOrbitalDepth, computeVisibleLabels, thinByScreenProximity, type LabelCandidate } from '../labelDeclutter'
 import type { CelestialBody } from '../types'
 
 function body(overrides: Partial<CelestialBody> & Pick<CelestialBody, 'id' | 'parentId' | 'type'>): CelestialBody {
@@ -149,5 +149,20 @@ describe('computeVisibleLabels', () => {
 
   it('returns an empty set for no candidates', () => {
     expect(computeVisibleLabels([], 40)).toEqual(new Set())
+  })
+})
+
+describe('thinByScreenProximity', () => {
+  // computeVisibleLabels is a thin wrapper around this (see labelDeclutter.ts) —
+  // also used directly for body-dot visibility thinning (see
+  // ProximitySelector in OrbitalSystemScene.tsx), so this confirms the
+  // shared algorithm itself, independent of the label-specific name.
+  it('is the same algorithm computeVisibleLabels wraps', () => {
+    const candidates = [
+      { id: 'a', x: 0, y: 0, priority: 0 },
+      { id: 'b', x: 5, y: 0, priority: 1 },
+      { id: 'c', x: 500, y: 500, priority: 2 },
+    ]
+    expect(thinByScreenProximity(candidates, 40)).toEqual(computeVisibleLabels(candidates, 40))
   })
 })

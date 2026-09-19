@@ -32,7 +32,13 @@ import {
 } from '../camera'
 import { computeVisibleBodyIds } from '../visibility'
 import { findNearestCandidate, type ProximityCandidate } from '../proximitySelection'
-import { computeOrbitalDepth, computeVisibleLabels, type LabelCandidate } from '../labelDeclutter'
+import {
+  computeOrbitalDepth,
+  computeVisibleLabels,
+  thinByScreenProximity,
+  type LabelCandidate,
+  type ScreenCandidate,
+} from '../labelDeclutter'
 import { apparentSize, icosahedronDetailFor, orbitDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
 import { renderRadius } from '../pixelFloor'
 import { formatDistanceKm } from '../units'
@@ -830,7 +836,27 @@ function BodyMarker({
   // body itself actually looks.
   const labelColor = selected ? '#ffffff' : hovered ? '#22d3ee' : '#cbd5e1'
 
-  if (!visible && !selected) return null
+  // Grows/shrinks this body's own group rather than popping it in/out —
+  // see VISIBILITY_FADE_SECONDS. A plain useRef (not state) holds the
+  // in-progress scale so this animates smoothly across many frames without
+  // triggering a React re-render each one; the group itself stays mounted
+  // (SceneContent always renders one <BodyMarker> per body, unconditionally
+  // — see its own .map()) so this ref survives the whole fade, including
+  // the frames where render() below returns null.
+  const targetScale = visible || selected ? 1 : 0
+  const scaleRef = useRef(targetScale)
+  const groupRef = useRef<THREE.Group>(null)
+
+  useFrame((_, delta) => {
+    const target = visible || selected ? 1 : 0
+    const step = delta / VISIBILITY_FADE_SECONDS
+    const diff = target - scaleRef.current
+    scaleRef.current = Math.abs(diff) <= step ? target : scaleRef.current + Math.sign(diff) * step
+    if (groupRef.current) {
+      groupRef.current.scale.setScalar(Math.max(scaleRef.current, 0.0001))
+      groupRef.current.visible = scaleRef.current > 0.001
+    }
+  })
 
   function handleSelect(e: { stopPropagation: () => void }) {
     e.stopPropagation()
@@ -839,8 +865,13 @@ function BodyMarker({
 
   const detailSize = apparentSize(radius, cameraDistance)
 
+  // Only actually unmount once fully faded out AND still not supposed to
+  // be visible — mid-fade (scaleRef not yet settled at 0) keeps rendering
+  // so the shrink animation itself is visible, not skipped.
+  if (scaleRef.current <= 0.001 && !visible && !selected) return null
+
   return (
-    <group position={position}>
+    <group ref={groupRef} position={position} scale={Math.max(scaleRef.current, 0.0001)}>
       <BodyShape body={body} radius={radius} color={color} detailSize={detailSize} />
       {(showLabel || isHighlighted) && (
       <Html center style={{ transform: `translateY(${-(radius * 8 + 14)}px)` }}>
@@ -882,11 +913,12 @@ interface SceneContentProps {
   selectedId: string | null
   hoveredId: string | null
   visibleLabelIds: Set<string>
+  visibleBodyIds: Set<string>
   cameraDistance: number
-  wholeSystemDistance: number
   onSelect: (body: CelestialBody) => void
   onHoverLabel: (id: string | null) => void
   onVisibleLabelsChange: (ids: Set<string>) => void
+  onVisibleBodiesChange: (ids: Set<string>) => void
   /** Mutable, read at click time by OrbitalSystemScene's onPointerMissed
    *  (see ProximitySelector) — a ref rather than state, since it needs to
    *  update every frame without triggering a React re-render each time. */
@@ -904,42 +936,63 @@ function SceneContent({
   selectedId,
   hoveredId,
   visibleLabelIds,
+  visibleBodyIds,
   cameraDistance,
-  wholeSystemDistance,
   onSelect,
   onHoverLabel,
   onVisibleLabelsChange,
+  onVisibleBodiesChange,
   hoveredIdRef,
   routePreview,
 }: SceneContentProps) {
   const { size: viewportSize } = useThree()
   const positions = useMemo(() => resolveAllWorldPositions(system, simDate), [system, simDate])
-  const visibleIds = useMemo(
-    () => computeVisibleBodyIds(system, cameraDistance, wholeSystemDistance, selectedId),
-    [system, cameraDistance, wholeSystemDistance, selectedId]
+  // Rank-and-cap eligibility (see computeVisibleBodyIds/visibility.ts) —
+  // the candidate POOL for proximity selection, labels, and the further
+  // per-frame screen-space thinning below, not yet the final rendered set
+  // (that's visibleBodyIds, computed by ProximitySelector and passed back
+  // down as a prop).
+  const eligibleIds = useMemo(
+    () => computeVisibleBodyIds(system, cameraDistance, selectedId),
+    [system, cameraDistance, selectedId]
   )
   // Orbital depth (Sun=0, a planet=1, a moon=2, ...) — purely structural,
   // from parentId chains, not body.type — see labelDeclutter.ts. Only
   // depends on the system's own hierarchy, not zoom/selection, so it's
   // computed once per system rather than every frame.
   const depthById = useMemo(() => computeOrbitalDepth(system.bodies), [system])
+  // Exempt from screen-space proximity thinning (see ProximitySelector) —
+  // mirrors computeVisibleBodyIds' own "always visible" rule: primaries,
+  // the current selection, and its direct children never disappear just
+  // because something else happens to sit nearby on screen right now.
+  const alwaysVisibleIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const body of system.bodies) {
+      const isPrimary = body.type === 'star' || body.type === 'planet'
+      const isChildOfSelection = !!selectedId && body.parentId === selectedId
+      if (isPrimary || body.id === selectedId || isChildOfSelection) ids.add(body.id)
+    }
+    return ids
+  }, [system, selectedId])
   const proximityCandidates = useMemo(
     () =>
       system.bodies
-        .filter((b) => visibleIds.has(b.id))
+        .filter((b) => eligibleIds.has(b.id))
         .map((b) => ({ id: b.id, position: positions.get(b.id)!, priority: depthById.get(b.id) ?? 0 }))
         .filter((c) => c.position),
-    [system, visibleIds, positions, depthById]
+    [system, eligibleIds, positions, depthById]
   )
 
   return (
     <>
       <ProximitySelector
         candidates={proximityCandidates}
+        alwaysVisibleIds={alwaysVisibleIds}
         selectedId={selectedId}
         hoveredIdRef={hoveredIdRef}
         onHoverChange={onHoverLabel}
         onVisibleLabelsChange={onVisibleLabelsChange}
+        onVisibleBodiesChange={onVisibleBodiesChange}
       />
       {/* Alternate drawn first (and dimmer/dashed) so the primary route —
           the one actually picked — always renders on top of it where the
@@ -954,7 +1007,7 @@ function SceneContent({
         const pos = positions.get(body.id)
         if (!pos) return null
         const parentWorldPos = (body.parentId && positions.get(body.parentId)) || ([0, 0, 0] as WorldVec)
-        const bodyVisible = visibleIds.has(body.id)
+        const bodyVisible = visibleBodyIds.has(body.id)
         // A ring for every station/jump point/nav marker would be
         // unreadable clutter (a planet can have dozens) — reserved for
         // genuine celestial bodies, the same scope the old 2D map's own
@@ -1022,6 +1075,19 @@ const PROXIMITY_SNAP_PX = 28
 // real bodies genuinely that close together on screen at true scale).
 const LABEL_MIN_SEPARATION_PX = 32
 
+// Same idea as LABEL_MIN_SEPARATION_PX, but for whether a body's own dot
+// renders at all, not its text label — a much tighter threshold, since a
+// dot only needs to be visually distinguishable from its neighbour, not
+// leave room for a name to be read next to it.
+const BODY_MIN_SEPARATION_PX = 14
+
+// How long a body takes to grow in / shrink out when it crosses in or out
+// of the visible set (see ProximitySelector's screen-space thinning and
+// computeVisibleBodyIds' rank-and-cap) — replaces what used to be an
+// instant pop the moment a hard distance cliff was crossed, which could
+// make a body vanish entirely from what looked like a trivial zoom change.
+const VISIBILITY_FADE_SECONDS = 0.3
+
 function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) return false
   for (const id of a) if (!b.has(id)) return false
@@ -1046,24 +1112,36 @@ function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
  *    otherwise overlap. The selected body and the current proximity hover
  *    target are always forced to the front of that priority order, so
  *    decluttering never hides the label of whatever you're actually
- *    looking at or about to click.
+ *    looking at or about to click;
+ *  - decides which bodies' own DOTS render at all, on top of whatever
+ *    computeVisibleBodyIds already ranked-and-capped (see SceneContent's
+ *    eligibleIds) — two eligible bodies can still land close enough on
+ *    screen right now to be indistinguishable, which is a screen-space,
+ *    per-frame fact the rank/cap pass alone can't know about. Bodies in
+ *    alwaysVisibleIds (primaries, the current selection, its children)
+ *    skip this pass entirely — see SceneContent's own comment on that set.
  */
 function ProximitySelector({
   candidates,
+  alwaysVisibleIds,
   selectedId,
   hoveredIdRef,
   onHoverChange,
   onVisibleLabelsChange,
+  onVisibleBodiesChange,
 }: {
   candidates: { id: string; position: WorldVec; priority: number }[]
+  alwaysVisibleIds: ReadonlySet<string>
   selectedId: string | null
   hoveredIdRef: MutableRefObject<string | null>
   onHoverChange: (id: string | null) => void
   onVisibleLabelsChange: (ids: Set<string>) => void
+  onVisibleBodiesChange: (ids: Set<string>) => void
 }) {
   const { camera, size } = useThree()
   const lastReportedHover = useRef<string | null>(null)
   const lastReportedLabels = useRef<Set<string>>(new Set())
+  const lastReportedBodies = useRef<Set<string>>(new Set())
   const projected = useRef(new THREE.Vector3())
 
   useFrame((state) => {
@@ -1101,6 +1179,25 @@ function ProximitySelector({
     if (!setsEqual(visibleLabels, lastReportedLabels.current)) {
       lastReportedLabels.current = visibleLabels
       onVisibleLabelsChange(visibleLabels)
+    }
+
+    // Same greedy screen-space thinning, applied to whether a body's own
+    // dot renders at all — a tighter threshold than labels need (see
+    // BODY_MIN_SEPARATION_PX), and skipping anything already exempt so a
+    // planet can never be thinned out just because a moon's dot happens to
+    // sit right next to it on screen this frame.
+    const bodyThinInput: ScreenCandidate[] = screenCandidates
+      .filter((c) => !alwaysVisibleIds.has(c.id))
+      .map((c) => ({
+        ...c,
+        priority: c.id === selectedId ? -2 : c.id === nextHoverId ? -1 : c.priority,
+      }))
+    const thinnedSecondary = thinByScreenProximity(bodyThinInput, BODY_MIN_SEPARATION_PX)
+    const visibleBodies = new Set(alwaysVisibleIds)
+    for (const id of thinnedSecondary) visibleBodies.add(id)
+    if (!setsEqual(visibleBodies, lastReportedBodies.current)) {
+      lastReportedBodies.current = visibleBodies
+      onVisibleBodiesChange(visibleBodies)
     }
   })
 
@@ -1454,11 +1551,10 @@ export function OrbitalSystemScene({
   // labelDeclutter.ts). Starts empty; the first frame after mount fills it
   // in, same as hoveredId.
   const [visibleLabelIds, setVisibleLabelIds] = useState<Set<string>>(new Set())
-  // Deliberately not re-derived every simDate tick — this is a reference
-  // scale for LOD, not a live position; recomputing it as bodies drift
-  // slightly over time would just add churn for no visible benefit.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const wholeSystemDistance = useMemo(() => computeFocusForSystem(system, simDate).distance, [system])
+  // Which bodies' own dots are actually rendered right now — recomputed
+  // continuously by ProximitySelector, same pattern as visibleLabelIds but
+  // for body existence rather than just label text (see BODY_MIN_SEPARATION_PX).
+  const [visibleBodyIds, setVisibleBodyIds] = useState<Set<string>>(new Set())
   // A system built entirely from fixed position snapshots (e.g. Star
   // Citizen data — see CelestialBody.fixedPosition) has no real orbital
   // motion to animate; showing play/speed controls that visibly do nothing
@@ -1709,11 +1805,12 @@ export function OrbitalSystemScene({
             selectedId={selectedBody?.id ?? null}
             hoveredId={hoveredId}
             visibleLabelIds={visibleLabelIds}
+            visibleBodyIds={visibleBodyIds}
             cameraDistance={cameraDistance}
-            wholeSystemDistance={wholeSystemDistance}
             onSelect={selectBody}
             onHoverLabel={setHoveredId}
             onVisibleLabelsChange={setVisibleLabelIds}
+            onVisibleBodiesChange={setVisibleBodyIds}
             hoveredIdRef={hoveredIdRef}
             routePreview={routePreview ?? null}
           />

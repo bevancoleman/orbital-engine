@@ -451,6 +451,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 469.7,
       color: '#d6d3d1',
+      beltId: 'asteroid-belt',
       note: 'Largest asteroid-belt object — plotted individually alongside the belt\'s scattered population.',
       orbit: {
         semiMajorAxisKm: 2.7675 * AU_KM,
@@ -476,6 +477,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 262.7,
       color: '#d4d4d8',
+      beltId: 'asteroid-belt',
       orbit: {
         semiMajorAxisKm: 2.36 * AU_KM,
         eccentricity: 0.0902,
@@ -494,6 +496,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 256,
       color: '#a8a29e',
+      beltId: 'asteroid-belt',
       note: 'Unusually high inclination (~35°) for a large main-belt asteroid.',
       orbit: {
         semiMajorAxisKm: 2.77 * AU_KM,
@@ -513,6 +516,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 216.5,
       color: '#78716c',
+      beltId: 'asteroid-belt',
       orbit: {
         semiMajorAxisKm: 3.15 * AU_KM,
         eccentricity: 0.107,
