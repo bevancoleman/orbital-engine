@@ -1,5 +1,7 @@
 # Contributing
 
+See [ARCHITECTURE.md](./ARCHITECTURE.md) first for how the pieces fit together — worth reading before a non-trivial change, especially anything touching `src/react/`.
+
 ## Setup
 
 ```bash

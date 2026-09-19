@@ -202,6 +202,8 @@ Types, math, and reference data are exported from the package root (`orbital-eng
 
 Generated API reference, every export with parameters: **[bevancoleman.github.io/orbital-engine/docs](https://bevancoleman.github.io/orbital-engine/docs/)**. Live example: [bevancoleman.github.io/orbital-engine](https://bevancoleman.github.io/orbital-engine/).
 
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for how these pieces fit together — the pipeline from a body's data to what's actually rendered, and how the `src/react/` rendering layer is organized.
+
 ## Development
 
 ```bash
