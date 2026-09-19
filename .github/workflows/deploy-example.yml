@@ -1,4 +1,4 @@
-name: Deploy example
+name: Deploy example and docs
 
 on:
   push:
@@ -27,12 +27,16 @@ jobs:
       # (which runs the package's `prepare` script) can succeed.
       - run: npm ci
       - run: npm run build
+      - run: npm run docs
       - run: npm ci
         working-directory: examples/basic
       - run: npm run build
         working-directory: examples/basic
         env:
           GITHUB_PAGES: "true"
+      # One Pages site, two things in it: the example app at the root,
+      # the generated API reference under /docs/.
+      - run: cp -r docs-site examples/basic/dist/docs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

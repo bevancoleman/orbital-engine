@@ -43,6 +43,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "docs": "typedoc",
     "prepare": "npm run build",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch",
@@ -75,6 +76,7 @@
     "three": "^0.182.0",
     "ts-jest": "^29.4.6",
     "tsup": "^8.3.5",
+    "typedoc": "^0.28.20",
     "typescript": "5.9.3"
   },
   "allowScripts": {

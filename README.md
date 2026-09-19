@@ -76,6 +76,8 @@ The engine — types, math, and reference data — is exported from the package 
 | Export | Entry point | What it's for |
 | --- | --- | --- |
 | `OrbitalSystemScene` | `orbital-engine/react` | The R3F component — drop it in a `<Canvas>`-capable tree. |
+| `ExternalFocusRequest` | `orbital-engine/react` | The type for `<OrbitalSystemScene>`'s `externalFocus` prop — flies the camera to a body id from outside the component (see [`examples/basic`](./examples/basic)'s "Fly to" buttons). |
+| `RoutePreview` | `orbital-engine/react` | The type for the `routePreview` prop — draws a line through an ordered chain of body ids, e.g. a planned route. |
 | `positionAtTime`, `orbitPath` | `orbital-engine` | Real Keplerian propagation, given `OrbitalElements` and a `Date`. |
 | `resolveAllWorldPositions` | `orbital-engine` | Resolves every body's current world position (orbit or fixed), respecting parent hierarchy. |
 | `compressDistance`, `trueRadius` | `orbital-engine` | The true-scale compression math — real km in, render-space units out. |
@@ -84,6 +86,8 @@ The engine — types, math, and reference data — is exported from the package 
 | `computeVisibleLabels`, `computeOrbitalDepth` | `orbital-engine` | Label decluttering, prioritized by structural depth. |
 | `SOLAR_SYSTEM` | `orbital-engine` | The real reference dataset. |
 
+Full generated API reference (every export, with parameters and the same doc comments as the source): **[bevancoleman.github.io/orbital-engine/docs](https://bevancoleman.github.io/orbital-engine/docs/)**. The live example itself is at [bevancoleman.github.io/orbital-engine](https://bevancoleman.github.io/orbital-engine/).
+
 ## Development
 
 ```bash
@@ -91,6 +95,7 @@ npm install
 npm test        # 218 tests — the Solar System reference data is checked against real ephemeris positions
 npm run typecheck
 npm run build    # tsup — emits ESM + CJS + .d.ts to dist/
+npm run docs     # typedoc — generates the API reference site into docs-site/
 ```
 
 ## License
