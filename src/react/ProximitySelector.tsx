@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { findNearestCandidate, type ProximityCandidate } from '../proximitySelection'
 import { computeVisibleLabels, thinByScreenProximity, type LabelCandidate, type ScreenCandidate } from '../labelDeclutter'
 import type { WorldVec } from '../render'
+import { setsEqual } from './setUtils'
 
 // How close (in actual screen pixels, not normalized device coordinates —
 // see findNearestCandidate) the pointer has to be to a body's own
@@ -25,12 +26,6 @@ const LABEL_MIN_SEPARATION_PX = 32
 // dot only needs to be visually distinguishable from its neighbour, not
 // leave room for a name to be read next to it.
 const BODY_MIN_SEPARATION_PX = 14
-
-function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
-  if (a.size !== b.size) return false
-  for (const id of a) if (!b.has(id)) return false
-  return true
-}
 
 /**
  * Bubble-cursor proximity selection AND label decluttering — both are the

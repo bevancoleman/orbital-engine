@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import type { FocusTarget } from '../camera'
+import { easeOutCubic } from './animation'
 
 /** Owns the OrbitControls target and smoothly flies the camera to a new
  *  focus (position + distance) when one is set — moving the camera only
@@ -23,12 +24,6 @@ interface FlyAnimation {
 }
 
 const FLY_DURATION_MS = 900
-
-/** Ease-out cubic — fast at the start, settling gently into place, rather
- *  than a constant speed that feels abrupt when it stops. */
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3)
-}
 
 export function CameraRig({
   focus,

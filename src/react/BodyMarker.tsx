@@ -6,6 +6,7 @@ import { apparentSize } from '../levelOfDetail'
 import type { CelestialBody } from '../types'
 import { BodyShape } from './BodyShapes'
 import { BODY_TYPE_COLOR_FALLBACK } from './bodyTypeStyles'
+import { stepToward } from './animation'
 
 // How long a body takes to grow in / shrink out when it crosses in or out
 // of the visible set (see ProximitySelector's screen-space thinning and
@@ -95,9 +96,7 @@ export function BodyMarker({
 
   useFrame((_, delta) => {
     const target = visible || selected ? 1 : 0
-    const step = delta / VISIBILITY_FADE_SECONDS
-    const diff = target - scaleRef.current
-    scaleRef.current = Math.abs(diff) <= step ? target : scaleRef.current + Math.sign(diff) * step
+    scaleRef.current = stepToward(scaleRef.current, target, delta / VISIBILITY_FADE_SECONDS)
     if (groupRef.current) {
       groupRef.current.scale.setScalar(Math.max(scaleRef.current, 0.0001))
       groupRef.current.visible = scaleRef.current > 0.001
