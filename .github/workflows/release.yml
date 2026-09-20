@@ -35,7 +35,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - name: Create/update the "Version Packages" release PR
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
