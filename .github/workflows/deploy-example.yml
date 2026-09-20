@@ -47,7 +47,7 @@ jobs:
       - run: cp -r docs-site examples/basic/dist/docs
       - run: cp -r examples/with-models/dist examples/basic/dist/with-models
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: examples/basic/dist
 
