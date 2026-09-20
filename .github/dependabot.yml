@@ -16,6 +16,11 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # vite and @vitejs/plugin-react are peer-locked to each other — bumping
+      # one without the other breaks npm's peer resolution (seen firsthand:
+      # PRs #6-#9). Grouping all dev deps keeps such pairs moving together.
+      dev-dependencies:
+        dependency-type: development
       security-updates:
         applies-to: security-updates
         patterns:
@@ -25,6 +30,8 @@ updates:
     schedule:
       interval: weekly
     groups:
+      dev-dependencies:
+        dependency-type: development
       security-updates:
         applies-to: security-updates
         patterns:
