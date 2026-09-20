@@ -7,15 +7,34 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: npm
     directory: /examples/basic
     schedule:
       interval: weekly
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: npm
     directory: /examples/with-models
     schedule:
       interval: weekly
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
