@@ -11,6 +11,16 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+    ignore:
+      # @react-three/fiber@9.7.0's peer range caps react/react-dom at <19.3
+      # for a real reason (19.3 changed a transition-object shape fiber
+      # reads unguarded) — not just an unreviewed ceiling. Fix is in flight:
+      # https://github.com/pmndrs/react-three-fiber/pull/3916. Remove this
+      # once a released fiber version supports 19.3.
+      - dependency-name: "react"
+        versions: [">=19.3.0"]
+      - dependency-name: "react-dom"
+        versions: [">=19.3.0"]
   - package-ecosystem: npm
     directory: /examples/basic
     schedule:
