@@ -18,10 +18,12 @@ import {
 } from '../camera'
 import { formatDistanceKm } from '../units'
 import { distanceToSliderPosition, sliderPositionToDistance } from '../zoomSlider'
+import { computeObjectCounts, lodSummaryFor } from '../devStats'
 import type { BeltRegion, CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
 import { StarLight } from './StarLight'
 import { CameraRig } from './CameraRig'
+import { PerfStats, type RendererStats } from './PerfStats'
 import { UI_COLORS, uiStyles, buttonStyle } from './theme'
 
 type Selection = { kind: 'body'; id: string } | { kind: 'belt'; id: string } | null
@@ -46,6 +48,75 @@ function TimeDriver({
     onTick(advanceMs)
   })
   return null
+}
+
+/** Chrome/Edge-only heap size readout (performance.memory isn't in any spec
+ *  — Firefox/Safari simply don't have it) — a best-effort dev aid, not
+ *  something the overlay depends on; returns null anywhere it's absent
+ *  rather than throwing. */
+function jsHeapMb(): number | null {
+  const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory
+  return mem ? mem.usedJSHeapSize / (1024 * 1024) : null
+}
+
+/** The dev-mode performance overlay (see OrbitalSystemScene's `devMode`
+ *  prop) — everything a person debugging this scene's own performance
+ *  would otherwise have to open the browser's dev tools to see: FPS/frame
+ *  time, draw calls, triangle count, GPU-resident geometry/texture counts,
+ *  JS heap usage where the browser exposes it, and how many of the
+ *  system's own objects are actually on screen right now vs. how many the
+ *  LOD/crowding gate (visibility.ts) and screen-space thinning
+ *  (labelDeclutter.ts) are currently hiding. */
+function DevPerfPanel({
+  stats,
+  counts,
+  selectedLodBody,
+  hoveredLodBody,
+  cameraDistance,
+}: {
+  stats: RendererStats | null
+  counts: ReturnType<typeof computeObjectCounts>
+  selectedLodBody: CelestialBody | null
+  hoveredLodBody: CelestialBody | null
+  cameraDistance: number
+}) {
+  const heapMb = jsHeapMb()
+  const lodBody = selectedLodBody ?? hoveredLodBody
+  const lodSummary = lodBody ? lodSummaryFor(lodBody, cameraDistance) : null
+
+  function row(label: string, value: string) {
+    return (
+      <div style={uiStyles.devPanelRow}>
+        <span style={uiStyles.muted}>{label}</span>
+        <span>{value}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={uiStyles.devPanel}>
+      <div style={uiStyles.devPanelTitle}>DEV — PERF</div>
+      {row('fps', stats ? stats.fps.toFixed(0) : '—')}
+      {row('frame time', stats ? `${stats.frameTimeMs.toFixed(1)} ms` : '—')}
+      {row('draw calls', stats ? String(stats.drawCalls) : '—')}
+      {row('triangles', stats ? stats.triangles.toLocaleString() : '—')}
+      {row('geometries (gpu)', stats ? String(stats.geometries) : '—')}
+      {row('textures (gpu)', stats ? String(stats.textures) : '—')}
+      {row('js heap', heapMb !== null ? `${heapMb.toFixed(1)} MB` : 'n/a')}
+      <div style={{ ...uiStyles.devPanelTitle, marginTop: 8 }}>OBJECTS</div>
+      {row('bodies total', String(counts.totalBodies))}
+      {row('bodies shown', String(counts.visibleBodies))}
+      {row('bodies culled', String(counts.culledBodies))}
+      {row('labels shown', String(counts.visibleLabels))}
+      {row('belt points', counts.totalBeltObjects.toLocaleString())}
+      {lodBody && (
+        <>
+          <div style={{ ...uiStyles.devPanelTitle, marginTop: 8 }}>LOD</div>
+          {row(lodBody.name, lodSummary ?? 'fixed')}
+        </>
+      )}
+    </div>
+  )
 }
 
 /** An externally-requested selection (e.g. a "jump to this object" button
@@ -91,6 +162,16 @@ export interface OrbitalSystemSceneProps {
    * (falls back to just the ambient fill light) rather than guessing.
    */
   lightFromStar?: boolean
+  /**
+   * Renders a dev-only overlay panel (top-left) with live FPS, draw calls,
+   * triangle/GPU-memory counts, JS heap usage where the browser exposes it,
+   * and object counts (total vs. currently-visible/culled bodies, belt
+   * points, the selected/hovered body's current LOD tier) — see
+   * devStats.ts and PerfStats.tsx. Off by default: none of this is
+   * meaningful to an end user, only to someone debugging the scene's own
+   * performance.
+   */
+  devMode?: boolean
 }
 
 export function OrbitalSystemScene({
@@ -99,6 +180,7 @@ export function OrbitalSystemScene({
   externalFocus,
   lightFromStar,
   routePreview,
+  devMode,
 }: OrbitalSystemSceneProps) {
   const [simDate, setSimDate] = useState(() => new Date())
   const [playing, setPlaying] = useState(true)
@@ -136,6 +218,12 @@ export function OrbitalSystemScene({
   // continuously by ProximitySelector, same pattern as visibleLabelIds but
   // for body existence rather than just label text (see BODY_MIN_SEPARATION_PX).
   const [visibleBodyIds, setVisibleBodyIds] = useState<Set<string>>(new Set())
+  // Renderer stats only exist inside the Canvas's own render loop (see
+  // PerfStats.tsx's own comment) — lifted up here via a callback, the same
+  // pattern cameraDistance/hoveredId/etc. already use, so the dev overlay
+  // below (outside the Canvas, alongside the other HTML panels) can read
+  // them. Only mounted/updated at all when devMode is on.
+  const [rendererStats, setRendererStats] = useState<RendererStats | null>(null)
   // A system built entirely from fixed position snapshots (e.g. Star
   // Citizen data — see CelestialBody.fixedPosition) has no real orbital
   // motion to animate; showing play/speed controls that visibly do nothing
@@ -418,7 +506,18 @@ export function OrbitalSystemScene({
             minDistance={zoomSliderMinDistance}
             nearPlane={dynamicNearPlane}
           />
+          {devMode && <PerfStats onUpdate={setRendererStats} />}
         </Canvas>
+
+        {devMode && (
+          <DevPerfPanel
+            stats={rendererStats}
+            counts={computeObjectCounts(system, visibleBodyIds, visibleLabelIds)}
+            selectedLodBody={selectedBody}
+            hoveredLodBody={!selectedBody && hoveredId ? (system.bodies.find((b) => b.id === hoveredId) ?? null) : null}
+            cameraDistance={cameraDistance}
+          />
+        )}
 
         {hasOrbitalMotion && (
           <div style={uiStyles.timeBar}>

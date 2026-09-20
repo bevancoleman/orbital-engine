@@ -72,6 +72,29 @@ export const uiStyles = {
   infoPanelTitle: { fontWeight: 600, fontSize: 14, marginBottom: 4 } as const,
   muted: { color: UI_COLORS.textMuted } as const,
   mutedItalic: { color: UI_COLORS.textMuted, marginTop: 4, fontStyle: 'italic' } as const,
+  devPanel: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    background: 'rgba(17, 24, 39, 0.9)', // panelBg/90
+    border: `1px solid ${UI_COLORS.elevatedBg}`,
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 11,
+    lineHeight: 1.5,
+    color: UI_COLORS.text,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    minWidth: 190,
+    pointerEvents: 'none',
+  } as const,
+  devPanelTitle: {
+    fontWeight: 600,
+    fontSize: 11,
+    marginBottom: 4,
+    color: UI_COLORS.accent,
+    letterSpacing: '0.05em',
+  } as const,
+  devPanelRow: { display: 'flex', justifyContent: 'space-between', gap: 12 } as const,
 } as const
 
 export function buttonStyle(disabled?: boolean) {

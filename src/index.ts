@@ -64,6 +64,13 @@ export { formatDistanceKm } from './units'
 export { routeSegments } from './routeSegments'
 export { sliderPositionToDistance, distanceToSliderPosition } from './zoomSlider'
 
+// Dev-mode performance overlay (object-count/LOD half — see
+// OrbitalSystemScene's devMode prop, 'orbital-engine/react'). The
+// renderer-stats half (FPS/draw calls/triangles) lives entirely inside
+// that Canvas-bound component and isn't exported standalone.
+export { computeObjectCounts, lodSummaryFor } from './devStats'
+export type { ObjectCounts } from './devStats'
+
 // The React / react-three-fiber renderer (OrbitalSystemScene) is a
 // separate entry point — 'orbital-engine/react' — not re-exported here.
 // It carries a 'use client' directive for Next.js/RSC-aware bundlers;
