@@ -16,6 +16,19 @@ export interface RendererStats {
   frameTimeMs: number
   drawCalls: number
   triangles: number
+  /** Non-triangle draw counts — relevant here specifically because this
+   *  scene draws real non-mesh primitives: orbit paths (Line) and belt
+   *  populations (Points, see BeltRendering.tsx) — a belt with thousands of
+   *  real tracked positions is a real cost the triangle count alone won't
+   *  show. */
+  points: number
+  lines: number
+  /** Number of currently-compiled shader programs (WebGLRenderer.info.
+   *  programs) — spikes when materials/geometries change shape enough to
+   *  force a recompile (e.g. an LOD tier switch that isn't just reusing an
+   *  existing program), a real "why did it just stutter" signal distinct
+   *  from steady-state draw-call/triangle cost. */
+  programs: number
   /** GPU-resident geometry/texture object counts (WebGLRenderer.info.memory)
    *  — a proxy for GPU memory pressure, not a byte count (three.js itself
    *  doesn't track actual VRAM usage). */
@@ -45,6 +58,9 @@ export function PerfStats({ onUpdate }: { onUpdate: (stats: RendererStats) => vo
       frameTimeMs: (elapsed.current / frames.current) * 1000,
       drawCalls: gl.info.render.calls,
       triangles: gl.info.render.triangles,
+      points: gl.info.render.points,
+      lines: gl.info.render.lines,
+      programs: gl.info.programs?.length ?? 0,
       geometries: gl.info.memory.geometries,
       textures: gl.info.memory.textures,
     })

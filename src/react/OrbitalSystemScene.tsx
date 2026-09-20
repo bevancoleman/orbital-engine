@@ -62,8 +62,9 @@ function jsHeapMb(): number | null {
 /** The dev-mode performance overlay (see OrbitalSystemScene's `devMode`
  *  prop) — everything a person debugging this scene's own performance
  *  would otherwise have to open the browser's dev tools to see: FPS/frame
- *  time, draw calls, triangle count, GPU-resident geometry/texture counts,
- *  JS heap usage where the browser exposes it, and how many of the
+ *  time, draw calls, triangle/point/line counts, compiled shader program
+ *  count, GPU-resident geometry/texture counts, JS heap usage where the
+ *  browser exposes it, and how many of the
  *  system's own objects are actually on screen right now vs. how many the
  *  LOD/crowding gate (visibility.ts) and screen-space thinning
  *  (labelDeclutter.ts) are currently hiding. */
@@ -100,6 +101,9 @@ function DevPerfPanel({
       {row('frame time', stats ? `${stats.frameTimeMs.toFixed(1)} ms` : '—')}
       {row('draw calls', stats ? String(stats.drawCalls) : '—')}
       {row('triangles', stats ? stats.triangles.toLocaleString() : '—')}
+      {row('points', stats ? stats.points.toLocaleString() : '—')}
+      {row('lines', stats ? stats.lines.toLocaleString() : '—')}
+      {row('programs', stats ? String(stats.programs) : '—')}
       {row('geometries (gpu)', stats ? String(stats.geometries) : '—')}
       {row('textures (gpu)', stats ? String(stats.textures) : '—')}
       {row('js heap', heapMb !== null ? `${heapMb.toFixed(1)} MB` : 'n/a')}
