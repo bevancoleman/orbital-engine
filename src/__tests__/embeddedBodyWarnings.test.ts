@@ -102,3 +102,24 @@ describe('findBodiesInsideSiblings', () => {
     expect(warnings.every((w) => w.bodyId.startsWith('far-') && w.otherBodyId.startsWith('far-'))).toBe(true)
   })
 })
+
+describe('findBodiesInsideParent / findBodiesInsideSiblings — surface_installation is exempt', () => {
+  it('does not flag a surface_installation sitting at its own parent\'s real surface — that is the correct, expected case', () => {
+    const yela = body({ id: 'yela', parentId: 'crusader', type: 'moon', radiusKm: 313, fixedPosition: { xKm: 1_000_000, yKm: 0, zKm: 0 } })
+    const grimHex = body({ id: 'grimhex', parentId: 'yela', type: 'surface_installation', radiusKm: 5, fixedPosition: { xKm: 313, yKm: 0, zKm: 0 } })
+    expect(findBodiesInsideParent(system([yela, grimHex]))).toEqual([])
+  })
+
+  it('does not flag two surface_installations at the same real site — the real Klescher case', () => {
+    const aberdeen = body({ id: 'aberdeen', parentId: 'hurston', type: 'moon', radiusKm: 274, fixedPosition: { xKm: 1_000_000, yKm: 0, zKm: 0 } })
+    const boreholeB = body({ id: 'borehole-b', parentId: 'aberdeen', type: 'surface_installation', radiusKm: 5, fixedPosition: { xKm: 275, yKm: 0, zKm: 0 } })
+    const rehab = body({ id: 'rehab', parentId: 'aberdeen', type: 'surface_installation', radiusKm: 5, fixedPosition: { xKm: 275.3, yKm: 0, zKm: 0 } })
+    expect(findBodiesInsideSiblings(system([aberdeen, boreholeB, rehab]))).toEqual([])
+  })
+
+  it('still flags an ordinary station in the same situation — the exemption is type-specific, not universal', () => {
+    const yela = body({ id: 'yela', parentId: 'crusader', type: 'moon', radiusKm: 313, fixedPosition: { xKm: 1_000_000, yKm: 0, zKm: 0 } })
+    const someStation = body({ id: 'station', parentId: 'yela', type: 'station', radiusKm: 5, fixedPosition: { xKm: 200, yKm: 0, zKm: 0 } })
+    expect(findBodiesInsideParent(system([yela, someStation]))).toHaveLength(1)
+  })
+})

@@ -20,6 +20,16 @@ export type BodyType =
   | 'dwarf_planet'
   | 'moon'
   | 'station'
+  /** A structure genuinely built on a parent body's own surface (a
+   *  landing-zone city, a ground-based prison, a mining outpost) — as
+   *  opposed to 'station', which orbits or floats free. This matters for
+   *  more than labelling: sitting at/near the parent's own real radius is
+   *  the DEFINITION of correct for this type, not a containment problem —
+   *  findBodiesInsideParent/findBodiesInsideSiblings both exclude it for
+   *  exactly that reason (see their own comments). Rendered as a small
+   *  surface marker, not a floating torus, so it doesn't visually read as
+   *  an orbiting structure it isn't. */
+  | 'surface_installation'
   /** A travel gateway between systems — e.g. a wormhole or a game's fast-
    *  travel jump point. Rendered distinctly from an ordinary station: it's
    *  a hole between systems, not a structure. */

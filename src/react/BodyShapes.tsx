@@ -237,6 +237,30 @@ export function PlaceholderBodyShape({
         </mesh>
       )
 
+    case 'surface_installation':
+      // A small flat platform + beacon spike — deliberately NOT a floating
+      // torus (that reads as an orbiting station, which this explicitly
+      // isn't — see BodyType.surface_installation's own comment) and NOT a
+      // sphere (nothing here claims to be a whole celestial body). This
+      // component has no access to the parent's own direction to orient a
+      // "planted into the ground" pose exactly (it only ever receives this
+      // body's own radius/color/rotation — world placement is the caller's
+      // job), so the shape itself carries the "built structure, not a
+      // natural or orbiting body" read on its own, via its base+spike
+      // silhouette instead of a real surface-normal orientation.
+      return (
+        <group rotation={rotation}>
+          <mesh>
+            <cylinderGeometry args={[radius, radius * 1.1, radius * 0.3, 8]} />
+            <meshStandardMaterial color={color} roughness={0.6} metalness={0.5} />
+          </mesh>
+          <mesh position={[0, radius * 0.75, 0]}>
+            <coneGeometry args={[radius * 0.35, radius * 1.2, 8]} />
+            <meshStandardMaterial color={color} roughness={0.5} metalness={0.4} />
+          </mesh>
+        </group>
+      )
+
     default:
       return (
         <mesh>

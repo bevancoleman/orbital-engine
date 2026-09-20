@@ -59,6 +59,11 @@ export function findBodiesInsideParent(system: StarSystemData): EmbeddedBodyWarn
   const warnings: EmbeddedBodyWarning[] = []
   for (const body of system.bodies) {
     if (!body.parentId) continue
+    // A surface_installation is BY DEFINITION built at/near its parent's
+    // real surface — sitting inside the parent's rendered sphere is the
+    // correct, expected case for this type, not the visual bug this check
+    // exists to catch (see BodyType.surface_installation's own comment).
+    if (body.type === 'surface_installation') continue
     const parent = byId.get(body.parentId)
     if (!parent) continue
     const distanceKm = fixedDistanceToParent(body)
@@ -122,6 +127,11 @@ export function findBodiesInsideSiblings(system: StarSystemData): SiblingContain
   const byParent = new Map<string, CelestialBody[]>()
   for (const body of system.bodies) {
     if (!body.parentId) continue
+    // Same reasoning as findBodiesInsideParent's own surface_installation
+    // skip — two real ground installations at the same real site (e.g. a
+    // prison and its own mining shaft entrance) are expected to sit close
+    // together, not a bug.
+    if (body.type === 'surface_installation') continue
     const arr = byParent.get(body.parentId) ?? []
     arr.push(body)
     byParent.set(body.parentId, arr)

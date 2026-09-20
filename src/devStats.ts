@@ -71,6 +71,9 @@ export function lodSummaryFor(body: CelestialBody, cameraDistance: number): stri
       return `torus (${radialSegments}×${tubularSegments})`
     }
     case 'nav_point':
+    case 'surface_installation':
+      // Fixed platform+beacon geometry, not detail-scaled — see
+      // BodyShapes.tsx's own surface_installation case.
       return null
     default: {
       const { widthSegments, heightSegments } = sphereDetailFor(size)

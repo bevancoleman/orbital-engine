@@ -9,7 +9,7 @@ import type { BodyType, CelestialBody, StarSystemData } from './types'
  * level. See findBodiesWithUnrecognizedType.
  */
 const KNOWN_BODY_TYPES: ReadonlySet<string> = new Set<BodyType>([
-  'star', 'planet', 'dwarf_planet', 'moon', 'station', 'jump_point', 'nav_point', 'asteroid', 'comet',
+  'star', 'planet', 'dwarf_planet', 'moon', 'station', 'surface_installation', 'jump_point', 'nav_point', 'asteroid', 'comet',
 ])
 
 export interface MissingPositionWarning {
