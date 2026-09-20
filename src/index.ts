@@ -53,6 +53,12 @@ export { MAX_VISIBLE_SECONDARY, computeVisibleBodyIds, isAlwaysVisible } from '.
 export { apparentSize, sphereDetailFor, icosahedronDetailFor, torusDetailFor, orbitDetailFor } from './levelOfDetail'
 export type { SphereDetail } from './levelOfDetail'
 
+// Data-quality-adjacent rendering warnings — not correctness checks (a data
+// pipeline's own validators own that), just "this may render badly" signals
+// a host app can surface (e.g. in a dev-mode overlay).
+export { findBodiesInsideParent } from './embeddedBodyWarnings'
+export type { EmbeddedBodyWarning } from './embeddedBodyWarnings'
+
 // Bubble-cursor proximity selection + label decluttering
 export { findNearestCandidate } from './proximitySelection'
 export type { ProximityCandidate } from './proximitySelection'
