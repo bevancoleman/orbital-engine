@@ -1,8 +1,8 @@
-import { findBodiesInsideParent } from '../embeddedBodyWarnings'
+import { findBodiesInsideParent, findBodiesInsideSiblings } from '../embeddedBodyWarnings'
 import type { CelestialBody, StarSystemData } from '../types'
 
 function body(overrides: Partial<CelestialBody> & Pick<CelestialBody, 'id' | 'parentId' | 'type'>): CelestialBody {
-  return { name: overrides.id, radiusKm: 100, orbit: null, ...overrides }
+  return { name: overrides.id, radiusKm: 100, orbit: null, fixedPosition: null, ...overrides }
 }
 
 function system(bodies: CelestialBody[]): StarSystemData {
@@ -64,5 +64,41 @@ describe('findBodiesInsideParent', () => {
     const levski = body({ id: 'levski', parentId: 'delamar', type: 'station', radiusKm: 5, fixedPosition: { xKm: 400, yKm: 0, zKm: 0 } })
     const warnings = findBodiesInsideParent(system([yela, grimHex, delamar, levski]))
     expect(warnings.map((w) => w.bodyId).sort()).toEqual(['grimhex', 'levski'])
+  })
+})
+
+describe('findBodiesInsideSiblings', () => {
+  it('flags two stations of the same planet that sit closer together than one radius', () => {
+    const planet = body({ id: 'planet', parentId: 'star', type: 'planet', radiusKm: 6_371, fixedPosition: { xKm: 10_000_000, yKm: 0, zKm: 0 } })
+    const a = body({ id: 'a', parentId: 'planet', type: 'station', radiusKm: 5, fixedPosition: { xKm: 500, yKm: 0, zKm: 0 } })
+    const b = body({ id: 'b', parentId: 'planet', type: 'station', radiusKm: 5, fixedPosition: { xKm: 502, yKm: 0, zKm: 0 } })
+    const warnings = findBodiesInsideSiblings(system([planet, a, b]))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatchObject({ bodyId: 'a', otherBodyId: 'b' })
+    expect(warnings[0]!.distanceKm).toBeCloseTo(2, 5)
+  })
+
+  it('does not flag two siblings that are genuinely far apart', () => {
+    const planet = body({ id: 'planet', parentId: 'star', type: 'planet', radiusKm: 6_371, fixedPosition: { xKm: 10_000_000, yKm: 0, zKm: 0 } })
+    const a = body({ id: 'a', parentId: 'planet', type: 'station', radiusKm: 5, fixedPosition: { xKm: 500, yKm: 0, zKm: 0 } })
+    const b = body({ id: 'b', parentId: 'planet', type: 'station', radiusKm: 5, fixedPosition: { xKm: 50_000, yKm: 0, zKm: 0 } })
+    expect(findBodiesInsideSiblings(system([planet, a, b]))).toEqual([])
+  })
+
+  it('does not compare bodies with different parents, even if their positions happen to be close', () => {
+    const moonA = body({ id: 'ma', parentId: 'planet-a', type: 'moon', radiusKm: 1_737, fixedPosition: { xKm: 0, yKm: 0, zKm: 0 } })
+    const moonB = body({ id: 'mb', parentId: 'planet-b', type: 'moon', radiusKm: 1_737, fixedPosition: { xKm: 1, yKm: 0, zKm: 0 } })
+    expect(findBodiesInsideSiblings(system([moonA, moonB]))).toEqual([])
+  })
+
+  it('is bounded by sibling-group size, not the whole system — a large unrelated group does not affect an unrelated small one', () => {
+    const planet = body({ id: 'planet', parentId: 'star', type: 'planet', radiusKm: 6_371, fixedPosition: { xKm: 0, yKm: 0, zKm: 0 } })
+    const farGroupParent = body({ id: 'far-planet', parentId: 'star', type: 'planet', radiusKm: 6_371, fixedPosition: { xKm: 50_000_000, yKm: 0, zKm: 0 } })
+    const manyFarSiblings = Array.from({ length: 20 }, (_, i) =>
+      body({ id: `far-${i}`, parentId: 'far-planet', type: 'station', radiusKm: 5, fixedPosition: { xKm: i, yKm: 0, zKm: 0 } })
+    )
+    const a = body({ id: 'a', parentId: 'planet', type: 'station', radiusKm: 5, fixedPosition: { xKm: 100_000, yKm: 0, zKm: 0 } })
+    const warnings = findBodiesInsideSiblings(system([planet, farGroupParent, ...manyFarSiblings, a]))
+    expect(warnings.every((w) => w.bodyId.startsWith('far-') && w.otherBodyId.startsWith('far-'))).toBe(true)
   })
 })

@@ -32,6 +32,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: null,
       radiusKm: 696_340,
       orbit: null,
+      fixedPosition: null,
       color: '#fde68a',
     },
 
@@ -43,6 +44,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 2439.7,
       color: '#a1a1aa',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 0.38709927 * AU_KM,
         eccentricity: 0.20563593,
@@ -64,6 +66,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 6051.8,
       color: '#e5c07b',
       atmosphereHeightKm: 250, // thick, hazy cloud tops visible from space
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 0.72333566 * AU_KM,
         eccentricity: 0.00677672,
@@ -86,6 +89,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // The real, famous "Blue Marble" colour — ocean-dominant from orbit.
       color: '#3b82f6',
       atmosphereHeightKm: 100, // the Kármán line — conventional "edge of space"
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 1.00000261 * AU_KM,
         eccentricity: 0.01671123,
@@ -105,6 +109,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 1737.4,
       color: '#d4d4d8',
       note: 'Inclination simplified to ecliptic-relative; the Moon\'s true orbital plane precesses on an 18.6-year cycle.',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 384_399,
         eccentricity: 0.0549,
@@ -130,6 +135,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 0.055, // ~109m truss length treated as a nominal radius
       color: '#e5e7eb',
       note: 'Representative snapshot only — unlike natural bodies, ISS altitude/period genuinely drift day to day from atmospheric drag and reboosts, so this is not a stable "mean element" the way a planet\'s is.',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 6371 + 418, // ~418km mean altitude
         eccentricity: 0.0003,
@@ -150,6 +156,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // Real colour: gold Mylar thermal insulation over a white/silver hull
       // — not the pale blue this previously had (no real source for that).
       color: '#d4af7a',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 6371 + 535,
         eccentricity: 0.0003,
@@ -172,6 +179,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       color: '#f87171',
       atmosphereHeightKm: 100,
       note: "Atmosphere reaches a comparable height to Earth's before thinning to nothing, but is only ~1% as dense at the surface — thin throughout, not just short.",
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 1.52371034 * AU_KM,
         eccentricity: 0.0933941,
@@ -190,6 +198,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'mars',
       radiusKm: 11.267,
       color: '#a8a29e',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 9376,
         eccentricity: 0.0151,
@@ -208,6 +217,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'mars',
       radiusKm: 6.2,
       color: '#a8a29e',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 23_463.2,
         eccentricity: 0.00033,
@@ -228,6 +238,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 69_911,
       color: '#d97706',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 5.202887 * AU_KM,
         eccentricity: 0.04838624,
@@ -246,6 +257,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'jupiter',
       radiusKm: 1821.6,
       color: '#fde047',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 421_800,
         eccentricity: 0.0041,
@@ -264,6 +276,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'jupiter',
       radiusKm: 1560.8,
       color: '#e0e7ff',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 671_100,
         eccentricity: 0.009,
@@ -282,6 +295,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'jupiter',
       radiusKm: 2634.1,
       color: '#a8a29e',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 1_070_400,
         eccentricity: 0.0013,
@@ -300,6 +314,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'jupiter',
       radiusKm: 2410.3,
       color: '#78716c',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 1_882_700,
         eccentricity: 0.0074,
@@ -320,6 +335,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 58_232,
       color: '#eab308',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 9.53667594 * AU_KM,
         eccentricity: 0.05386179,
@@ -338,6 +354,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'saturn',
       radiusKm: 2574.7,
       color: '#fbbf24',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 1_221_870,
         eccentricity: 0.0288,
@@ -356,6 +373,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'saturn',
       radiusKm: 763.8,
       color: '#d6d3d1',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 527_108,
         eccentricity: 0.001,
@@ -376,6 +394,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 25_362,
       color: '#67e8f9',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 19.18916464 * AU_KM,
         eccentricity: 0.04725744,
@@ -394,6 +413,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'uranus',
       radiusKm: 788.4,
       color: '#a8a29e',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 436_300,
         eccentricity: 0.0011,
@@ -416,6 +436,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 24_622,
       color: '#60a5fa',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 30.06992276 * AU_KM,
         eccentricity: 0.00859048,
@@ -435,6 +456,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 1353.4,
       color: '#bae6fd',
       note: 'Retrograde orbit — inclination >90° is real, not a data error.',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 354_759,
         eccentricity: 0.000016,
@@ -457,6 +479,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       color: '#d6d3d1',
       beltId: 'asteroid-belt',
       note: 'Largest asteroid-belt object — plotted individually alongside the belt\'s scattered population.',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 2.7675 * AU_KM,
         eccentricity: 0.0758,
@@ -482,6 +505,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 262.7,
       color: '#d4d4d8',
       beltId: 'asteroid-belt',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 2.36 * AU_KM,
         eccentricity: 0.0902,
@@ -502,6 +526,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       color: '#a8a29e',
       beltId: 'asteroid-belt',
       note: 'Unusually high inclination (~35°) for a large main-belt asteroid.',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 2.77 * AU_KM,
         eccentricity: 0.231,
@@ -521,6 +546,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 216.5,
       color: '#78716c',
       beltId: 'asteroid-belt',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 3.15 * AU_KM,
         eccentricity: 0.107,
@@ -541,6 +567,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // Real colour: ruddy tan/brown from tholins, not pink — no real
       // source supported the previous pink.
       color: '#c99b7a',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 39.48211675 * AU_KM,
         eccentricity: 0.2488,
@@ -559,6 +586,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'pluto',
       radiusKm: 606,
       color: '#e7e5e4',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 19_591,
         eccentricity: 0.0002,
@@ -581,6 +609,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // source behind it.
       color: '#f1f5f9',
       note: 'Scattered-disc object well outside the Kuiper belt proper.',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 67.78 * AU_KM,
         eccentricity: 0.43607,
@@ -602,6 +631,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 5.5,
       color: '#a5f3fc',
       note: 'Nucleus radius only (no coma/tail modelled). Retrograde, e≈0.97.',
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 17.834 * AU_KM,
         eccentricity: 0.96658,

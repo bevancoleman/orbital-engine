@@ -86,9 +86,10 @@ describe('resolveWorldPosition', () => {
   })
 
   it('resolves a synthetic 3-level chain (moon of a moon) by compressing each segment independently and summing', () => {
-    const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+    const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null, fixedPosition: null }
     const planet: CelestialBody = {
       id: 'p', name: 'P', type: 'planet', parentId: 's', radiusKm: 100,
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 500_000_000, eccentricity: 0, inclinationDeg: 0,
         longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 0,
@@ -97,6 +98,7 @@ describe('resolveWorldPosition', () => {
     }
     const moon: CelestialBody = {
       id: 'm', name: 'M', type: 'moon', parentId: 'p', radiusKm: 10,
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 400_000, eccentricity: 0, inclinationDeg: 0,
         longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 90,
@@ -201,7 +203,7 @@ describe('resolveWorldPosition — fixed (non-orbiting) bodies', () => {
   // Keplerian elements — a fixedPosition body models that honestly (see
   // CelestialBody.fixedPosition) instead of fabricating an orbit to force
   // it into the Keplerian shape.
-  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null, fixedPosition: null }
   const fixedPlanet: CelestialBody = {
     id: 'fp', name: 'FP', type: 'planet', parentId: 's', radiusKm: 500, orbit: null,
     fixedPosition: { xKm: 10_000_000, yKm: 5_000_000, zKm: 0 },
@@ -243,7 +245,7 @@ describe('resolveWorldPosition — a body with no parent but a real fixedPositio
   // cause of a real-world case: a fictional system's "Outbound Gateway"
   // (parentId: null, fixedPosition far from the star) rendered on top of
   // the star itself.
-  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null, fixedPosition: null }
   const orphanBody: CelestialBody = {
     id: 'orphan', name: 'Orphan', type: 'jump_point', parentId: null, radiusKm: 5, orbit: null,
     fixedPosition: { xKm: 80_000_000, yKm: 12_000_000, zKm: 0 },
@@ -323,8 +325,8 @@ describe('compressVecByRatio / orbitCompressionRatio — a real orbit path rende
       longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 0,
       orbitalPeriodDays: 100, epoch: '2000-01-01T00:00:00Z',
     }
-    const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
-    const body: CelestialBody = { id: 'b', name: 'B', type: 'planet', parentId: 's', radiusKm: 100, orbit: circularOrbit }
+    const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null, fixedPosition: null }
+    const body: CelestialBody = { id: 'b', name: 'B', type: 'planet', parentId: 's', radiusKm: 100, orbit: circularOrbit, fixedPosition: null }
     const bodies = [star, body]
 
     const segments = 32

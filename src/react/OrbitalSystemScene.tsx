@@ -19,7 +19,7 @@ import {
 import { formatDistanceKm } from '../units'
 import { distanceToSliderPosition, sliderPositionToDistance } from '../zoomSlider'
 import { computeObjectCounts, lodSummaryFor } from '../devStats'
-import { findBodiesInsideParent } from '../embeddedBodyWarnings'
+import { validateSystemData, type SystemDataWarning } from '../validateSystemData'
 import type { BeltRegion, CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
 import { StarLight } from './StarLight'
@@ -60,29 +60,52 @@ function jsHeapMb(): number | null {
   return mem ? mem.usedJSHeapSize / (1024 * 1024) : null
 }
 
+/** A one-line title + detail string for any SystemDataWarning kind — see
+ *  validateSystemData.ts for what each kind means. Kept here (not in the
+ *  engine's own data layer) since it's purely a display concern. */
+function describeDataWarning(w: SystemDataWarning): { title: string; detail: string } {
+  switch (w.kind) {
+    case 'missing-position':
+      return { title: w.bodyName, detail: 'no orbit or fixedPosition — renders at the origin' }
+    case 'unrecognized-type':
+      return { title: w.bodyName, detail: `unrecognized type "${w.type}"` }
+    case 'embedded-in-parent':
+      return {
+        title: w.bodyName,
+        detail: `${w.distanceKm.toFixed(0)} km inside ${w.parentName} (${w.parentRadiusKm.toLocaleString()} km radius)`,
+      }
+    case 'embedded-in-sibling':
+      return {
+        title: `${w.bodyName} / ${w.otherBodyName}`,
+        detail: `${w.distanceKm.toFixed(0)} km apart (radii ${w.bodyRadiusKm.toLocaleString()}/${w.otherBodyRadiusKm.toLocaleString()} km)`,
+      }
+  }
+}
+
 /** The dev-mode performance overlay (see OrbitalSystemScene's `devMode`
  *  prop) — everything a person debugging this scene's own performance
  *  would otherwise have to open the browser's dev tools to see: FPS/frame
  *  time, draw calls, triangle/point/line counts, compiled shader program
  *  count, GPU-resident geometry/texture counts, JS heap usage where the
- *  browser exposes it, and how many of the
- *  system's own objects are actually on screen right now vs. how many the
- *  LOD/crowding gate (visibility.ts) and screen-space thinning
- *  (labelDeclutter.ts) are currently hiding. */
+ *  browser exposes it, how many of the system's own objects are actually
+ *  on screen right now vs. how many the LOD/crowding gate (visibility.ts)
+ *  and screen-space thinning (labelDeclutter.ts) are currently hiding, and
+ *  any data-contract/rendering-legibility warnings validateSystemData
+ *  finds for the loaded system. */
 function DevPerfPanel({
   stats,
   counts,
   selectedLodBody,
   hoveredLodBody,
   cameraDistance,
-  embeddedWarnings,
+  dataWarnings,
 }: {
   stats: RendererStats | null
   counts: ReturnType<typeof computeObjectCounts>
   selectedLodBody: CelestialBody | null
   hoveredLodBody: CelestialBody | null
   cameraDistance: number
-  embeddedWarnings: ReturnType<typeof findBodiesInsideParent>
+  dataWarnings: SystemDataWarning[]
 }) {
   const heapMb = jsHeapMb()
   const lodBody = selectedLodBody ?? hoveredLodBody
@@ -122,19 +145,22 @@ function DevPerfPanel({
           {row(lodBody.name, lodSummary ?? 'fixed')}
         </>
       )}
-      {embeddedWarnings.length > 0 && (
+      {dataWarnings.length > 0 && (
         <>
           <div style={{ ...uiStyles.devPanelTitle, marginTop: 8, color: '#f59e0b' }}>
-            ⚠ EMBEDDED ({embeddedWarnings.length})
+            ⚠ DATA WARNINGS ({dataWarnings.length})
           </div>
-          {embeddedWarnings.map((w) => (
-            <div key={w.bodyId} style={{ ...uiStyles.devPanelRow, flexDirection: 'column', alignItems: 'flex-start' }}>
-              <span>{w.bodyName}</span>
-              <span style={uiStyles.muted}>
-                {w.distanceKm.toFixed(0)} km inside {w.parentName} ({w.parentRadiusKm.toLocaleString()} km radius)
-              </span>
-            </div>
-          ))}
+          {dataWarnings.map((w, i) => {
+            const { title, detail } = describeDataWarning(w)
+            return (
+              <div key={`${w.kind}-${i}`} style={{ ...uiStyles.devPanelRow, flexDirection: 'column', alignItems: 'flex-start' }}>
+                <span>
+                  {title} <span style={uiStyles.muted}>({w.kind})</span>
+                </span>
+                <span style={uiStyles.muted}>{detail}</span>
+              </div>
+            )
+          })}
         </>
       )}
     </div>
@@ -251,11 +277,11 @@ export function OrbitalSystemScene({
   // motion to animate; showing play/speed controls that visibly do nothing
   // would be actively confusing rather than just unnecessary.
   const hasOrbitalMotion = useMemo(() => system.bodies.some((b) => b.orbit), [system])
-  // Only actually computed in devMode — see findBodiesInsideParent's own
-  // comment (embeddedBodyWarnings.ts) for what this catches and why it's a
-  // rendering-legibility signal, not a data-correctness one. Recomputed
-  // whenever a different system loads in, not per frame.
-  const embeddedWarnings = useMemo(() => (devMode ? findBodiesInsideParent(system) : []), [system, devMode])
+  // Only actually computed in devMode — see validateSystemData's own
+  // comment for what this catches (data-contract explicitness + rendering-
+  // legibility signals, not data-correctness against upstream source
+  // data). Recomputed whenever a different system loads in, not per frame.
+  const dataWarnings = useMemo(() => (devMode ? validateSystemData(system) : []), [system, devMode])
 
   const selectedBody = selection?.kind === 'body' ? (system.bodies.find((b) => b.id === selection.id) ?? null) : null
   const selectedBelt = selection?.kind === 'belt' ? (system.belts?.find((b) => b.id === selection.id) ?? null) : null
@@ -543,7 +569,7 @@ export function OrbitalSystemScene({
             selectedLodBody={selectedBody}
             hoveredLodBody={!selectedBody && hoveredId ? (system.bodies.find((b) => b.id === hoveredId) ?? null) : null}
             cameraDistance={cameraDistance}
-            embeddedWarnings={embeddedWarnings}
+            dataWarnings={dataWarnings}
           />
         )}
 

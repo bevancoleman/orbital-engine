@@ -45,9 +45,10 @@ describe('resolveAbsolutePosition', () => {
   it('resolves a grandchild (moon of a moon, hypothetically) by walking the full parent chain', () => {
     // No real body in this dataset is a moon-of-a-moon, so build a synthetic
     // 3-level chain to prove the walk isn't hardcoded to exactly one hop.
-    const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+    const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null, fixedPosition: null }
     const planet: CelestialBody = {
       id: 'p', name: 'P', type: 'planet', parentId: 's', radiusKm: 100,
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 1_000_000, eccentricity: 0, inclinationDeg: 0,
         longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 0,
@@ -56,6 +57,7 @@ describe('resolveAbsolutePosition', () => {
     }
     const moon: CelestialBody = {
       id: 'm', name: 'M', type: 'moon', parentId: 'p', radiusKm: 10,
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 10_000, eccentricity: 0, inclinationDeg: 0,
         longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 90,
@@ -64,6 +66,7 @@ describe('resolveAbsolutePosition', () => {
     }
     const moonlet: CelestialBody = {
       id: 'ml', name: 'ML', type: 'moon', parentId: 'm', radiusKm: 1,
+      fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 100, eccentricity: 0, inclinationDeg: 0,
         longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 180,
@@ -108,7 +111,7 @@ describe('resolveAllPositions', () => {
 })
 
 describe('resolveAbsolutePosition — fixed (non-orbiting) bodies', () => {
-  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null, fixedPosition: null }
   const fixedPlanet: CelestialBody = {
     id: 'fp', name: 'FP', type: 'planet', parentId: 's', radiusKm: 500, orbit: null,
     fixedPosition: { xKm: 10_000_000, yKm: 5_000_000, zKm: 0 },
@@ -132,7 +135,7 @@ describe('resolveAbsolutePosition — a body with no parent but a real fixedPosi
   // "no parent" (parentId: null) alone used to be treated as "no position
   // data at all", discarding a real fixedPosition and collapsing the body
   // to the origin.
-  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null }
+  const star: CelestialBody = { id: 's', name: 'S', type: 'star', parentId: null, radiusKm: 1000, orbit: null, fixedPosition: null }
   const orphanBody: CelestialBody = {
     id: 'orphan', name: 'Orphan', type: 'jump_point', parentId: null, radiusKm: 5, orbit: null,
     fixedPosition: { xKm: 80_000_000, yKm: 12_000_000, zKm: 0 },

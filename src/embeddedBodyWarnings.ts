@@ -79,3 +79,70 @@ export function findBodiesInsideParent(system: StarSystemData): EmbeddedBodyWarn
   }
   return warnings
 }
+
+export interface SiblingContainmentWarning {
+  bodyId: string
+  bodyName: string
+  bodyRadiusKm: number
+  otherBodyId: string
+  otherBodyName: string
+  otherBodyRadiusKm: number
+  /** Real km distance between the two — both fixedPosition vectors are
+   *  relative to the SAME parent, so this is their direct difference, no
+   *  absolute-position resolution needed. */
+  distanceKm: number
+}
+
+function siblingDistance(a: CelestialBody, b: CelestialBody): number | null {
+  if (!a.fixedPosition || !b.fixedPosition) return null
+  const dx = a.fixedPosition.xKm - b.fixedPosition.xKm
+  const dy = a.fixedPosition.yKm - b.fixedPosition.yKm
+  const dz = a.fixedPosition.zKm - b.fixedPosition.zKm
+  return Math.hypot(dx, dy, dz)
+}
+
+/**
+ * Every pair of bodies sharing the same immediate parent (real siblings —
+ * e.g. two stations orbiting the same planet, or two moons of the same
+ * planet) that are close enough for one to render inside the other's own
+ * sphere. Same "not a data bug, but may render badly" spirit as
+ * findBodiesInsideParent — two real, small bodies can legitimately sit
+ * closer together than their shared generic placeholder radius implies.
+ *
+ * Deliberately scoped to bodies sharing a parent, not every pair in the
+ * system (an O(n²) global scan) — a real system can have hundreds of
+ * bodies, but any one parent's own children are typically a handful, so
+ * this stays cheap (bounded by the largest sibling group, not system
+ * size) while still covering the actually-plausible "these two are near
+ * each other" cases: unrelated bodies elsewhere in the system are, by
+ * construction of how real systems are laid out, essentially never close
+ * enough to matter.
+ */
+export function findBodiesInsideSiblings(system: StarSystemData): SiblingContainmentWarning[] {
+  const byParent = new Map<string, CelestialBody[]>()
+  for (const body of system.bodies) {
+    if (!body.parentId) continue
+    const arr = byParent.get(body.parentId) ?? []
+    arr.push(body)
+    byParent.set(body.parentId, arr)
+  }
+  const warnings: SiblingContainmentWarning[] = []
+  for (const siblings of byParent.values()) {
+    for (let i = 0; i < siblings.length; i++) {
+      for (let j = i + 1; j < siblings.length; j++) {
+        const a = siblings[i]!
+        const b = siblings[j]!
+        const distanceKm = siblingDistance(a, b)
+        if (distanceKm === null || distanceKm <= 0) continue
+        if (distanceKm < a.radiusKm || distanceKm < b.radiusKm) {
+          warnings.push({
+            bodyId: a.id, bodyName: a.name, bodyRadiusKm: a.radiusKm,
+            otherBodyId: b.id, otherBodyName: b.name, otherBodyRadiusKm: b.radiusKm,
+            distanceKm,
+          })
+        }
+      }
+    }
+  }
+  return warnings
+}

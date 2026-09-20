@@ -91,9 +91,19 @@ export interface CelestialBody {
    * any other source that gives a single point-in-time position rather than
    * orbital elements) and the body should stay put rather than animate on a
    * fabricated orbit.
+   *
+   * Both keys are REQUIRED (not optional) specifically so a caller must
+   * write an explicit `null` for whichever one doesn't apply, rather than
+   * omitting it — omitting `fixedPosition` used to type-check even though
+   * it meant something real (render.ts's own resolveWorldPosition silently
+   * places a body with neither set at the system's origin, [0,0,0], with
+   * no error or warning). That silent default is exactly the class of bug
+   * validateSystemData (dataContractWarnings.ts) now catches at runtime —
+   * this required-but-nullable shape is the equivalent guard at the type
+   * level, for a TypeScript caller.
    */
   orbit: OrbitalElements | null
-  fixedPosition?: FixedPosition
+  fixedPosition: FixedPosition | null
   /**
    * True when `parentId` is a labelling/grouping convenience only — this
    * body doesn't actually orbit that body locally, it shares that body's

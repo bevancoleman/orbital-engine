@@ -53,11 +53,18 @@ export { MAX_VISIBLE_SECONDARY, computeVisibleBodyIds, isAlwaysVisible } from '.
 export { apparentSize, sphereDetailFor, icosahedronDetailFor, torusDetailFor, orbitDetailFor } from './levelOfDetail'
 export type { SphereDetail } from './levelOfDetail'
 
-// Data-quality-adjacent rendering warnings — not correctness checks (a data
-// pipeline's own validators own that), just "this may render badly" signals
-// a host app can surface (e.g. in a dev-mode overlay).
-export { findBodiesInsideParent } from './embeddedBodyWarnings'
-export type { EmbeddedBodyWarning } from './embeddedBodyWarnings'
+// Data-contract explicitness + data-quality-adjacent rendering warnings —
+// not correctness checks against upstream source data (a data pipeline's
+// own validators own that); these are engine-level signals a host app can
+// surface (e.g. in a dev-mode overlay) or assert on in its own tests.
+// validateSystemData runs all of them at once; each is also exported
+// individually for a caller that only wants one.
+export { findBodiesInsideParent, findBodiesInsideSiblings } from './embeddedBodyWarnings'
+export type { EmbeddedBodyWarning, SiblingContainmentWarning } from './embeddedBodyWarnings'
+export { findBodiesWithoutExplicitPosition, findBodiesWithUnrecognizedType } from './dataContractWarnings'
+export type { MissingPositionWarning, UnrecognizedTypeWarning } from './dataContractWarnings'
+export { validateSystemData } from './validateSystemData'
+export type { SystemDataWarning } from './validateSystemData'
 
 // Bubble-cursor proximity selection + label decluttering
 export { findNearestCandidate } from './proximitySelection'

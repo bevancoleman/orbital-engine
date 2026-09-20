@@ -19,6 +19,7 @@ export const FICTIONAL_SYSTEM: StarSystemData = {
       parentId: null,
       radiusKm: 500_000,
       orbit: null,
+      fixedPosition: null,
       color: '#fde68a',
     },
     {

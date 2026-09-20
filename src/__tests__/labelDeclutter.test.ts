@@ -2,7 +2,7 @@ import { computeOrbitalDepth, computeVisibleLabels, thinByScreenProximity, type 
 import type { CelestialBody } from '../types'
 
 function body(overrides: Partial<CelestialBody> & Pick<CelestialBody, 'id' | 'parentId' | 'type'>): CelestialBody {
-  return { name: overrides.id, radiusKm: 100, orbit: null, ...overrides }
+  return { name: overrides.id, radiusKm: 100, orbit: null, fixedPosition: null, ...overrides }
 }
 
 describe('computeOrbitalDepth', () => {
