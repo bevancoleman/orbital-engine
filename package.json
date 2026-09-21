@@ -1,6 +1,6 @@
 {
   "name": "orbital-engine",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A true-scale orbital mechanics rendering engine for react-three-fiber — real Keplerian orbits and single-snapshot fixed positions in one data contract, with a pixel-floor system so true-to-scale bodies stay visible.",
   "type": "module",
   "license": "MIT",

@@ -1,4 +1,4 @@
-import { stepToward, easeOutCubic } from '../animation'
+import { stepToward } from '../animation'
 
 describe('stepToward', () => {
   it('moves current toward target by maxStep when the gap is larger than maxStep', () => {
@@ -31,27 +31,5 @@ describe('stepToward', () => {
 
   it('handles a negative target correctly (direction, not just magnitude)', () => {
     expect(stepToward(0, -1, 0.3)).toBeCloseTo(-0.3, 10)
-  })
-})
-
-describe('easeOutCubic', () => {
-  it('starts at 0 and ends at 1', () => {
-    expect(easeOutCubic(0)).toBe(0)
-    expect(easeOutCubic(1)).toBe(1)
-  })
-
-  it('is monotonically non-decreasing across [0, 1]', () => {
-    let prev = -Infinity
-    for (let t = 0; t <= 1; t += 0.05) {
-      const value = easeOutCubic(t)
-      expect(value).toBeGreaterThanOrEqual(prev)
-      prev = value
-    }
-  })
-
-  it('front-loads progress — further along at t=0.25 than a linear ease would be', () => {
-    // "Ease-out": fast at the start, settling gently — so it should be
-    // AHEAD of a plain linear interpolation early on, not behind it.
-    expect(easeOutCubic(0.25)).toBeGreaterThan(0.25)
   })
 })

@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { OrbitalSystemScene } from 'orbital-engine/react'
 import type { ExternalFocusRequest } from 'orbital-engine/react'
-import { SOLAR_SYSTEM } from 'orbital-engine'
-import type { CelestialBody } from 'orbital-engine'
+import { SOLAR_SYSTEM, formatActionLog } from 'orbital-engine'
+import type { CelestialBody, ActionLogEntry } from 'orbital-engine'
 import { FICTIONAL_SYSTEM } from './fictionalSystem'
 
 type SystemId = 'solar' | 'fictional'
@@ -37,6 +37,7 @@ export function App() {
   const [selected, setSelected] = useState<CelestialBody | null>(null)
   const [externalFocus, setExternalFocus] = useState<ExternalFocusRequest | null>(null)
   const [lightFromStar, setLightFromStar] = useState(false)
+  const [actionLog, setActionLog] = useState<ActionLogEntry[]>([])
   const system = systemId === 'solar' ? SOLAR_SYSTEM : FICTIONAL_SYSTEM
 
   function switchSystem(next: SystemId) {
@@ -98,6 +99,39 @@ export function App() {
           ))}
           {selected && <span style={{ marginLeft: 12, opacity: 0.8 }}>Selected: {selected.name}</span>}
         </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label htmlFor="action-log" style={{ fontSize: 12, opacity: 0.7 }}>
+              Action log
+            </label>
+            <button
+              onClick={() => {
+                void navigator.clipboard.writeText(formatActionLog(actionLog))
+              }}
+              style={{ fontSize: 12 }}
+            >
+              Copy Action Log
+            </button>
+          </div>
+          <textarea
+            id="action-log"
+            aria-label="Action log"
+            readOnly
+            value={formatActionLog(actionLog)}
+            rows={5}
+            style={{
+              width: '100%',
+              maxWidth: 640,
+              fontFamily: 'monospace',
+              fontSize: 11,
+              resize: 'vertical',
+              background: '#0f172a',
+              color: '#e2e8f0',
+              border: '1px solid #334155',
+            }}
+          />
+        </div>
       </div>
 
       <div style={{ flex: 1, minHeight: 0 }}>
@@ -107,6 +141,8 @@ export function App() {
           onSelectBody={setSelected}
           externalFocus={externalFocus}
           lightFromStar={lightFromStar}
+          onAction={(entry) => setActionLog((prev) => [...prev, entry])}
+          devMode
         />
       </div>
     </div>

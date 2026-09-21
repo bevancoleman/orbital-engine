@@ -1,5 +1,17 @@
 # orbital-engine
 
+## 1.1.0
+
+### Minor Changes
+
+- Smoother, more predictable camera flights and new consumer controls:
+  
+  - Fly-to camera transitions now avoid passing too close through/behind large bodies along the way, and use a proper eased flight path (own tween, not delegated to `camera-controls`' transition system) so true-scale bodies close together (e.g. the ISS and Hubble) always animate instead of sometimes silently snapping.
+  - Arriving at a body now reliably keeps its parent in frame (raised the look-bias default so the parent lands on screen, not just nudged toward it), and a shared "context body" (e.g. Earth, when flying between two of its satellites) stays framed mid-flight without the camera swinging wide or clipping through it.
+  - Fixed a late-flight "whiplash" — the camera's final approach could swing tens of degrees in a single frame right before settling; it now decelerates smoothly into the landing.
+  - Simulated time now defaults to paused, with `initialPlaying` and `initialDaysPerSecond` props to configure the starting playback state, and a widened, more sensibly-scaled speed range (real-time up to ~1 year/60s).
+  - Added an action log: pass `onAction` to `OrbitalSystemScene` to receive a structured, exportable record of camera/selection/playback actions (via the new `formatActionLog`/`formatActionLogEntry` helpers and `ActionLogEntry` type) for exact bug reproduction — recording only, no built-in replay.
+
 ## 1.0.0
 
 ### Major Changes

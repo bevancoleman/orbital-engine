@@ -1,33 +1,184 @@
-import { useEffect, useRef, type ElementRef, type MutableRefObject } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
+import { useEffect, useMemo, useRef, type MutableRefObject } from 'react'
+import { useThree, useFrame } from '@react-three/fiber'
+import { CameraControls } from '@react-three/drei'
 import * as THREE from 'three'
-import type { FocusTarget } from '../camera'
-import { easeOutCubic } from './animation'
+import {
+  FLY_DURATION_MS,
+  applyContextBulge,
+  computeFlightEndpoint,
+  keepClearOfContextBody,
+  sampleFlightPath,
+  trackingDelta,
+  type CameraObstacle,
+  type FocusTarget,
+} from '../camera'
+import type { WorldVec } from '../render'
 
-/** Owns the OrbitControls target and smoothly flies the camera to a new
- *  focus (position + distance) when one is set — moving the camera only
- *  radially (along its current viewing direction) so the view doesn't
- *  suddenly reorient, just pans and zooms. */
-interface FlyAnimation {
-  startCameraPos: THREE.Vector3
-  startTarget: THREE.Vector3
-  endCameraPos: THREE.Vector3
-  endTarget: THREE.Vector3
-  startTimeMs: number
-  /** The tracked body's live position at the moment this flight started —
-   *  null if nothing trackable is selected (e.g. flying to a belt). Lets
-   *  the flight keep endTarget/endCameraPos chasing the body's real motion
-   *  while the animation is still in progress — see the tracking block in
-   *  useFrame below for why a fixed endpoint isn't good enough here. */
-  trackingStart: THREE.Vector3 | null
-}
+/** Smoothing for MANUAL orbit/drag/dolly only — camera-controls' own
+ *  transition system still owns that interaction, since a hand gesture has
+ *  no "start/end" for our own tween to interpolate between. Not used for
+ *  the programmatic fly-to; see FLY_DURATION_MS for that. */
+const MANUAL_SMOOTH_TIME = 0.35
 
-const FLY_DURATION_MS = 900
-
+/** Owns the camera-controls instance and smoothly flies the camera to a new
+ *  focus (position + distance) when one is set. Collision avoidance — never
+ *  letting the camera clip through a body, whether it's mid fly-to or being
+ *  dragged/dollied by hand — comes from camera-controls' own `colliderMeshes`
+ *  (see the invisible per-body proxy spheres this renders below), not from
+ *  anything hand-rolled here: an earlier draft of this file computed its own
+ *  Bezier/obstacle-push flight path, but that only ever helped the
+ *  programmatic fly-to, never manual control, which was always part of the
+ *  actual ask. camera-controls (already a transitive dependency via drei)
+ *  solves both at once by continuously raycasting from the camera's near
+ *  plane against colliderMeshes and pulling the camera in whenever it would
+ *  clip through one — every update(), regardless of what moved it.
+ *
+ *  That last part is also the source of a real, observed bug this file
+ *  fixes: camera-controls applies that raycast clamp to the LIVE distance
+ *  every single update(), not just once a transition finishes. Switching
+ *  selection from body A (where the camera was sitting close, likely at
+ *  true scale) to body B naively re-excludes only B and re-includes A as a
+ *  collider — but the camera hasn't moved away from A yet; the fly-to
+ *  transition hasn't even started easing. The very next update() then sees
+ *  the live camera penetrating A's own collider and yanks the distance in
+ *  instantly (not eased) to clear it, which reads as the camera's start
+ *  position jumping before the smooth flight to B even begins. The fix:
+ *  exclude BOTH the outgoing and incoming body for the duration of the
+ *  flight (excludedColliderIds below), only narrowing back down to just
+ *  the new selection once that flight actually settles.
+ *
+ *  Second real, observed bug this file works around: camera-controls
+ *  actually keeps TWO camera/target states internally — a "live" one
+ *  (what's actually rendered this frame, post-damping AND post-collision-
+ *  clamp) and an "end" one (the transition's destination, never touched
+ *  by the collision clamp). `getPosition()`/`getTarget()` default to
+ *  returning the END state (`receiveEndValue: true`). Every call site
+ *  below passes `false` explicitly — reading the end state instead, while
+ *  steady-tracking a moving body every frame, meant re-deriving a
+ *  "corrected" position from the UNCLAMPED destination and writing it
+ *  straight back with `enableTransition: false` (which syncs live AND end
+ *  together), silently undoing whatever collision clamp had just been
+ *  applied to the live state that same frame. Next frame, the clamp
+ *  reapplies, gets undone again — an every-frame fight between this
+ *  component and camera-controls' own collision system that reads as the
+ *  camera flickering between two different positions, worse at faster
+ *  simulated time (a bigger per-frame tracking delta). Always read (and
+ *  shift) the live state instead, so a clamp already in effect persists
+ *  across frames rather than getting fought.
+ *
+ *  Third real, observed bug: `isFlying` used to flip back to `false` off
+ *  the Promise `setLookAt()` returns, which resolves once camera-controls
+ *  fires its own 'rest' event — but the flight branch below re-issues
+ *  `setLookAt(..., true)` every single frame to keep chasing a MOVING
+ *  tracked body, which means the transition's destination never stops
+ *  moving, which means it can never "rest" by that promise's own
+ *  definition. Confirmed directly (instrumented and watched a real run):
+ *  selecting the Moon left `isFlying` stuck `true` for the ENTIRE rest of
+ *  the session, as long as simulated time kept playing — meaning the
+ *  exact, zero-lag rigid-tracking branch (the intended steady-state
+ *  behaviour once a flight settles) was never reached at all; the camera
+ *  stayed in eased/lagged pursuit of the body indefinitely instead of
+ *  locking onto it. Fixed by settling on ELAPSED TIME (FLY_DURATION_MS)
+ *  instead of waiting on a promise that structurally can't resolve while
+ *  the target keeps moving.
+ *
+ *  Fourth real, observed bug, and the reason the fly-to no longer uses
+ *  camera-controls' `setLookAt(..., true)` transition AT ALL: reported
+ *  directly as "switching between the ISS and Hubble, it's about 50:50 if
+ *  it will animate or just jump to the other object." Traced to
+ *  camera-controls' own `update()`: for EVERY component (radius, each
+ *  target axis, theta, phi) it compares that component's delta against a
+ *  fixed, scale-unaware `EPSILON` (1e-5 world units) and, if under it,
+ *  SNAPS straight to the end value instead of animating — a reasonable
+ *  "already basically there" check for an ordinary scene, but this
+ *  engine's whole premise is true-to-scale rendering, where two nearby
+ *  true-scale bodies (the ISS and Hubble, both a few hundred km from
+ *  Earth) need camera distances many orders of magnitude below that
+ *  threshold — so whether a given flight's delta happened to land above or
+ *  below 1e-5 came down to essentially arbitrary orbital-phase geometry,
+ *  not a bug in any one flight, explaining the exact "seems random, ~50:50"
+ *  symptom. The fix: stop delegating the fly-to's interpolation to
+ *  camera-controls' transition system altogether. sampleFlightPath (see
+ *  camera.ts) computes each frame's intermediate camera/target position
+ *  ourselves, in plain floating-point, with no "close enough, snap it"
+ *  comparison anywhere — then applies it via `setLookAt(..., false)`
+ *  (transition OFF), which just copies our already-eased values straight
+ *  in. camera-controls is still used for manual orbit/drag/dolly and
+ *  collision (colliderMeshes) — just no longer for the fly-to's own
+ *  easing, which turned out to be fundamentally incompatible with this
+ *  engine's dynamic range.
+ *
+ *  Fifth real, observed bug, and the actual dominant explanation for the
+ *  "seems like 50:50" framing of the fourth bug's own report: confirmed by
+ *  directly instrumenting a real switch between two ALREADY-steady-
+ *  tracked bodies (ISS, paused, then Hubble) — the reported target
+ *  position jumped to (nearly) its final value INSTANTLY, one whole frame
+ *  BEFORE `isFlying` even flipped `true`. The flight-start logic used to
+ *  live in a `useEffect` keyed on `focus`, which is a PASSIVE effect,
+ *  scheduled by React independently of R3F's own requestAnimationFrame-
+ *  driven loop — nothing guarantees it flushes before the very next
+ *  useFrame tick. `focus` and `trackedPosition` commit together in the
+ *  same React render, but on that render's first subsequent frame, if the
+ *  effect hadn't flushed yet, `isFlying` was still `false` (left over from
+ *  the PREVIOUS body's now-settled flight) while `trackedPosition` already
+ *  reflected the NEW body — so the steady-state rigid-translate branch
+ *  ran instead, instantly translating the camera+target by the ENTIRE
+ *  old-body-to-new-body distance (that branch is unconditionally
+ *  transition:false — instant by design, meant only for a body's own tiny
+ *  per-frame orbital drift). By the time the stale effect finally ran a
+ *  frame later, it read the camera as already AT the destination and
+ *  "flew" the remaining, imperceptible fraction of a unit over the next
+ *  900ms — indistinguishable, from the outside, from an instant jump.
+ *  Whether the effect happened to flush before or after that next tick was
+ *  genuinely timing-dependent — the actual coin flip behind "about
+ *  50:50." Fixed by detecting a `focus` change atomically INSIDE useFrame
+ *  itself (see `lastSeenFocus` below), in the exact same synchronous pass
+ *  that also runs the tracking branches, rather than in a separate effect
+ *  that can race against them.
+ *
+ *  Sixth real, observed bug: reported directly as violent jumping while
+ *  flying to the ISS specifically WITH simulated time playing (not
+ *  reproducible paused) — a different symptom from the fourth/fifth bugs
+ *  above, and from a different cause. The flight branch used to re-aim at
+ *  the tracked body's LIVE position every single frame (see git history —
+ *  this used to matter for a slowly-drifting body, so the flight wouldn't
+ *  finish pointed at a stale snapshot). The ISS's real orbital period is
+ *  ~92 minutes; at this scene's own default 2 simulated days/second, that
+ *  compresses to a full lap roughly every 32ms of WALL-CLOCK time — dozens
+ *  of complete orbits within one ~900ms flight. Re-sampling "the live
+ *  position" every frame during that flight wasn't tracking gradual
+ *  drift at all; it was sampling an essentially arbitrary point on a tiny,
+ *  fast circle every frame, so the eased tween's own END kept leaping
+ *  somewhere new each frame — exactly what "violent jumping" looks like.
+ *  Fixed at the source, not by smoothing the symptom: OrbitalSystemScene
+ *  now computes a FRESH focus using a simDate advanced by the flight's own
+ *  duration (see camera.ts's FLY_DURATION_MS and computeFocusForBody's own
+ *  comment), so `focus.position` already IS where the body will be once
+ *  the flight actually finishes — computed once, deterministically, from
+ *  the same orbital math that positions the body for rendering. The
+ *  flight below no longer re-aims at anything live at all; both endpoints
+ *  are fixed for its whole duration, which cannot alias into jitter no
+ *  matter how fast the real orbit is.
+ *
+ *  Separately (not a bug fix — a requested enhancement): a straight flight
+ *  between two nearby bodies that share a close parent (the ISS and
+ *  Hubble, both orbiting Earth) can put the camera behind/inside that
+ *  parent's own mesh partway through, since the direct line between their
+ *  two true-scale framings has no reason to stay outside it. `focus.
+ *  contextBody` (see camera.ts's findContextBody — the nearest shared
+ *  ancestor of the outgoing and incoming body, e.g. Earth for ISS↔Hubble,
+ *  the Sun for Earth↔Mars) and applyContextBulge together keep that shared
+ *  body in frame as an establishing-shot anchor around the flight's own
+ *  midpoint, fading back to the flight's actual start/end framing at
+ *  both ends — see applyContextBulge's own comment for why this is a
+ *  deliberately simple approximation (centred on the hero, not a genuine
+ *  off-centre dual-target frustum fit) rather than the fully general
+ *  algorithm. */
 export function CameraRig({
   focus,
   trackedPosition,
+  colliderBodies,
+  focusedId,
   manualDistance,
   onDistanceChange,
   minDistance,
@@ -36,30 +187,29 @@ export function CameraRig({
   focus: FocusTarget | null
   /** The currently-selected body's LIVE world position — recomputed by
    *  OrbitalSystemScene every time simDate advances — or null when nothing
-   *  real is selected (a belt, or nothing at all). This is the fix for a
-   *  real, observed bug: `focus` is a one-time snapshot (computed once
-   *  when a body is selected), but a body with real orbital motion (see
-   *  CelestialBody.orbit) keeps moving after that snapshot, including
-   *  while the simulation plays on with nothing paused. At the extremely
-   *  tight zoom a true-scale body needs (see scale.ts's trueRadius), even
-   *  a small compressed-position drift sweeps the body clean out of frame
-   *  within a couple of seconds — confirmed: camera position, target, AND
-   *  orientation were all independently verified mathematically correct
-   *  (0° angle to the target) immediately after a flight completed, yet
-   *  the body was nowhere on screen, because by the time the flight
-   *  finished the body had already moved on from the fixed point the
-   *  flight was aimed at. Once a flight isn't actively in progress, this
-   *  keeps the camera (and its target) shifted by exactly the body's own
-   *  per-frame movement, so a completed selection tracks its target
-   *  indefinitely instead of drifting away from it. */
+   *  real is selected (a belt, or nothing at all). A body with real orbital
+   *  motion (see CelestialBody.orbit) keeps moving after `focus` is
+   *  computed (a one-time snapshot), including while a flight is still in
+   *  progress or after it's long since settled — see the tracking logic in
+   *  useFrame below for how this keeps the camera locked on regardless. */
   trackedPosition: readonly [number, number, number] | null
+  /** Every body's current position/radius (see camera.ts's
+   *  computeColliderBodies), UNFILTERED — turned into invisible proxy
+   *  spheres below; which of them are actually active colliders at any
+   *  given moment is this component's own call (see excludedColliderIds
+   *  below), not something the caller decides. */
+  colliderBodies: CameraObstacle[]
+  /** The id of the body the camera is centred on right now (a belt's own
+   *  parent, when a belt is selected), or null when nothing real is
+   *  selected. Used to exclude that body from colliderMeshes — otherwise
+   *  the camera could never actually get close to/inside the thing it's
+   *  looking at. */
+  focusedId: string | null
   /** Set by the zoom slider (see OrbitalSystemScene) — an immediate jump to
-   *  this distance along the current viewing direction, bypassing the
-   *  smooth fly-to animation entirely. A ref, not state: the slider fires
-   *  on every drag/input event, and each one needs to apply straight away
-   *  for the "zoom in and out very fast" the slider exists for — going
-   *  through React state/props would add a render's worth of latency per
-   *  step and there's no reason to pay it here. */
+   *  this distance along the camera's current viewing direction, bypassing
+   *  the smooth fly-to transition entirely. A ref, not state: the slider
+   *  fires on every drag/input event, and each one needs to apply straight
+   *  away for the "zoom in and out very fast" the slider exists for. */
   manualDistance: MutableRefObject<number | null>
   onDistanceChange: (d: number) => void
   /** Per-selection camera-distance floor (see camera.ts's
@@ -74,10 +224,6 @@ export function CameraRig({
 }) {
   const { camera } = useThree()
 
-  // The Canvas's `camera` prop only applies at mount — R3F doesn't
-  // reactively re-apply it on prop changes — so keeping the near plane in
-  // sync with whatever's selected (see nearPlane's own comment) has to
-  // happen here, imperatively, whenever it changes.
   useEffect(() => {
     const perspectiveCamera = camera as THREE.PerspectiveCamera
     if (perspectiveCamera.near !== nearPlane) {
@@ -85,176 +231,324 @@ export function CameraRig({
       perspectiveCamera.updateProjectionMatrix()
     }
   }, [camera, nearPlane])
-  const controlsRef = useRef<ElementRef<typeof OrbitControls>>(null)
+
+  const controlsRef = useRef<CameraControls | null>(null)
   // The last known-good unit viewing direction — used as a starting
   // direction for a new flight when the camera and target genuinely
   // coincide (only ever true on the very first frame, before anything's
-  // been framed yet).
-  const lastGoodDirection = useRef(new THREE.Vector3(0, 0.447, 0.894)) // matches the initial [0,60,120] camera offset
-  const flight = useRef<FlyAnimation | null>(null)
+  // been framed yet), and to compute the manual zoom slider's dolly axis.
+  const lastGoodDirection = useRef<WorldVec>([0, 0.447, 0.894]) // matches the initial [0,60,120] camera offset
+  // Set while a fly-to is in progress — during this window, tracking a
+  // moving body shifts the flight's own live END anchor (still homing in
+  // on the body's current position) rather than rigidly translating
+  // wherever the camera/target already settled (see useFrame below).
+  const isFlying = useRef(false)
+  // Everything sampleFlightPath needs each frame: where the flight started
+  // (fixed for its whole duration) and where it ENDS — also fixed, not
+  // re-aimed at the tracked body's live position frame to frame. That
+  // used to be the design (see this file's own header comment, sixth bug):
+  // it correctly avoided arriving at a stale snapshot for a slowly-moving
+  // body, but for a body whose orbital period is far shorter than the
+  // flight's own duration (the ISS at high simulated time can complete
+  // dozens of full laps within one ~900ms flight), re-sampling its
+  // instantaneous position every frame meant each frame's "live end"
+  // was practically a different, essentially random point on that tiny
+  // fast circle — reported directly as violent jumping while flying to
+  // the ISS with time playing. `endTarget` is now wherever
+  // computeFocusForBody predicted the body WOULD BE by the time this
+  // flight actually finishes (see OrbitalSystemScene's flightTargetDate),
+  // computed ONCE, deterministically, from the same exact orbital math
+  // that positions the body for rendering — no per-frame re-aiming needed
+  // at all, and no way for it to alias into jitter no matter how fast the
+  // orbit is.
+  const flightState = useRef({
+    startPosition: [0, 60, 120] as WorldVec,
+    startTarget: [0, 0, 0] as WorldVec,
+    endPosition: [0, 0, 0] as WorldVec,
+    endTarget: [0, 0, 0] as WorldVec,
+    startTimeMs: 0,
+    // The nearest shared ancestor of the outgoing and incoming body (see
+    // camera.ts's findContextBody) — Earth, for a flight between the ISS
+    // and Hubble — kept in frame around the flight's midpoint (see
+    // applyContextBulge below) so it doesn't flicker out of view behind/
+    // inside its own mesh partway through a flight between two of its
+    // close satellites. null when there isn't one worth showing.
+    contextBody: null as { position: WorldVec; radius: number } | null,
+  })
   // The tracked body's world position as of the last frame — compared
   // against the current trackedPosition each frame to derive how far it
-  // moved, which is then applied equally to both camera.position and
-  // controls.target (see the tracking block in useFrame below).
-  const lastTrackedPosition = useRef<THREE.Vector3 | null>(null)
+  // moved, which is then applied equally to the camera and its target (see
+  // camera.ts's trackingDelta).
+  const lastTrackedPosition = useRef<WorldVec | null>(null)
 
-  // Computed ONCE per new focus, from the camera/target's own CURRENT
-  // (stable, pre-flight) state — not recomputed reactively every frame
-  // during the flight itself. That reactive-recomputation design is what
-  // three separate real, observed bugs this turn all traced back to: a
-  // direction/distance computed fresh each frame from wherever the camera
-  // and target currently sat could read a degenerate, coincidentally-close,
-  // or otherwise transient in-flight state and permanently corrupt the
-  // rest of the animation from there (camera colliding with a body,
-  // landing looking at empty space, etc). A start/end pair fixed at flight
-  // start and a straightforward eased interpolation between them has no
-  // such feedback loop: the destination is exactly where distanceToFit
-  // computed it to be, guaranteed by construction, regardless of how
-  // convoluted the path to get there is.
-  useEffect(() => {
-    if (!focus) return
-    const controls = controlsRef.current
-    if (!controls) return
-    const startTarget = (controls.target as THREE.Vector3).clone()
-    const startCameraPos = camera.position.clone()
-    const rawDir = startCameraPos.clone().sub(startTarget)
-    const rawLength = rawDir.length()
-    const direction = rawLength > 1e-6 ? rawDir.divideScalar(rawLength) : lastGoodDirection.current.clone()
-    lastGoodDirection.current = direction.clone()
-    const endTarget = new THREE.Vector3(...focus.position)
-    const endCameraPos = endTarget.clone().addScaledVector(direction, focus.distance)
-    const trackingStart = trackedPosition ? new THREE.Vector3(...trackedPosition) : null
-    flight.current = { startCameraPos, startTarget, endCameraPos, endTarget, startTimeMs: performance.now(), trackingStart }
-    // Deliberately NOT depending on trackedPosition — a new flight should
-    // only start when `focus` itself changes (a fresh selection/fly-to),
-    // not on every frame trackedPosition ticks during an already-in-progress
-    // flight (that's what the useFrame tracking block below is for). See
-    // this effect's own comment above for why a stable start/end pair
-    // matters here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus])
+  // Which body ids are currently EXCLUDED from colliderMeshes — see this
+  // file's own header comment for why this has to widen to both the
+  // outgoing and incoming body for the duration of a flight, not just
+  // whatever's currently selected. Starts empty (nothing selected yet).
+  const excludedColliderIds = useRef<Set<string>>(new Set())
+  // The focusedId a flight was headed toward the last time one started —
+  // becomes "the outgoing body" the NEXT time selection changes.
+  const previousFocusedId = useRef<string | null>(null)
+  // The `focus` this component has already started a flight for — compared
+  // against the current `focus` prop EVERY FRAME (see useFrame below) to
+  // detect a fresh selection. See this file's header comment (fifth bug)
+  // for why this detection has to live inside useFrame itself rather than
+  // a separate useEffect.
+  const lastSeenFocus = useRef<FocusTarget | null>(null)
 
   const lastReportedDistance = useRef(-1)
   useFrame(() => {
     const controls = controlsRef.current
     if (!controls) return
-    const controlsTarget = controls.target as THREE.Vector3
+
+    // Ends a flight — used both once it's actually run its course (below)
+    // and when a manual slider drag interrupts one early. The outgoing
+    // body becomes a legitimate collider again here, not before; see this
+    // file's header comment on why BOTH bodies stay excluded until this
+    // point.
+    const settleFlight = () => {
+      isFlying.current = false
+      excludedColliderIds.current = new Set(focusedId ? [focusedId] : [])
+    }
+
+    // Starts a new flight the instant `focus` changes — inline here, not
+    // in a separate useEffect, and checked FIRST, before anything below
+    // reads trackedPosition. See this file's header comment (fifth bug,
+    // a real, observed one, confirmed by direct instrumentation): a
+    // useEffect is a PASSIVE effect, deferred relative to R3F's own
+    // requestAnimationFrame-driven loop, with no guarantee it flushes
+    // before the very next useFrame tick. `focus` and `trackedPosition`
+    // commit together in the same React render, but on that render's
+    // FIRST subsequent useFrame tick, the passive effect that used to live
+    // here often hadn't run yet — so `isFlying` was still `false` while
+    // `trackedPosition` already reflected the NEW body, and the steady-
+    // state rigid-translate branch below fired instead, translating the
+    // camera+target by the FULL old-body-to-new-body distance, instantly,
+    // before the flight even started. By the time the (now-stale) effect
+    // finally ran a frame later, it read the camera as already sitting at
+    // the destination and "flew" the remaining, imperceptible fraction of
+    // an inch — read from the outside as "50:50 whether it animates or
+    // just jumps," except this particular case was never actually a
+    // coin flip: it reproduced on EVERY selection change, just invisibly,
+    // because the jump and the (real, but from-basically-nowhere) flight
+    // happened one frame apart. Detecting the change here, synchronously,
+    // in the same frame the tracking branches below also run in, makes it
+    // impossible for that branch to ever see a stale isFlying/trackedPosition
+    // pairing again.
+    if (focus !== lastSeenFocus.current) {
+      lastSeenFocus.current = focus
+      if (focus) {
+        // receiveEndValue=false — the LIVE camera/target, not wherever a
+        // still-in-progress previous flight was ultimately headed (see
+        // this file's header comment on the two separate states camera-
+        // controls keeps). A new flight has to start from where the
+        // camera actually, visibly is.
+        const currentCameraPos = controls.getPosition(new THREE.Vector3(), false)
+        const currentTargetPos = controls.getTarget(new THREE.Vector3(), false)
+        const startPosition: WorldVec = [currentCameraPos.x, currentCameraPos.y, currentCameraPos.z]
+        const startTarget: WorldVec = [currentTargetPos.x, currentTargetPos.y, currentTargetPos.z]
+        // position/target here are already exactly where this flight ENDS —
+        // focus.position is the PREDICTED position (see OrbitalSystemScene's
+        // flightTargetDate/computeFocusForBody's own comment), not a live
+        // snapshot, so this needs no further updating for the rest of the
+        // flight's duration.
+        const { position: endPosition, target: endTarget, direction } = computeFlightEndpoint(
+          startPosition,
+          startTarget,
+          focus,
+          lastGoodDirection.current
+        )
+        lastGoodDirection.current = direction
+        flightState.current = {
+          startPosition,
+          startTarget,
+          endPosition,
+          endTarget,
+          startTimeMs: performance.now(),
+          contextBody: focus.contextBody,
+        }
+        isFlying.current = true
+        lastTrackedPosition.current = trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
+
+        // Exclude both where we're headed (so we can actually get close to
+        // it) and where we're coming from (so its own collider doesn't
+        // yank the still-nearby live camera the instant it becomes solid
+        // again) — see this file's header comment for the exact jump this
+        // prevents.
+        excludedColliderIds.current = new Set(
+          [focusedId, previousFocusedId.current].filter((id): id is string => id !== null)
+        )
+        previousFocusedId.current = focusedId
+      }
+    }
 
     // A slider drag takes priority over any in-progress flight and jumps
-    // straight there — no smooth interpolation, since the whole point of
-    // the slider is an immediate, direct response, the same way scrolling
-    // to zoom is immediate. Consumed once (reset to null) so it only
-    // fires for genuinely new slider input, not every subsequent frame.
+    // straight there — no smooth transition, since the whole point of the
+    // slider is an immediate, direct response, the same way scrolling to
+    // zoom is immediate. Consumed once (reset to null) so it only fires for
+    // genuinely new slider input, not every subsequent frame.
     if (manualDistance.current !== null) {
-      flight.current = null
-      camera.position.copy(controlsTarget).addScaledVector(lastGoodDirection.current, manualDistance.current)
+      if (isFlying.current) settleFlight()
+      void controls.dollyTo(manualDistance.current, false)
       manualDistance.current = null
     }
 
-    const anim = flight.current
-    if (anim) {
-      // If the target is a moving body (trackingStart set at flight start —
-      // see FlyAnimation's own comment), shift the flight's endpoint by
-      // however far the body has moved since the flight began, every frame,
-      // BEFORE lerping toward it. Without this, a body under simulated
-      // motion keeps moving during the ~900ms flight while the flight aims
-      // at a fixed snapshot of where it was at selection time — at the
-      // extremely tight zoom a true-scale body needs, even the body's
-      // ordinary motion over less than a second is enough to land the
-      // camera pointed at empty space the instant the flight completes,
-      // the exact bug this fixes: the body visibly vanishing right as the
-      // camera finishes arriving.
-      if (anim.trackingStart && trackedPosition) {
-        const live = new THREE.Vector3(...trackedPosition)
-        const movedSinceLastFrame = live.clone().sub(anim.trackingStart)
-        anim.endTarget.copy(live)
-        anim.endCameraPos.add(movedSinceLastFrame)
-        anim.trackingStart.copy(live)
-      }
-      const t = Math.min(1, (performance.now() - anim.startTimeMs) / FLY_DURATION_MS)
-      const eased = easeOutCubic(t)
-      controlsTarget.lerpVectors(anim.startTarget, anim.endTarget, eased)
-      camera.position.lerpVectors(anim.startCameraPos, anim.endCameraPos, eased)
-      if (t >= 1) flight.current = null
-      // A fresh flight always starts from wherever the body currently is
-      // (computeFocusForBody, in OrbitalSystemScene, is called with the
-      // live simDate) — resetting this here means tracking below picks up
-      // cleanly from the flight's own real endpoint, not from wherever the
-      // body was when a previous selection last tracked it.
-      lastTrackedPosition.current = null
+    if (isFlying.current) {
+      // Driven entirely by OUR OWN eased tween (see camera.ts's
+      // sampleFlightPath and this file's header comment, fourth bug) —
+      // camera-controls' own transition system is never invoked for this;
+      // `setLookAt(..., false)` below just copies our already-eased values
+      // straight in. Both endpoints are FIXED for the flight's whole
+      // duration (see flightState's own comment, sixth bug) — no re-aiming
+      // at a live position here at all, which is what used to alias a fast
+      // orbiter's own motion into visible jitter.
+      const state = flightState.current
+      const t = (performance.now() - state.startTimeMs) / FLY_DURATION_MS
+      const { position: pathPosition, target: pathTarget } = sampleFlightPath(
+        state.startPosition,
+        state.startTarget,
+        state.endPosition,
+        state.endTarget,
+        t
+      )
+      // pathTarget is sampleFlightPath's own independently-lerped target —
+      // a straight line between two points that can each be on very
+      // different sides of a shared nearby parent (the ISS and Hubble,
+      // both near Earth), so the straight line between them can pass
+      // straight through that parent's own interior. Pushed back outside
+      // it (a no-op whenever it's already clear, including always at the
+      // flight's own real t=0/t=1 endpoints) BEFORE it's used as the
+      // look-at anchor for anything below — no amount of correcting the
+      // camera's own offset from target helps if target itself is buried
+      // inside the context body's own volume.
+      const target = keepClearOfContextBody(pathTarget, state.contextBody)
+      // Pulls the camera back further than the flight's own natural
+      // framing, only around the flight's own midpoint, if needed to keep
+      // a shared context body in frame — falls back to pathPosition
+      // completely untouched whenever there's no context body to guard
+      // for (see applyContextBulge's own comment for why it needs the
+      // flight's raw start/end points too, not just pathPosition itself).
+      const position = applyContextBulge(
+        pathPosition,
+        state.startPosition,
+        state.startTarget,
+        state.endPosition,
+        state.endTarget,
+        target,
+        state.contextBody,
+        t
+      )
+      void controls.setLookAt(position[0], position[1], position[2], target[0], target[1], target[2], false)
+      // Still updated every frame — NOT for this flight's own math (which
+      // no longer needs it), but so the steady-state branch's very first
+      // post-flight delta is an ordinary, tiny one-frame motion instead of
+      // a big correction: by the time this flight ends, the body's real
+      // live position should already almost exactly match the predicted
+      // endTarget it flew to, since orbital motion is fully deterministic.
+      lastTrackedPosition.current = trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
+      if (t >= 1) settleFlight()
     } else if (trackedPosition) {
-      // No flight in progress and something real is selected: keep the
-      // camera locked onto it. See this prop's own comment for why this
-      // exists — a completed fly-to targets a fixed point, but a real
-      // orbiting body doesn't stay at that point.
-      const live = new THREE.Vector3(...trackedPosition)
-      if (lastTrackedPosition.current) {
-        const delta = live.clone().sub(lastTrackedPosition.current)
-        if (delta.lengthSq() > 0) {
-          controlsTarget.add(delta)
-          camera.position.add(delta)
-        }
+      // No flight in progress: rigidly translate the camera and its
+      // target by however far the body moved since the last frame,
+      // preserving whatever distance/angle is currently in effect (which
+      // may differ from the flight's own, if the user has since dragged
+      // or zoomed manually).
+      const delta = trackingDelta(lastTrackedPosition.current, trackedPosition as WorldVec)
+      if (delta) {
+        // receiveEndValue=false — shift the LIVE (actually rendered)
+        // camera/target, not the transition-end state. Reading the end
+        // state here was the actual cause of a real, observed bug: this
+        // component's own per-update() collision clamp (see
+        // camera-controls' `_collisionTest`) only ever touches the LIVE
+        // spherical state, never `_sphericalEnd` — so reading the END
+        // state here re-derived a "corrected" position from the
+        // UNCLAMPED destination and wrote it straight back with
+        // `enableTransition: false`, which overwrites the LIVE state too,
+        // undoing that frame's collision clamp. Next frame, camera-
+        // controls reapplies the clamp, we undo it again — an every-frame
+        // fight that reads as the camera flickering between two different
+        // positions (reported directly: "I appear to be switching
+        // location alternating between frames"), worse at faster sim
+        // speeds since the per-frame tracking delta is larger. Reading
+        // (and shifting) the LIVE state instead means any clamp already
+        // in effect persists across frames rather than getting fought.
+        const pos = controls.getPosition(new THREE.Vector3(), false)
+        const target = controls.getTarget(new THREE.Vector3(), false)
+        void controls.setLookAt(
+          pos.x + delta[0],
+          pos.y + delta[1],
+          pos.z + delta[2],
+          target.x + delta[0],
+          target.y + delta[1],
+          target.z + delta[2],
+          false
+        )
       }
-      lastTrackedPosition.current = live
+      lastTrackedPosition.current = [...(trackedPosition as WorldVec)]
     } else {
       lastTrackedPosition.current = null
     }
-
-    // Explicit, every frame this loop touches camera.position/target at all
-    // (during a flight, a manual zoom, or the safety-net clamp below) — not
-    // left to OrbitControls' own update() to infer. Moving camera.position
-    // doesn't rotate the camera to face it; only the camera's own
-    // quaternion controls what it's actually pointed at, and an abrupt
-    // external position change (exactly what a flight or a slider jump is)
-    // isn't guaranteed to leave OrbitControls' own internal orientation
-    // tracking in a state that still points at the new target. This was a
-    // real, observed bug: the camera's reported position/distance were
-    // numerically correct — confirmed by logging them — while the
-    // rendered view showed nothing anywhere near the selected body,
-    // because the camera was still facing whatever direction it was
-    // oriented in before the jump.
-    camera.lookAt(controlsTarget)
-
-    // Hard safety net, independent of whatever bug might otherwise cause
-    // it: this loop writes camera.position directly every frame, which
-    // completely bypasses OrbitControls' own minDistance (that only
-    // constrains ITS dolly/zoom handlers, not external position writes).
-    // Floored at `minDistance` (matched to the near plane set above via
-    // nearPlane — see camera.ts's minCameraDistanceForRadius), not some
-    // larger "comfortable" distance — a comfortable-for-a-planet distance
-    // is a hard wall for a true-scale body like the ISS (see scale.ts's
-    // trueRadius), which is smaller than Earth's own radius by 8+ orders
-    // of magnitude; the whole point of true scale + bubble-cursor
-    // selection is being able to get arbitrarily close to a tiny object,
-    // so the only distance that's ever actually unsafe is one that clips
-    // the (per-selection) near plane or collapses to zero.
-    const liveOffset = camera.position.clone().sub(controlsTarget)
-    const liveLength = liveOffset.length()
-    if (liveLength < minDistance) {
-      const pushBackDirection = liveLength > 1e-6 ? liveOffset.divideScalar(liveLength) : lastGoodDirection.current
-      camera.position.copy(controlsTarget).addScaledVector(pushBackDirection, minDistance)
-    }
-
-    controls.update()
 
     // Report the live camera-to-target distance for LOD (see BodyMarker) —
     // epsilon-throttled so a continuous drag/zoom gesture doesn't trigger a
     // full re-render every single frame, only when it's moved enough to
     // matter.
-    const liveDistance = camera.position.distanceTo(controlsTarget)
+    const liveDistance = controls.distance
     if (Math.abs(liveDistance - lastReportedDistance.current) > liveDistance * 0.02) {
       lastReportedDistance.current = liveDistance
       onDistanceChange(liveDistance)
     }
+
+    // Re-synced every frame, not just when colliderBodies/excludedColliderIds
+    // change — cheap (a filter over however many bodies exist) and avoids
+    // having to fan this out to every place excludedColliderIds gets
+    // mutated (flight start, flight settle, and — if a body is deselected
+    // entirely — nowhere at all, which a dependency-array effect would
+    // miss). See this file's header comment for why the excluded set has
+    // to be a moving window rather than a fixed "current selection" value.
+    controls.colliderMeshes = colliderBodies
+      .filter((o) => !excludedColliderIds.current.has(o.id))
+      .map((o) => colliderMeshRefs.current.get(o.id))
+      .filter((m): m is THREE.Mesh => m != null)
   })
 
+  useEffect(() => {
+    const controls = controlsRef.current
+    if (!controls) return
+    controls.minDistance = minDistance
+    controls.smoothTime = MANUAL_SMOOTH_TIME
+  }, [minDistance])
+
+  // Invisible proxy spheres, one per obstacle body — matched to each body's
+  // true-scale radius so camera-controls' raycast-based collision test (see
+  // colliderMeshes above) sees the same size the body actually renders at.
+  // Kept separate from the real rendered meshes (BodyShapes.tsx) on purpose:
+  // those include glow sprites, wireframes, and additive-blended rings that
+  // aren't solid and shouldn't ever block the camera, and a real GLTF model
+  // would be far more expensive to raycast against than a low-poly sphere.
+  // Keyed by body id (not array index) so a ref never gets attributed to
+  // the wrong body if the underlying body list is ever reordered.
+  const colliderMeshRefs = useRef<Map<string, THREE.Mesh>>(new Map())
+
+  const colliderGeometry = useMemo(() => new THREE.SphereGeometry(1, 12, 8), [])
+  useEffect(() => () => colliderGeometry.dispose(), [colliderGeometry])
+
   return (
-    <OrbitControls
-      ref={controlsRef}
-      enableDamping
-      dampingFactor={0.1}
-      minDistance={minDistance}
-      maxDistance={2000}
-    />
+    <>
+      <CameraControls ref={controlsRef} maxDistance={2000} />
+      {colliderBodies.map((obstacle) => (
+        <mesh
+          key={obstacle.id}
+          ref={(m) => {
+            if (m) colliderMeshRefs.current.set(obstacle.id, m)
+            else colliderMeshRefs.current.delete(obstacle.id)
+          }}
+          position={obstacle.position}
+          scale={Math.max(obstacle.radius, 1e-9)}
+          geometry={colliderGeometry}
+          visible={false}
+        />
+      ))}
+    </>
   )
 }

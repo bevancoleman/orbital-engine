@@ -13,6 +13,17 @@ import type { BeltRegion, CelestialBody, StarSystemData } from './types'
 
 export const DEFAULT_CAMERA_DISTANCE = 134 // matches the initial camera position in OrbitalSystemScene
 
+/** How long a fly-to takes, start to end (CameraRig.tsx's own eased tween —
+ *  see sampleFlightPath below). Exported from here, not just kept local to
+ *  CameraRig, because OrbitalSystemScene needs the SAME number: computing
+ *  a fresh focus for a body that's currently moving has to target where
+ *  the body will BE once the flight actually arrives, not where it is at
+ *  the moment of selection — see computeFocusForBody's own comment on the
+ *  real, reported bug this fixes (violent jumping when flying to a body
+ *  whose orbital period is far shorter than the flight itself, e.g. the
+ *  ISS at higher simulated time). */
+export const FLY_DURATION_MS = 900
+
 // The Canvas's own DEFAULT near clip plane (see OrbitalSystemScene's
 // <Canvas near=... /> mount-time value) — used when nothing meaningfully
 // small is selected. Camera distance can never usefully go below this
@@ -66,8 +77,8 @@ export function minCameraDistanceForRadius(radius: number | null | undefined): n
 }
 
 // Matches the Canvas's own far clip plane order of magnitude and
-// OrbitControls' maxDistance — how far out the camera can ever go,
-// regardless of how large the thing being framed is.
+// CameraRig's own CameraControls maxDistance — how far out the camera can
+// ever go, regardless of how large the thing being framed is.
 export const MAX_CAMERA_DISTANCE = 2000
 
 // The Canvas's own vertical field of view (see OrbitalSystemScene's <Canvas
@@ -79,6 +90,550 @@ export const VERTICAL_FOV_DEG = 50
 export interface FocusTarget {
   position: [number, number, number]
   distance: number
+  /** Vector from the focused body toward its parent (not normalized, not
+   *  necessarily even close to unit length — just a direction), or null
+   *  when there's no parent to bias toward (the star, a belt). Used to bend
+   *  the camera's FINAL viewing angle partway toward "looking back at the
+   *  parent" when flying to a child, rather than blindly preserving
+   *  whatever direction the camera happened to arrive from forever — see
+   *  computeEndDirection. */
+  lookBias: WorldVec | null
+  /** The nearest shared ancestor of the body just left and the one being
+   *  flown to (see findContextBody) — Earth, when switching between the
+   *  ISS and Hubble; the Sun, when switching between Earth and Mars; null
+   *  when there isn't one worth showing (see findContextBody's own
+   *  comment for exactly when). Used only DURING the flight (see
+   *  camera.ts's applyContextBulge / CameraRig.tsx) to keep this body in
+   *  frame as an establishing-shot anchor, not part of the settled,
+   *  true-scale framing itself — null here just means "no CalledFrom
+   *  previous body was known (a fresh page load, say), not "definitely
+   *  nothing to show." */
+  contextBody: { position: WorldVec; radius: number } | null
+}
+
+/**
+ * The nearest shared ancestor of `fromBody` and `toBody` — Earth, for a
+ * flight between the ISS and Hubble; the Sun, for a flight between Earth
+ * and Mars — or null when there genuinely isn't a useful one to show
+ * alongside the flight:
+ *
+ * - either body IS the star (nothing above it to show, and nothing else
+ *   makes sense as "context" for arriving at the literal center of the
+ *   system);
+ * - the two are the same body;
+ * - one is a direct ancestor of the other (Earth → Moon, or the reverse)
+ *   — the shared "ancestor" in that case is trivially one of the two
+ *   endpoints itself, which isn't a THIRD thing worth also framing; the
+ *   existing local-children extent in computeFocusForBody already covers
+ *   a parent/child pair like this.
+ *
+ * A body with no parent that ISN'T the star (e.g. a deep-space jump
+ * point — see CelestialBody.parentId) is treated, for this search only,
+ * as if its parent were the star — simpler than a genuine "nearest large
+ * object" search, and the star is a reasonable, always-available answer
+ * for "what's the nearest meaningful context above an untethered point."
+ */
+export function findContextBody(fromBody: CelestialBody, toBody: CelestialBody, system: StarSystemData): CelestialBody | null {
+  if (fromBody.id === toBody.id) return null
+  if (fromBody.type === 'star' || toBody.type === 'star') return null
+  const star = system.bodies.find((b) => b.type === 'star')
+  const ancestorsOf = (start: CelestialBody): CelestialBody[] => {
+    const chain: CelestialBody[] = []
+    let current: CelestialBody | undefined = start
+    const seen = new Set<string>()
+    while (current && !seen.has(current.id)) {
+      chain.push(current)
+      seen.add(current.id)
+      if (current.parentId) {
+        current = system.bodies.find((b) => b.id === current!.parentId)
+      } else if (star && current.id !== star.id) {
+        current = star
+      } else {
+        current = undefined
+      }
+    }
+    return chain
+  }
+  const fromChain = ancestorsOf(fromBody)
+  const toIds = new Set(ancestorsOf(toBody).map((b) => b.id))
+  const commonAncestor = fromChain.find((b) => toIds.has(b.id))
+  if (!commonAncestor) return null
+  if (commonAncestor.id === fromBody.id || commonAncestor.id === toBody.id) return null
+  return commonAncestor
+}
+
+/** A smooth "bump": 0 at t=0 and t=1, 1 at t=0.5 — how strongly
+ *  applyContextBulge pulls the camera back to keep a context body in
+ *  frame mid-flight, fading out completely at both ends so it never
+ *  disturbs the flight's own actual start or end framing. */
+export function midFlightBump(t: number): number {
+  const clamped = Math.min(1, Math.max(0, t))
+  return 4 * clamped * (1 - clamped)
+}
+
+/**
+ * How far the camera needs to sit from `heroPosition` — along whatever
+ * direction it's already looking, still centred on the hero, not the
+ * midpoint — to also fit a context body (`contextPosition`/`contextRadius`)
+ * comfortably in frame. Deliberately a simple approximation rather than
+ * genuine off-centre frustum-edge math (which needs the camera's actual
+ * up/right axes — not available in this pure, framework-agnostic module):
+ * treats "the context body's own far edge, as seen from the hero" as the
+ * radius to fit, reusing distanceToFit's own frustum math directly rather
+ * than a new derivation. Centring on the hero and simply backing up
+ * further trades a bit of the "artistically offset" framing a true dual-
+ * target algorithm would give for a result that's trivially correct by
+ * construction: the context body is, by definition, within this fitted
+ * radius of the hero.
+ */
+export function contextFitDistance(heroPosition: WorldVec, contextPosition: WorldVec, contextRadius: number): number {
+  const gap = Math.hypot(
+    contextPosition[0] - heroPosition[0],
+    contextPosition[1] - heroPosition[1],
+    contextPosition[2] - heroPosition[2]
+  )
+  // A wider margin than distanceToFit's own default (2.2) — reported
+  // directly: at the default margin, the bulge held the camera close
+  // enough to the context body's own surface that it read as "passing too
+  // close," with no room to swing smoothly past it. This is specifically
+  // about CLEARANCE during a flight past a large nearby body, not the
+  // tighter, deliberate close-up framing distanceToFit's default serves
+  // everywhere else (arriving at and stopping on a body).
+  return distanceToFit(gap + contextRadius, 3.5)
+}
+
+/** How close (in multiples of the context body's own radius) BOTH the
+ *  outgoing and incoming body need to be to a shared ancestor for it to
+ *  be worth bulging out to show at all — see resolveContextBody. The ISS
+ *  and Hubble orbit only a small fraction of Earth's own radius above its
+ *  surface (comfortably under this); the Moon sits roughly 60 Earth radii
+ *  out. Bulging out to fit that whole separation — a real, reported
+ *  symptom ("zooming way past the moon before coming back in") — isn't a
+ *  bigger version of the same establishing shot; showing Earth as a
+ *  nearby anchor only makes sense for bodies that actually orbit close to
+ *  it, not for one that's already its own distant, separate part of the
+ *  system. */
+export const CONTEXT_BODY_CLOSE_FACTOR = 3
+
+/**
+ * The nearest shared ancestor of `fromBody` and `toBody` (see
+ * findContextBody), resolved to a world position/radius — but only when
+ * it's actually a close, believable "both orbiting the same nearby body"
+ * relationship (see CONTEXT_BODY_CLOSE_FACTOR), not merely a shared
+ * ancestor however far away either body's own orbit puts it. Returns null
+ * whenever findContextBody itself would, OR when either body sits too far
+ * from that ancestor for showing it as a nearby anchor to make sense.
+ */
+export function resolveContextBody(
+  fromBody: CelestialBody,
+  toBody: CelestialBody,
+  system: StarSystemData,
+  simDate: Date
+): { position: WorldVec; radius: number } | null {
+  const ancestor = findContextBody(fromBody, toBody, system)
+  if (!ancestor) return null
+  const ancestorPos = resolveWorldPosition(ancestor, system.bodies, simDate)
+  const ancestorRadius = trueRadius(ancestor.radiusKm)
+  const closeEnough = (b: CelestialBody): boolean => {
+    const pos = resolveWorldPosition(b, system.bodies, simDate)
+    const gap = Math.hypot(pos[0] - ancestorPos[0], pos[1] - ancestorPos[1], pos[2] - ancestorPos[2])
+    return gap < ancestorRadius * CONTEXT_BODY_CLOSE_FACTOR
+  }
+  if (!closeEnough(fromBody) || !closeEnough(toBody)) return null
+  return { position: ancestorPos, radius: ancestorRadius }
+}
+
+/**
+ * The camera OFFSET (direction + distance from target) a flight would use
+ * at progress `t` if nothing needed keeping in frame — computed from the
+ * flight's own FIXED start/end camera/target pairs directly, NOT from
+ * sampleFlightPath's own position(t)-minus-target(t), even though the two
+ * are mathematically related. That distinction is exactly what fixes a
+ * real, reported bug: position(t) and target(t) are each ordinary linear
+ * blends of two fixed points, which makes their DIFFERENCE just a linear
+ * blend of the two endpoints' own offsets too (lerp distributes over
+ * subtraction) — fine when both offsets point roughly the same way, but
+ * the ISS's and Hubble's own "which way is away from Earth" directions
+ * can differ substantially (they can be on very different sides of it).
+ * Linearly blending two SMALL vectors that point in different directions
+ * doesn't shrink-then-grow smoothly — it can partially CANCEL, dipping
+ * the resulting magnitude toward zero mid-flight with no bulge involved
+ * at all, reported directly as the camera reading "too close to Earth"
+ * again partway through, well before the bulge's own peak. Direction and
+ * distance are interpolated SEPARATELY here to avoid that: nlerp
+ * (normalize a blend of two UNIT vectors — this never cancels toward
+ * zero) for direction, geometric interpolation for distance (matches this
+ * file's own reasoning elsewhere for a quantity perceived
+ * logarithmically).
+ */
+export function naturalFlightOffset(
+  startPosition: WorldVec,
+  startTarget: WorldVec,
+  endPosition: WorldVec,
+  endTarget: WorldVec,
+  t: number
+): { direction: WorldVec; distance: number } {
+  const startOffset = subtractVec3(startPosition, startTarget)
+  const endOffset = subtractVec3(endPosition, endTarget)
+  const startDistance = lengthVec3(startOffset)
+  const endDistance = lengthVec3(endOffset)
+  const startDirection = normalizeOr(startOffset, [0, 1, 0])
+  const endDirection = normalizeOr(endOffset, [0, 1, 0])
+  const easedT = easeOutCubic(Math.min(1, Math.max(0, t)))
+  const direction = normalizeOr(lerpVec3(startDirection, endDirection, easedT), startDirection)
+  const distance =
+    startDistance > 0 && endDistance > 0
+      ? startDistance * Math.pow(endDistance / startDistance, easedT)
+      : startDistance + easedT * (endDistance - startDistance)
+  return { direction, distance }
+}
+
+/**
+ * Where the camera should sit, still looking at `target`, ONLY around the
+ * midpoint of a flight (see midFlightBump) pulling farther back than
+ * `pathPosition` (sampleFlightPath's own position(t) — used as-is
+ * whenever there's nothing to guard for) whenever needed to keep
+ * `contextBody` in frame — the fix for a real, reported/discussed issue:
+ * flying straight between two nearby bodies that share a close parent
+ * (the ISS and Hubble, both orbiting Earth) could put the camera
+ * behind/inside that parent's own mesh partway through, making it flicker
+ * out of view entirely. Falls back to `pathPosition` completely untouched
+ * whenever there's nothing to guard against (`contextBody` null — the
+ * vast majority of flights), at the very ends of the flight (bump is
+ * exactly 0), or when the context body is already comfortably inside the
+ * flight's own natural framing (see naturalFlightOffset, used ONLY once a
+ * context body is actually in play — deliberately not the default path
+ * for every flight, despite being more broadly robust, to keep this
+ * scoped to the narrower case that actually needs it rather than
+ * changing already-verified behaviour for every other flight too).
+ *
+ * Blends toward the needed distance GEOMETRICALLY, not linearly, and
+ * blends the DIRECTION toward straight-away-from-the-context-body's-own-
+ * centre as the bump increases, rather than holding the flight's own
+ * natural direction fixed while only the distance grows — two more real,
+ * reported bugs this fixes:
+ *
+ * - `naturalDistance` (a true-scale body's own tiny viewing distance) and
+ *   `neededDistance` (a whole nearby planet's) routinely span many orders
+ *   of magnitude; a straight LINEAR blend between them spends nearly its
+ *   entire travel already out near the planet-scale end — e.g. even at
+ *   only 20% of the way through the bump, a linear blend is already at
+ *   >99.9999% of the full distance. Reported directly as "sent a LONG way
+ *   away from earth before it zooms in... the curve is a little simple."
+ *   Camera distance is perceived logarithmically — the same reasoning
+ *   zoomSlider.ts already uses for its own min/max range — so geometric
+ *   interpolation is what actually reads as a smooth, continuous zoom out
+ *   and back.
+ * - Backing up along the flight's own UNCHANGED natural direction, alone,
+ *   was a separate real, reported bug: `target` sits almost ON the
+ *   context body's surface for the case this exists for, and that
+ *   direction has no reason to point away from the surface — it's
+ *   whatever direction the flight was already heading, which can easily
+ *   be closer to tangential, so backing up along it skims right along (or
+ *   through) the surface instead of climbing clear of it. Blending in
+ *   "radially outward from the context body" fixes that directly, and
+ *   reads as a smooth swing outward rather than a straight collision
+ *   course, since it's a gradual rotation of the viewing angle as bump
+ *   ramps up, not a snap.
+ */
+
+/**
+ * Pushes `target` radially outward, just clear of `contextBody`'s own
+ * surface, if it's currently inside or too close to it — a fix for a
+ * real, reported bug that survived even after applyContextBulge's own
+ * distance/direction fixes: `target` itself is sampleFlightPath's
+ * independently-lerped target(t), a straight line between two points that
+ * can each be on very different sides of a shared nearby parent (the ISS
+ * and Hubble, both near Earth, but not necessarily anywhere close to each
+ * other) — and the straight line between two points on opposite sides of
+ * a sphere passes straight through its interior. No amount of correcting
+ * the CAMERA's own offset from target helps if target — the point the
+ * camera is centred on and offset from — is itself buried inside the
+ * context body's own volume; the camera wants to end up skimming that
+ * body's surface no matter how far back it sits. Returns `target`
+ * completely unchanged whenever it's already outside `marginFactor`
+ * (default a modest safety margin over the body's own true radius, not a
+ * bump-scaled fade — the flight's own real endpoints are already outside
+ * this by construction, an orbiting body's altitude being part of its own
+ * real position, so this never fires at t=0 or t=1 regardless of margin).
+ */
+export function keepClearOfContextBody(
+  target: WorldVec,
+  contextBody: { position: WorldVec; radius: number } | null,
+  marginFactor = 1.05
+): WorldVec {
+  if (!contextBody) return target
+  const toTarget = subtractVec3(target, contextBody.position)
+  const distance = lengthVec3(toTarget)
+  const minDistance = contextBody.radius * marginFactor
+  if (distance >= minDistance) return target
+  const direction = normalizeOr(toTarget, [0, 1, 0])
+  return addVec3(contextBody.position, scaleVec3(direction, minDistance))
+}
+
+export function applyContextBulge(
+  pathPosition: WorldVec,
+  startPosition: WorldVec,
+  startTarget: WorldVec,
+  endPosition: WorldVec,
+  endTarget: WorldVec,
+  target: WorldVec,
+  contextBody: { position: WorldVec; radius: number } | null,
+  t: number
+): WorldVec {
+  // Untouched whenever there's no context body to guard for — every
+  // flight WITHOUT one (the vast majority) keeps using sampleFlightPath's
+  // own position(t) exactly as before; naturalFlightOffset's more robust
+  // (but different-shaped) path is deliberately scoped to only the
+  // narrower case that actually needs it.
+  if (!contextBody) return pathPosition
+  const bump = midFlightBump(t)
+  if (bump <= 0) return pathPosition
+  const natural = naturalFlightOffset(startPosition, startTarget, endPosition, endTarget, t)
+  const neededDistance = contextFitDistance(target, contextBody.position, contextBody.radius)
+  // Already comfortably fits — pathPosition untouched, INCLUDING its
+  // direction. A real bug this guards against: computing a rotated
+  // direction unconditionally (whenever bump > 0) still nudged the
+  // camera sideways even when no extra distance was needed at all, since
+  // rotating direction alone (at an unchanged distance) is still a real
+  // position change, not a no-op.
+  if (neededDistance <= natural.distance || natural.distance <= 0) return pathPosition
+  const distance = natural.distance * Math.pow(neededDistance / natural.distance, bump)
+  const awayFromContext = normalizeOr(subtractVec3(target, contextBody.position), natural.direction)
+  const direction = normalizeOr(lerpVec3(natural.direction, awayFromContext, bump), natural.direction)
+  return addVec3(target, scaleVec3(direction, distance))
+}
+
+/** A body to steer the camera's flight path away from — see
+ *  camera-controls' `colliderMeshes` (wired up in CameraRig.tsx), which
+ *  this feeds via invisible proxy spheres sized to match. `id` matches the
+ *  source CelestialBody's own id — CameraRig, not this function, decides
+ *  WHICH of these are actually active colliders at any given moment (see
+ *  its own comment on why that has to be a moving window rather than a
+ *  fixed exclusion: a body being deselected doesn't stop being physically
+ *  close to the camera the instant a new one is picked). */
+export interface CameraObstacle {
+  id: string
+  position: WorldVec
+  radius: number
+}
+
+/**
+ * Every body's current world position + true-scale radius, unfiltered —
+ * CameraRig decides at render time which of these are live colliders (see
+ * that file). Consumed to build invisible collider proxies for
+ * camera-controls' `colliderMeshes`, which pulls the live camera in (both
+ * during a fly-to AND under manual drag/zoom) whenever it would otherwise
+ * clip through one of these — see CameraRig for why hand-rolling this
+ * avoidance math ourselves turned out to be the wrong call once
+ * camera-controls (already a transitive dependency via drei) turned out to
+ * already do it, including for manual control, which a hand-rolled
+ * fly-to-only path never could.
+ */
+export function computeColliderBodies(system: StarSystemData, simDate: Date): CameraObstacle[] {
+  return system.bodies.map((b) => ({
+    id: b.id,
+    position: resolveWorldPosition(b, system.bodies, simDate),
+    radius: trueRadius(b.radiusKm),
+  }))
+}
+
+function subtractVec3(a: WorldVec, b: WorldVec): WorldVec {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+function addVec3(a: WorldVec, b: WorldVec): WorldVec {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+function scaleVec3(a: WorldVec, s: number): WorldVec {
+  return [a[0] * s, a[1] * s, a[2] * s]
+}
+
+function lengthVec3(a: WorldVec): number {
+  return Math.hypot(a[0], a[1], a[2])
+}
+
+/** Normalizes `v`, falling back to `fallback` (assumed already sane —
+ *  never itself renormalized here) when `v` is degenerate (zero or
+ *  near-zero length) rather than producing NaNs/Infinity. */
+function normalizeOr(v: WorldVec, fallback: WorldVec): WorldVec {
+  const len = lengthVec3(v)
+  return len > 1e-9 ? scaleVec3(v, 1 / len) : fallback
+}
+
+/** How strongly a flight's final look direction gets pulled toward "facing
+ *  back at the parent" versus just preserving the direction the camera
+ *  arrived from — see computeEndDirection. Real, reported bug at the
+ *  original value of 0.3: "when zooming from Earth to the Moon... the end
+ *  position should have Earth on screen, but it's like it's being capped."
+ *  Confirmed by reproducing the exact reported action log and computing
+ *  the actual angle: the arrival direction (wherever the camera happened
+ *  to be facing after settling on Earth) and the direction that puts the
+ *  parent on screen can be well over 90° apart — here, ~126° — and a 0.3
+ *  blend only rotates about 30% of THAT gap, landing the parent ~101° off
+ *  centre: nowhere near any camera's field of view, not just "small in
+ *  the corner." 0.7 is still borderline (~25°, right at this engine's own
+ *  25° vertical half-FOV — see VERTICAL_FOV_DEG). 0.8 lands comfortably
+ *  inside frame (~13° off centre in that same real case) while still
+ *  keeping SOME continuity with the arrival direction rather than
+ *  snapping to an identical, arrival-independent view every time (which
+ *  is what 1.0 would do) — the parent isn't guaranteed dead-centre, but
+ *  reliably in frame, which is what "on screen" actually requires. */
+export const DEFAULT_LOOK_BIAS_WEIGHT = 0.8
+
+/**
+ * The camera's live viewing direction (offset from target to camera,
+ * normalized) right before a new flight starts — the "direction the
+ * camera came from" that computeEndDirection biases away from. Falls back
+ * to `fallback` (the last known-good direction) when camera and target
+ * genuinely coincide, which is only ever true on the very first frame
+ * before anything has been framed yet.
+ */
+export function computeArrivalDirection(cameraPos: WorldVec, targetPos: WorldVec, fallback: WorldVec): WorldVec {
+  return normalizeOr(subtractVec3(cameraPos, targetPos), fallback)
+}
+
+/**
+ * The direction a flight should end up viewing FROM (i.e. the offset from
+ * the new target to the new camera position), blending the direction the
+ * camera arrived from with a bias toward looking back at the parent.
+ *
+ * `lookBias` points from the focused (child) body toward its parent (see
+ * FocusTarget.lookBias). Ending the flight looking generally "toward the
+ * parent" means placing the camera on the far side of the child FROM the
+ * parent, so the view axis (from camera, through the child) continues on
+ * roughly toward where the parent is — i.e. the camera's offset direction
+ * from the target should lean toward the OPPOSITE of lookBias, not toward
+ * it directly.
+ *
+ * Null/zero-length lookBias (nothing to bias toward — the star, a belt)
+ * leaves the arrival direction untouched, exactly matching the old
+ * always-preserve-current-direction behaviour.
+ */
+export function computeEndDirection(
+  arrivalDirection: WorldVec,
+  lookBias: WorldVec | null,
+  biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT
+): WorldVec {
+  if (!lookBias) return arrivalDirection
+  const biasLen = lengthVec3(lookBias)
+  if (biasLen <= 1e-9) return arrivalDirection
+  const awayFromParent = scaleVec3(lookBias, -1 / biasLen)
+  const blended: WorldVec = [
+    arrivalDirection[0] * (1 - biasWeight) + awayFromParent[0] * biasWeight,
+    arrivalDirection[1] * (1 - biasWeight) + awayFromParent[1] * biasWeight,
+    arrivalDirection[2] * (1 - biasWeight) + awayFromParent[2] * biasWeight,
+  ]
+  return normalizeOr(blended, arrivalDirection)
+}
+
+/** Where a new flight to `focus` should end up — camera position, look-at
+ *  target, and the resulting viewing direction (for the NEXT flight's own
+ *  arrival direction, and for the manual-zoom slider's dolly axis) — given
+ *  where the camera/target currently sit. Pure and framework-agnostic on
+ *  purpose (see this file's own header comment) so CameraRig.tsx's
+ *  three.js/camera-controls glue can stay a thin, untested-by-necessity
+ *  wrapper around logic that IS unit tested here. */
+export function computeFlightEndpoint(
+  currentCameraPos: WorldVec,
+  currentTargetPos: WorldVec,
+  focus: FocusTarget,
+  fallbackDirection: WorldVec,
+  biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT
+): { position: WorldVec; target: WorldVec; direction: WorldVec } {
+  const arrivalDirection = computeArrivalDirection(currentCameraPos, currentTargetPos, fallbackDirection)
+  const direction = computeEndDirection(arrivalDirection, focus.lookBias, biasWeight)
+  return { position: addVec3(focus.position, scaleVec3(direction, focus.distance)), target: focus.position, direction }
+}
+
+/**
+ * How far a tracked body has moved since the last frame — null when there
+ * was no previous position to compare against (tracking just started, or
+ * nothing's selected). Applying this SAME delta to both the camera and its
+ * target keeps a completed flight locked onto a body that keeps moving
+ * under simulated orbital motion (see CameraRig's own `trackedPosition`
+ * prop for the bug this fixes) without disturbing the camera's distance or
+ * viewing angle — a rigid translation, not a re-aim.
+ */
+export function trackingDelta(previous: WorldVec | null, live: WorldVec): WorldVec | null {
+  if (!previous) return null
+  const delta = subtractVec3(live, previous)
+  return delta[0] === 0 && delta[1] === 0 && delta[2] === 0 ? null : delta
+}
+
+function lerpVec3(a: WorldVec, b: WorldVec, t: number): WorldVec {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+}
+
+/** Ease-out cubic — fast at the start, settling gently into place, rather
+ *  than a constant speed that feels abrupt when it stops. Used by
+ *  sampleFlightPath below for the fly-to's own eased progress. */
+export function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3)
+}
+
+export interface FlightPathPoint {
+  position: WorldVec
+  target: WorldVec
+}
+
+/**
+ * Where the camera + its look-at target should sit at progress `t` (0 at
+ * the flight's start, 1 at its end) along a fly-to — a plain eased lerp,
+ * computed entirely in our own code rather than delegated to
+ * camera-controls' own transition/smoothDamp system (see CameraRig.tsx's
+ * own header comment for why that turned out to be the wrong call: it
+ * decides per-component whether to animate or instantly SNAP by comparing
+ * the distance/position delta against a fixed, scale-unaware constant
+ * (1e-5 world units) — fine for an ordinary scene, but this engine's whole
+ * premise is true-to-scale rendering, where a flight between two nearby
+ * true-scale bodies (e.g. the ISS and Hubble, both a few hundred km from
+ * Earth, both needing camera distances many orders of magnitude below
+ * that threshold) routinely has a delta SMALLER than 1e-5 — so whether it
+ * animated or just jumped there came down to an essentially arbitrary
+ * comparison against a constant that has nothing to do with this scene's
+ * own scale, reported directly as "about 50:50 if it will animate or just
+ * jump"). Sampling our own explicit intermediate value every frame, at
+ * full floating-point precision, has no such comparison anywhere in it —
+ * every `t` in (0, 1) produces a genuinely distinct point on the path,
+ * regardless of how small the total distance travelled is.
+ *
+ * `t` is clamped to [0, 1] — values outside that range (a stray timing
+ * bug upstream) land on the nearer endpoint rather than overshooting or
+ * extrapolating backwards.
+ *
+ * Position is NOT a plain lerp of the two endpoint positions — that was a
+ * real, reported bug ("the camera rotation for the final part is a bit
+ * violent... like whiplash"): once DEFAULT_LOOK_BIAS_WEIGHT (see camera.ts)
+ * was raised to actually land the parent on screen, a flight's start and
+ * end camera OFFSETS from their (independently lerped) targets routinely
+ * point in very different directions. Lerping the two raw positions in
+ * that case still traces a straight line, but that line's distance from
+ * the ALSO-moving target dips toward zero somewhere in the middle (two
+ * vectors pointing in different directions, blended linearly, shrink
+ * before they grow again) — and normalizing an offset that's momentarily
+ * near-zero-length amplifies any small per-frame change into a huge
+ * swing in viewing direction, measured directly at up to ~18° in a single
+ * frame right before settling. Using naturalFlightOffset here instead —
+ * the same nlerp-direction / geometric-distance approach already used by
+ * applyContextBulge to fix an identical vector-cancellation bug — keeps
+ * the offset's direction turning at a steady, eased rate and its distance
+ * shrinking/growing smoothly, with no near-zero pinch point to swing
+ * around.
+ */
+export function sampleFlightPath(
+  startPosition: WorldVec,
+  startTarget: WorldVec,
+  endPosition: WorldVec,
+  endTarget: WorldVec,
+  t: number
+): FlightPathPoint {
+  const clampedT = Math.min(1, Math.max(0, t))
+  const eased = easeOutCubic(clampedT)
+  const target = lerpVec3(startTarget, endTarget, eased)
+  const { direction, distance } = naturalFlightOffset(startPosition, startTarget, endPosition, endTarget, clampedT)
+  return { position: addVec3(target, scaleVec3(direction, distance)), target }
 }
 
 /**
@@ -125,8 +680,28 @@ export function distanceToFit(worldRadius: number, marginFactor = 2.2): number {
  * "nearby" in the first place, defeating the point of zooming to the planet
  * at all. It's still a real child for every other purpose (selection,
  * dropdown grouping, goDown) — only the camera-framing extent skips it.
+ *
+ * `simDate` doesn't have to be "now" — OrbitalSystemScene deliberately
+ * passes a date advanced by FLY_DURATION_MS's worth of simulated time
+ * (when playing) for a FRESH selection, so this resolves to where the
+ * body will actually BE once the resulting flight finishes, not where it
+ * was at the moment of selection. See CameraRig.tsx's own header comment
+ * for the real, reported bug this fixes: re-aiming a flight at a body's
+ * live position every frame turns into visible violent jumping once that
+ * body's orbital period gets shorter than the flight's own duration (a
+ * close, fast orbiter like the ISS, at high simulated time — it can
+ * complete dozens of full laps within a single ~900ms flight). Framing a
+ * single, deterministic PREDICTED destination instead needs no per-frame
+ * re-aiming at all — it's exactly as accurate (orbital motion is fully
+ * deterministic) and cannot alias into jitter no matter how fast the
+ * orbit is.
  */
-export function computeFocusForBody(body: CelestialBody, system: StarSystemData, simDate: Date): FocusTarget {
+export function computeFocusForBody(
+  body: CelestialBody,
+  system: StarSystemData,
+  simDate: Date,
+  previousBody: CelestialBody | null = null
+): FocusTarget {
   const bodyPos = resolveWorldPosition(body, system.bodies, simDate)
   const children = system.bodies.filter((b) => b.parentId === body.id && !b.coOrbitalWithParent)
 
@@ -151,7 +726,12 @@ export function computeFocusForBody(body: CelestialBody, system: StarSystemData,
     maxExtent = Math.max(maxExtent, dist + trueRadius(child.radiusKm))
   }
 
-  return { position: bodyPos, distance: distanceToFit(maxExtent) }
+  const parent = body.parentId ? system.bodies.find((b) => b.id === body.parentId) : undefined
+  const lookBias: WorldVec | null = parent ? subtractVec3(resolveWorldPosition(parent, system.bodies, simDate), bodyPos) : null
+
+  const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
+
+  return { position: bodyPos, distance: distanceToFit(maxExtent), lookBias, contextBody }
 }
 
 /**
@@ -173,7 +753,7 @@ export function computeFocusForSystem(system: StarSystemData, simDate: Date): Fo
   // parentId) can ALSO have parentId: null without being the star, so that
   // check alone doesn't reliably pick the star out among other bodies.
   const star = system.bodies.find((b) => b.type === 'star')
-  if (!star) return { position: [0, 0, 0], distance: DEFAULT_CAMERA_DISTANCE }
+  if (!star) return { position: [0, 0, 0], distance: DEFAULT_CAMERA_DISTANCE, lookBias: null, contextBody: null }
   return computeFocusForBody(star, system, simDate)
 }
 
@@ -183,5 +763,5 @@ export function computeFocusForBelt(belt: BeltRegion, system: StarSystemData, si
   const parent = system.bodies.find((b) => b.id === belt.parentId)
   const parentPos = parent ? resolveWorldPosition(parent, system.bodies, simDate) : ([0, 0, 0] as WorldVec)
   const outerWorldRadius = compressDistance(belt.outerRadiusKm)
-  return { position: parentPos, distance: distanceToFit(outerWorldRadius, 1.6) }
+  return { position: parentPos, distance: distanceToFit(outerWorldRadius, 1.6), lookBias: null, contextBody: null }
 }
