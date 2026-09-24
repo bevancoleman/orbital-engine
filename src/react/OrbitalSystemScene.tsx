@@ -797,6 +797,12 @@ export function OrbitalSystemScene({
               </>
             )}
             {selectedBody.note && <div style={uiStyles.mutedItalic}>{selectedBody.note}</div>}
+            {selectedBody.wikiSummary && <div style={uiStyles.wikiSummary}>{selectedBody.wikiSummary}</div>}
+            {selectedBody.wikiUrl && (
+              <a href={selectedBody.wikiUrl} target="_blank" rel="noopener noreferrer" style={uiStyles.wikiLink}>
+                Read more →
+              </a>
+            )}
           </div>
         )}
 
@@ -817,6 +823,12 @@ export function OrbitalSystemScene({
               </div>
             )}
             {selectedBelt.note && <div style={uiStyles.mutedItalic}>{selectedBelt.note}</div>}
+            {selectedBelt.wikiSummary && <div style={uiStyles.wikiSummary}>{selectedBelt.wikiSummary}</div>}
+            {selectedBelt.wikiUrl && (
+              <a href={selectedBelt.wikiUrl} target="_blank" rel="noopener noreferrer" style={uiStyles.wikiLink}>
+                Read more →
+              </a>
+            )}
           </div>
         )}
       </div>
