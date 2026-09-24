@@ -1,5 +1,11 @@
 # orbital-engine
 
+## 1.3.0
+
+### Minor Changes
+
+- 8cf52d2: Add optional `wikiSummary`/`wikiUrl` fields to `CelestialBody` and `BeltRegion`, rendered in the selected-body/belt info panel below the existing provenance `note` when present. Both fields are consumer-supplied free text/links — the engine has no opinion on where they came from.
+
 ## 1.2.0
 
 ### Minor Changes
