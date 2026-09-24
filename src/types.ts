@@ -176,6 +176,16 @@ export interface CelestialBody {
    *  approximate/epoch-dependent; this keeps that honest in the data itself
    *  rather than presenting it as more precise than it is). */
   note?: string
+  /** A short, human-readable summary of what this body actually IS —
+   *  distinct from `note`, which documents this body's own numeric
+   *  provenance (e.g. "radius sourced from X"), not what the place is like.
+   *  Consumer-supplied content (the engine has no opinion on where it came
+   *  from); optional, and only rendered alongside `wikiUrl` when present. */
+  wikiSummary?: string
+  /** A link to further reading about this body — shown alongside
+   *  `wikiSummary` when both are present. Rendered as a plain link with no
+   *  assumption about the target site. */
+  wikiUrl?: string
   /**
    * id of a BeltRegion (see StarSystemData.belts) this body is physically a
    * member of — e.g. a named main-belt asteroid (Ceres, Vesta) that's ALSO
@@ -270,6 +280,9 @@ export interface BeltRegion {
   }
   color?: string
   note?: string
+  /** See CelestialBody's own wikiSummary/wikiUrl — same meaning here. */
+  wikiSummary?: string
+  wikiUrl?: string
 }
 
 export interface StarSystemData {

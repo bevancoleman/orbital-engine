@@ -76,6 +76,16 @@ export type { LabelCandidate, ScreenCandidate } from './labelDeclutter'
 export { formatDistanceKm } from './units'
 export { routeSegments } from './routeSegments'
 export { sliderPositionToDistance, distanceToSliderPosition } from './zoomSlider'
+export {
+  REAL_TIME_DAYS_PER_SECOND,
+  MAX_DAYS_PER_SECOND,
+  MAX_HOURS_PER_SECOND,
+  DEFAULT_DAYS_PER_SECOND,
+  clampPlaybackSpeed,
+  formatPlaybackSpeed,
+} from './timeScale'
+export type { ActionLogEntry } from './actionLog'
+export { formatActionLogEntry, formatActionLog } from './actionLog'
 
 // Dev-mode performance overlay (object-count/LOD half — see
 // OrbitalSystemScene's devMode prop, 'orbital-engine/react'). The

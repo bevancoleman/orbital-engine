@@ -14,10 +14,3 @@ export function stepToward(current: number, target: number, maxStep: number): nu
   const diff = target - current
   return Math.abs(diff) <= maxStep ? target : current + Math.sign(diff) * maxStep
 }
-
-/** Ease-out cubic — fast at the start, settling gently into place, rather
- *  than a constant speed that feels abrupt when it stops. Used by
- *  CameraRig's fly-to animation. */
-export function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3)
-}

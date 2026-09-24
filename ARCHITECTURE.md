@@ -26,7 +26,7 @@ Steps 1–9 are all pure functions in `src/*.ts` — no React, no three.js scene
 | --- | --- |
 | `OrbitalSystemScene.tsx` | Top-level state, the toolbar/info-panel UI, `<Canvas>` setup, `TimeDriver` (advances `simDate`) |
 | `SceneContent.tsx` | Per-frame composition: resolves every body's position, decides what's eligible via `visibility.ts`, renders bodies/orbits/belts/route preview |
-| `CameraRig.tsx` | Owns `OrbitControls`, the fly-to animation, and live-tracking a moving selected body so the camera doesn't drift off it mid-flight |
+| `CameraRig.tsx` | Owns drei's `CameraControls` (wrapping the `camera-controls` library), the fly-to transition, invisible collider proxies so the camera can't clip through a body (manual drag included), and live-tracking a moving selected body so the camera doesn't drift off it mid-flight |
 | `ProximitySelector.tsx` | The R3F-side wiring for `proximitySelection.ts`/`labelDeclutter.ts` — one per-frame screen-space projection pass driving hover, label visibility, and body-dot visibility together |
 | `BodyMarker.tsx` | One body's rendered group — shape + label + the grow/shrink fade animation when a body crosses in/out of the visible set |
 | `BodyShapes.tsx` | The actual geometry per body type (`PlaceholderBodyShape`), the real-model/real-texture loading paths and their fallbacks, `AtmosphereRim` |

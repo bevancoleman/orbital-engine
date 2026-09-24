@@ -2,23 +2,28 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
-import { resolveWorldPosition } from '../render'
 import { trueRadius } from '../scale'
 import {
   DEFAULT_CAMERA_DISTANCE,
   DEFAULT_NEAR_PLANE,
+  FLY_DURATION_MS,
   MAX_CAMERA_DISTANCE,
   VERTICAL_FOV_DEG,
+  computeColliderBodies,
   computeFocusForBelt,
   computeFocusForBody,
   computeFocusForSystem,
+  computeSmoothedTrackedPosition,
   minCameraDistanceForRadius,
   nearPlaneForRadius,
+  safePredictFlightTarget,
   type FocusTarget,
 } from '../camera'
 import { formatDistanceKm } from '../units'
 import { distanceToSliderPosition, sliderPositionToDistance } from '../zoomSlider'
+import { DEFAULT_DAYS_PER_SECOND, MAX_DAYS_PER_SECOND, REAL_TIME_DAYS_PER_SECOND, clampPlaybackSpeed, formatPlaybackSpeed } from '../timeScale'
 import { computeObjectCounts, lodSummaryFor } from '../devStats'
+import type { ActionLogEntry } from '../actionLog'
 import { validateSystemData, type SystemDataWarning } from '../validateSystemData'
 import type { BeltRegion, CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
@@ -28,6 +33,16 @@ import { PerfStats, type RendererStats } from './PerfStats'
 import { UI_COLORS, uiStyles, buttonStyle } from './theme'
 
 type Selection = { kind: 'body'; id: string } | { kind: 'belt'; id: string } | null
+
+// Plain `Omit<ActionLogEntry, 'atMs' | 'simDateISO'>` doesn't do what it
+// looks like it does over a discriminated union: Omit is Pick applied to
+// keyof T, and keyof a union only sees each member's COMMON keys — so it
+// would silently collapse away every entry's own extra fields (bodyId,
+// daysPerSecond, sliderPosition, …), leaving just `{ type: ... }`. Forcing
+// distribution over the union first (`T extends unknown ? ... : never`)
+// applies Omit to each variant individually instead, which is what
+// recordAction below actually needs its input type to be.
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 function TimeDriver({
   playing,
   daysPerSecond,
@@ -220,6 +235,39 @@ export interface OrbitalSystemSceneProps {
    * performance.
    */
   devMode?: boolean
+  /**
+   * Whether simulated time is playing on first load — defaults to
+   * `false` (paused). Time advancing by default used to make a fresh
+   * load's very first fly-to (or any fly-to a consumer triggers before
+   * the user has touched Play) susceptible to whatever's moving fastest
+   * in the loaded system (the ISS, say) — genuinely useful once the user
+   * has decided they want time playing, surprising as a default nobody
+   * asked for. Exposed here (rather than only user-toggleable via the
+   * Play/Pause button) so a consumer embedding this component gets the
+   * same choice — e.g. an app that only ever wants a static, paused
+   * viewer, or one that wants to start playing immediately for a demo.
+   */
+  initialPlaying?: boolean
+  /** Simulated days advanced per real second once playing — see
+   *  timeScale.ts for the real-time-to-MAX_HOURS_PER_SECOND range this can
+   *  usefully span (clamped via clampPlaybackSpeed, so an out-of-range
+   *  value passed here is corrected rather than trusted directly — the
+   *  Speed slider's own drag handler already stays in range by construction,
+   *  but this prop comes from the consumer, e.g. a deep link or saved
+   *  session, and has no such guarantee). Defaults to DEFAULT_DAYS_PER_SECOND.
+   *  Only sets the STARTING speed; the user's own Speed slider still changes
+   *  it from there like normal. */
+  initialDaysPerSecond?: number
+  /** Fired for every recordable user interaction (selection, playback
+   *  controls, camera zoom) — see actionLog.ts's ActionLogEntry. Lets a
+   *  consumer build an exact reproduction log for bug reports: not just
+   *  WHAT was done, but WHEN (relative to the start) and the simulated
+   *  date at that moment (several real bugs in this camera code only
+   *  reproduced at specific orbital alignments). The library only records
+   *  and exposes these — it deliberately does NOT implement its own replay;
+   *  reproducing a log means driving the same UI a real user would, which
+   *  belongs in a browser-automation script, not this component. */
+  onAction?: (entry: ActionLogEntry) => void
 }
 
 export function OrbitalSystemScene({
@@ -229,10 +277,62 @@ export function OrbitalSystemScene({
   lightFromStar,
   routePreview,
   devMode,
+  initialPlaying = false,
+  initialDaysPerSecond = DEFAULT_DAYS_PER_SECOND,
+  onAction,
 }: OrbitalSystemSceneProps) {
   const [simDate, setSimDate] = useState(() => new Date())
-  const [playing, setPlaying] = useState(true)
-  const [daysPerSecond, setDaysPerSecond] = useState(2)
+  const [playing, setPlaying] = useState(initialPlaying)
+  const [daysPerSecond, setDaysPerSecond] = useState(clampPlaybackSpeed(initialDaysPerSecond))
+  // When the current log "session" started (performance.now()) — atMs on
+  // every emitted entry is relative to this, not wall-clock time, since a
+  // reproduction script cares about elapsed time between actions. Reset by
+  // the system-reset effect below on every system switch, so atMs starts
+  // back at 0 for that system's own session rather than keeping counting
+  // from whatever came before.
+  const logStartRef = useRef<number | null>(null)
+  const speedDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const zoomDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Mirrors simDate for the debounced set-speed/set-zoom handlers below —
+  // their setTimeout callback fires well after the render that scheduled
+  // it, so closing over `simDate` directly would capture a stale value
+  // (potentially far stale, since simDate ticks continuously while
+  // playing). Reading this ref at the moment the timer actually elapses
+  // gives the simDate that was current then, not when the drag started.
+  const simDateRef = useRef(simDate)
+  simDateRef.current = simDate
+  function recordAction(entry: DistributiveOmit<ActionLogEntry, 'atMs' | 'simDateISO'>) {
+    if (!onAction) return
+    const atMs = logStartRef.current === null ? 0 : performance.now() - logStartRef.current
+    onAction({ ...entry, atMs, simDateISO: simDateRef.current.toISOString() } as ActionLogEntry)
+  }
+  // Where a FRESH focus should resolve orbital positions from — "now"
+  // (simDate) plus however much simulated time the flight to get there
+  // will itself take, so the camera frames where a moving body will
+  // actually BE once it arrives, not a live snapshot from the moment of
+  // selection (see camera.ts's computeFocusForBody for the real, reported
+  // bug — violent jumping — this fixes for a fast, close orbiter like the
+  // ISS at high simulated time). Not used while paused: nothing moves
+  // between "now" and "then" anyway, and it'd be needless drift from the
+  // exact date shown in the UI.
+  function flightTargetDate(): Date {
+    if (!playing) return simDate
+    return new Date(simDate.getTime() + daysPerSecond * 86_400_000 * (FLY_DURATION_MS / 1000))
+  }
+  // computeFocusForBody, plus (while playing) where `body` will REALLY be
+  // at each moment of the flight there, not just at its predicted end point
+  // — see safePredictFlightTarget and FocusTarget.predictedTargetAt's own
+  // comments. Skipped entirely while paused: simDate === flightTargetDate()
+  // in that case, so every sample would be identical to the single fixed
+  // endpoint computeFocusForBody already predicts, same reasoning
+  // flightTargetDate itself already uses.
+  function focusOnBodyWithTrajectory(body: CelestialBody, previousBody: CelestialBody | null = null): FocusTarget {
+    const target = computeFocusForBody(body, system, flightTargetDate(), previousBody)
+    const predictedTargetAt = playing
+      ? (safePredictFlightTarget(body, system, simDate, daysPerSecond, target.distance) ?? undefined)
+      : undefined
+    return { ...target, predictedTargetAt }
+  }
   const [selection, setSelection] = useState<Selection>(null)
   const [focus, setFocus] = useState<FocusTarget | null>(null)
   // Live camera-to-target distance (see CameraRig), used purely for the LOD
@@ -298,10 +398,37 @@ export function OrbitalSystemScene({
   // (see CameraRig's minDistance prop) — shared so the slider's displayed
   // position always agrees with what range [0, 1] actually spans.
   const zoomSliderMinDistance = minCameraDistanceForRadius(selectedBodyRadius)
-  // The selected body's LIVE world position, recomputed every time simDate
+  // The selected body's world position, recomputed every time simDate
   // advances — see CameraRig's trackedPosition prop for why this exists
   // (a real orbiting body doesn't stay where it was when first selected).
-  const trackedPosition = selectedBody ? resolveWorldPosition(selectedBody, system.bodies, simDate) : null
+  // Routed through computeSmoothedTrackedPosition rather than a single raw
+  // resolveWorldPosition sample — see that function's own comment: a body
+  // whose own PARENT is also moving (a moon of an orbiting planet) can
+  // trace a genuinely epicyclic path that a plain per-frame backward
+  // difference tracks jerkily, and smoothing there is safe to apply
+  // unconditionally (not behind a toggle) because it already falls back to
+  // exact, unsmoothed tracking on its own whenever smoothing would risk
+  // lagging the target out of frame (a true-scale close orbiter) — the
+  // same adaptive-fallback pattern safePredictFlightTarget uses for the
+  // flight side above. cameraDistance (the LIVE camera-to-target distance
+  // reported by CameraRig, not a stale flight-start snapshot) is what that
+  // fallback check is measured against.
+  const trackedPosition = selectedBody
+    ? computeSmoothedTrackedPosition(selectedBody, system, simDate, daysPerSecond, cameraDistance)
+    : null
+  // Every body, fed to CameraRig as invisible collision proxies (see
+  // camera.ts's computeColliderBodies) — unfiltered; CameraRig itself
+  // decides which of these are active colliders at any given moment (it
+  // needs to exclude not just whatever's currently focused, but also
+  // whatever was JUST deselected for as long as the camera is still near
+  // it — see that file's own comment on the jump this fixes).
+  const colliderBodies = useMemo(() => computeColliderBodies(system, simDate), [system, simDate])
+  // The body the camera is centred on right now — CameraRig excludes this
+  // (and, transiently, whatever it's flying away FROM) from colliderBodies
+  // so the camera can actually get close to/inside it at true scale. A
+  // belt has no body of its own beyond its parent (the belt itself isn't a
+  // collidable body at all).
+  const focusedBodyId = selectedBody?.id ?? selectedBelt?.parentId ?? null
 
   // Split from selectBody (below) on purpose: this updates the scene's own
   // selection/camera state only, without notifying onSelectBody — used by
@@ -316,8 +443,14 @@ export function OrbitalSystemScene({
   // exactly which field it's for) stomped the field the jump had just set
   // and silently flipped the active slot out from under the user.
   function focusOnBody(body: CelestialBody) {
+    // The OUTGOING body (before this selection replaces it) — passed
+    // through so computeFocusForBody can find a shared context body (see
+    // camera.ts's findContextBody) to keep in frame mid-flight, e.g.
+    // Earth for a flight between the ISS and Hubble. null when nothing
+    // (or a belt) was selected before this.
     setSelection({ kind: 'body', id: body.id })
-    setFocus(computeFocusForBody(body, system, simDate))
+    setFocus(focusOnBodyWithTrajectory(body, selectedBody))
+    recordAction({ type: 'select-body', bodyId: body.id })
   }
   function selectBody(body: CelestialBody) {
     focusOnBody(body)
@@ -325,7 +458,8 @@ export function OrbitalSystemScene({
   }
   function selectBelt(belt: BeltRegion) {
     setSelection({ kind: 'belt', id: belt.id })
-    setFocus(computeFocusForBelt(belt, system, simDate))
+    setFocus(computeFocusForBelt(belt, system, flightTargetDate()))
+    recordAction({ type: 'select-belt', beltId: belt.id })
   }
   // Fires for every canvas click that doesn't hit a raycastable object —
   // which, now that body selection goes entirely through bubble-cursor
@@ -358,7 +492,10 @@ export function OrbitalSystemScene({
     const parentId = selectedBody?.parentId ?? selectedBelt?.parentId ?? null
     if (!parentId) return
     const parent = system.bodies.find((b) => b.id === parentId)
-    if (parent) selectBody(parent)
+    if (parent) {
+      selectBody(parent)
+      recordAction({ type: 'up' })
+    }
   }
   // "Down" descends into the first real child of the selected body (its
   // own list order — e.g. a planet's moons appear right after it in the
@@ -368,15 +505,20 @@ export function OrbitalSystemScene({
   function goDown() {
     if (!selectedBody) return
     const child = system.bodies.find((b) => b.parentId === selectedBody.id)
-    if (child) selectBody(child)
+    if (child) {
+      selectBody(child)
+      recordAction({ type: 'down' })
+    }
   }
   function recenter() {
-    if (selectedBody) setFocus(computeFocusForBody(selectedBody, system, simDate))
-    else if (selectedBelt) setFocus(computeFocusForBelt(selectedBelt, system, simDate))
+    if (selectedBody) setFocus(focusOnBodyWithTrajectory(selectedBody))
+    else if (selectedBelt) setFocus(computeFocusForBelt(selectedBelt, system, flightTargetDate()))
+    recordAction({ type: 'recenter' })
   }
   function reset() {
     setSelection(null)
-    setFocus(computeFocusForSystem(system, simDate))
+    setFocus(computeFocusForSystem(system, flightTargetDate()))
+    recordAction({ type: 'reset' })
   }
 
   // Slider input is [0, 1], log-mapped to the camera's real distance range
@@ -399,6 +541,13 @@ export function OrbitalSystemScene({
   // selected fixes both at once.
   function handleZoomSliderChange(sliderPosition: number) {
     manualZoomDistanceRef.current = sliderPositionToDistance(sliderPosition, zoomSliderMinDistance, MAX_CAMERA_DISTANCE)
+    // Debounced — a drag fires this on every pixel of pointer movement, and
+    // logging every tick would flood the log with entries no reproduction
+    // script actually needs; only the settled final position matters.
+    if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
+    zoomDebounceRef.current = setTimeout(() => {
+      recordAction({ type: 'set-zoom', sliderPosition })
+    }, 300)
   }
 
   // Frame the whole system on first load, and again whenever a different
@@ -408,10 +557,16 @@ export function OrbitalSystemScene({
   // previous one left behind, which is almost never a sane framing for it.
   useEffect(() => {
     setSelection(null)
-    setFocus(computeFocusForSystem(system, simDate))
+    setFocus(computeFocusForSystem(system, flightTargetDate()))
     setHoveredId(null)
     hoveredIdRef.current = null
     setVisibleLabelIds(new Set())
+    // Restarts the action log's own clock for this system's session — both
+    // on first mount and on switching to a different system, so atMs reads
+    // "time since this system started" rather than accumulating across
+    // unrelated systems.
+    logStartRef.current = performance.now()
+    recordAction({ type: 'session-start', systemId: system.id, initialPlaying: playing, initialDaysPerSecond: daysPerSecond })
     // Deliberately keyed on system.id alone, not simDate (which ticks every
     // frame) or the setters (stable) — this must re-run only when a
     // genuinely different system loads in, not on every simulation tick.
@@ -554,6 +709,8 @@ export function OrbitalSystemScene({
           <CameraRig
             focus={focus}
             trackedPosition={trackedPosition}
+            colliderBodies={colliderBodies}
+            focusedId={focusedBodyId}
             manualDistance={manualZoomDistanceRef}
             onDistanceChange={setCameraDistance}
             minDistance={zoomSliderMinDistance}
@@ -575,21 +732,47 @@ export function OrbitalSystemScene({
 
         {hasOrbitalMotion && (
           <div style={uiStyles.timeBar}>
-            <button onClick={() => setPlaying((p) => !p)} style={uiStyles.button}>
+            <button
+              onClick={() => {
+                const next = !playing
+                setPlaying(next)
+                recordAction(next ? { type: 'play' } : { type: 'pause' })
+              }}
+              style={uiStyles.button}
+            >
               {playing ? 'Pause' : 'Play'}
             </button>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: UI_COLORS.textMuted }}>
               Speed
+              {/* Reuses the zoom slider's own generic log-mapping (see
+                  zoomSlider.ts) — same underlying problem (a value from a
+                  MIN/MAX range off a linear [0, 1] slider position), just
+                  for playback speed instead of camera distance; see
+                  timeScale.ts for why this range specifically needs it. */}
               <input
                 type="range"
                 min={0}
-                max={50}
-                step={0.5}
-                value={daysPerSecond}
-                onChange={(e) => setDaysPerSecond(Number(e.target.value))}
+                max={1000}
+                step={1}
+                value={distanceToSliderPosition(daysPerSecond, REAL_TIME_DAYS_PER_SECOND, MAX_DAYS_PER_SECOND) * 1000}
+                onChange={(e) => {
+                  const next = sliderPositionToDistance(
+                    Number(e.target.value) / 1000,
+                    REAL_TIME_DAYS_PER_SECOND,
+                    MAX_DAYS_PER_SECOND
+                  )
+                  setDaysPerSecond(next)
+                  // Debounced for the same reason as the zoom slider above —
+                  // a drag fires this continuously.
+                  if (speedDebounceRef.current) clearTimeout(speedDebounceRef.current)
+                  speedDebounceRef.current = setTimeout(() => {
+                    recordAction({ type: 'set-speed', daysPerSecond: next })
+                  }, 300)
+                }}
+                title={`Playback speed — logarithmic, from real-time up to ${MAX_DAYS_PER_SECOND * 24} simulated hours per second`}
               />
-              <span style={{ color: UI_COLORS.text, fontFamily: 'monospace', width: 64 }}>
-                {daysPerSecond.toFixed(1)} d/s
+              <span style={{ color: UI_COLORS.text, fontFamily: 'monospace', width: 96 }}>
+                {formatPlaybackSpeed(daysPerSecond)}
               </span>
             </label>
             <span style={{ color: UI_COLORS.textMuted, marginLeft: 'auto', fontFamily: 'monospace' }}>
@@ -614,6 +797,12 @@ export function OrbitalSystemScene({
               </>
             )}
             {selectedBody.note && <div style={uiStyles.mutedItalic}>{selectedBody.note}</div>}
+            {selectedBody.wikiSummary && <div style={uiStyles.wikiSummary}>{selectedBody.wikiSummary}</div>}
+            {selectedBody.wikiUrl && (
+              <a href={selectedBody.wikiUrl} target="_blank" rel="noopener noreferrer" style={uiStyles.wikiLink}>
+                Read more →
+              </a>
+            )}
           </div>
         )}
 
@@ -634,6 +823,12 @@ export function OrbitalSystemScene({
               </div>
             )}
             {selectedBelt.note && <div style={uiStyles.mutedItalic}>{selectedBelt.note}</div>}
+            {selectedBelt.wikiSummary && <div style={uiStyles.wikiSummary}>{selectedBelt.wikiSummary}</div>}
+            {selectedBelt.wikiUrl && (
+              <a href={selectedBelt.wikiUrl} target="_blank" rel="noopener noreferrer" style={uiStyles.wikiLink}>
+                Read more →
+              </a>
+            )}
           </div>
         )}
       </div>

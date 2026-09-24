@@ -1,6 +1,6 @@
 {
   "name": "orbital-engine",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "A true-scale orbital mechanics rendering engine for react-three-fiber — real Keplerian orbits and single-snapshot fixed positions in one data contract, with a pixel-floor system so true-to-scale bodies stay visible.",
   "type": "module",
   "license": "MIT",
@@ -55,6 +55,7 @@
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src e2e",
+    "plot:camera-route": "tsx scripts/plotCameraRoute.ts",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
   "peerDependencies": {
@@ -83,6 +84,7 @@
     "three": "^0.182.0",
     "ts-jest": "^29.4.6",
     "tsup": "^8.3.5",
+    "tsx": "^4.23.15",
     "typedoc": "^0.28.20",
     "typescript": "5.9.3"
   },
