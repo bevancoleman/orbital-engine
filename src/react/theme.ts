@@ -72,6 +72,8 @@ export const uiStyles = {
   infoPanelTitle: { fontWeight: 600, fontSize: 14, marginBottom: 4 } as const,
   muted: { color: UI_COLORS.textMuted } as const,
   mutedItalic: { color: UI_COLORS.textMuted, marginTop: 4, fontStyle: 'italic' } as const,
+  wikiSummary: { color: UI_COLORS.text, marginTop: 8, lineHeight: 1.4 } as const,
+  wikiLink: { color: UI_COLORS.accent, marginTop: 4, display: 'inline-block' } as const,
   devPanel: {
     position: 'absolute',
     top: 8,

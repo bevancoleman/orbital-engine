@@ -88,6 +88,7 @@ export function App() {
           onSelectBody={setSelected}
           externalFocus={externalFocus}
           lightFromStar={lightFromStar}
+          devMode
         />
       </div>
     </div>
