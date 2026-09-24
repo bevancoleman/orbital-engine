@@ -2,17 +2,17 @@ import { useEffect, useMemo, useRef, type MutableRefObject } from 'react'
 import { useThree, useFrame } from '@react-three/fiber'
 import { CameraControls } from '@react-three/drei'
 import * as THREE from 'three'
+import { type CameraObstacle, type FocusTarget } from '../camera'
 import {
-  FLY_DURATION_MS,
-  applyContextBulge,
-  computeFlightEndpoint,
-  keepClearOfContextBody,
-  sampleFlightPath,
-  trackingDelta,
-  type CameraObstacle,
-  type FocusTarget,
-} from '../camera'
-import type { WorldVec } from '../render'
+  acknowledgeNullFocus,
+  advanceSteadyTracking,
+  beginFlight,
+  createFlightLifecycleState,
+  focusChanged,
+  recordLiveTrackedPosition,
+  sampleFlight,
+  settleFlight,
+} from './cameraFlightLifecycle'
 
 /** Smoothing for MANUAL orbit/drag/dolly only — camera-controls' own
  *  transition system still owns that interaction, since a hand gesture has
@@ -233,83 +233,20 @@ export function CameraRig({
   }, [camera, nearPlane])
 
   const controlsRef = useRef<CameraControls | null>(null)
-  // The last known-good unit viewing direction — used as a starting
-  // direction for a new flight when the camera and target genuinely
-  // coincide (only ever true on the very first frame, before anything's
-  // been framed yet), and to compute the manual zoom slider's dolly axis.
-  const lastGoodDirection = useRef<WorldVec>([0, 0.447, 0.894]) // matches the initial [0,60,120] camera offset
-  // Set while a fly-to is in progress — during this window, tracking a
-  // moving body shifts the flight's own live END anchor (still homing in
-  // on the body's current position) rather than rigidly translating
-  // wherever the camera/target already settled (see useFrame below).
-  const isFlying = useRef(false)
-  // Everything sampleFlightPath needs each frame: where the flight started
-  // (fixed for its whole duration) and where it ENDS — also fixed, not
-  // re-aimed at the tracked body's live position frame to frame. That
-  // used to be the design (see this file's own header comment, sixth bug):
-  // it correctly avoided arriving at a stale snapshot for a slowly-moving
-  // body, but for a body whose orbital period is far shorter than the
-  // flight's own duration (the ISS at high simulated time can complete
-  // dozens of full laps within one ~900ms flight), re-sampling its
-  // instantaneous position every frame meant each frame's "live end"
-  // was practically a different, essentially random point on that tiny
-  // fast circle — reported directly as violent jumping while flying to
-  // the ISS with time playing. `endTarget` is now wherever
-  // computeFocusForBody predicted the body WOULD BE by the time this
-  // flight actually finishes (see OrbitalSystemScene's flightTargetDate),
-  // computed ONCE, deterministically, from the same exact orbital math
-  // that positions the body for rendering — no per-frame re-aiming needed
-  // at all, and no way for it to alias into jitter no matter how fast the
-  // orbit is.
-  const flightState = useRef({
-    startPosition: [0, 60, 120] as WorldVec,
-    startTarget: [0, 0, 0] as WorldVec,
-    endPosition: [0, 0, 0] as WorldVec,
-    endTarget: [0, 0, 0] as WorldVec,
-    startTimeMs: 0,
-    // The nearest shared ancestor of the outgoing and incoming body (see
-    // camera.ts's findContextBody) — Earth, for a flight between the ISS
-    // and Hubble — kept in frame around the flight's midpoint (see
-    // applyContextBulge below) so it doesn't flicker out of view behind/
-    // inside its own mesh partway through a flight between two of its
-    // close satellites. null when there isn't one worth showing.
-    contextBody: null as { position: WorldVec; radius: number } | null,
-  })
-  // The tracked body's world position as of the last frame — compared
-  // against the current trackedPosition each frame to derive how far it
-  // moved, which is then applied equally to the camera and its target (see
-  // camera.ts's trackingDelta).
-  const lastTrackedPosition = useRef<WorldVec | null>(null)
-
-  // Which body ids are currently EXCLUDED from colliderMeshes — see this
-  // file's own header comment for why this has to widen to both the
-  // outgoing and incoming body for the duration of a flight, not just
-  // whatever's currently selected. Starts empty (nothing selected yet).
-  const excludedColliderIds = useRef<Set<string>>(new Set())
-  // The focusedId a flight was headed toward the last time one started —
-  // becomes "the outgoing body" the NEXT time selection changes.
-  const previousFocusedId = useRef<string | null>(null)
-  // The `focus` this component has already started a flight for — compared
-  // against the current `focus` prop EVERY FRAME (see useFrame below) to
-  // detect a fresh selection. See this file's header comment (fifth bug)
-  // for why this detection has to live inside useFrame itself rather than
-  // a separate useEffect.
-  const lastSeenFocus = useRef<FocusTarget | null>(null)
+  // Owns everything about whether a flight is in progress, where it's
+  // headed, and which bodies are currently excluded from collision — see
+  // cameraFlightLifecycle.ts, extracted out of this component specifically
+  // so the sequencing this file's header documents six real bugs about can
+  // be pinned down by a plain, fast unit test (cameraFlightLifecycle.test.ts)
+  // instead of only an e2e run or a manual repro.
+  const flightLifecycleRef = useRef(createFlightLifecycleState([0, 0.447, 0.894])) // matches the initial [0,60,120] camera offset
 
   const lastReportedDistance = useRef(-1)
   useFrame(() => {
     const controls = controlsRef.current
     if (!controls) return
 
-    // Ends a flight — used both once it's actually run its course (below)
-    // and when a manual slider drag interrupts one early. The outgoing
-    // body becomes a legitimate collider again here, not before; see this
-    // file's header comment on why BOTH bodies stay excluded until this
-    // point.
-    const settleFlight = () => {
-      isFlying.current = false
-      excludedColliderIds.current = new Set(focusedId ? [focusedId] : [])
-    }
+    let lifecycle = flightLifecycleRef.current
 
     // Starts a new flight the instant `focus` changes — inline here, not
     // in a separate useEffect, and checked FIRST, before anything below
@@ -335,8 +272,7 @@ export function CameraRig({
     // in the same frame the tracking branches below also run in, makes it
     // impossible for that branch to ever see a stale isFlying/trackedPosition
     // pairing again.
-    if (focus !== lastSeenFocus.current) {
-      lastSeenFocus.current = focus
+    if (focusChanged(lifecycle, focus)) {
       if (focus) {
         // receiveEndValue=false — the LIVE camera/target, not wherever a
         // still-in-progress previous flight was ultimately headed (see
@@ -345,40 +281,16 @@ export function CameraRig({
         // camera actually, visibly is.
         const currentCameraPos = controls.getPosition(new THREE.Vector3(), false)
         const currentTargetPos = controls.getTarget(new THREE.Vector3(), false)
-        const startPosition: WorldVec = [currentCameraPos.x, currentCameraPos.y, currentCameraPos.z]
-        const startTarget: WorldVec = [currentTargetPos.x, currentTargetPos.y, currentTargetPos.z]
-        // position/target here are already exactly where this flight ENDS —
-        // focus.position is the PREDICTED position (see OrbitalSystemScene's
-        // flightTargetDate/computeFocusForBody's own comment), not a live
-        // snapshot, so this needs no further updating for the rest of the
-        // flight's duration.
-        const { position: endPosition, target: endTarget, direction } = computeFlightEndpoint(
-          startPosition,
-          startTarget,
+        lifecycle = beginFlight(lifecycle, {
           focus,
-          lastGoodDirection.current
-        )
-        lastGoodDirection.current = direction
-        flightState.current = {
-          startPosition,
-          startTarget,
-          endPosition,
-          endTarget,
-          startTimeMs: performance.now(),
-          contextBody: focus.contextBody,
-        }
-        isFlying.current = true
-        lastTrackedPosition.current = trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
-
-        // Exclude both where we're headed (so we can actually get close to
-        // it) and where we're coming from (so its own collider doesn't
-        // yank the still-nearby live camera the instant it becomes solid
-        // again) — see this file's header comment for the exact jump this
-        // prevents.
-        excludedColliderIds.current = new Set(
-          [focusedId, previousFocusedId.current].filter((id): id is string => id !== null)
-        )
-        previousFocusedId.current = focusedId
+          focusedId,
+          currentCameraPos: [currentCameraPos.x, currentCameraPos.y, currentCameraPos.z],
+          currentTargetPos: [currentTargetPos.x, currentTargetPos.y, currentTargetPos.z],
+          trackedPosition: trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null,
+          nowMs: performance.now(),
+        })
+      } else {
+        lifecycle = acknowledgeNullFocus(lifecycle)
       }
     }
 
@@ -388,56 +300,21 @@ export function CameraRig({
     // zoom is immediate. Consumed once (reset to null) so it only fires for
     // genuinely new slider input, not every subsequent frame.
     if (manualDistance.current !== null) {
-      if (isFlying.current) settleFlight()
+      if (lifecycle.isFlying) lifecycle = settleFlight(lifecycle, focusedId)
       void controls.dollyTo(manualDistance.current, false)
       manualDistance.current = null
     }
 
-    if (isFlying.current) {
+    if (lifecycle.isFlying) {
       // Driven entirely by OUR OWN eased tween (see camera.ts's
       // sampleFlightPath and this file's header comment, fourth bug) —
       // camera-controls' own transition system is never invoked for this;
       // `setLookAt(..., false)` below just copies our already-eased values
       // straight in. Both endpoints are FIXED for the flight's whole
-      // duration (see flightState's own comment, sixth bug) — no re-aiming
-      // at a live position here at all, which is what used to alias a fast
-      // orbiter's own motion into visible jitter.
-      const state = flightState.current
-      const t = (performance.now() - state.startTimeMs) / FLY_DURATION_MS
-      const { position: pathPosition, target: pathTarget } = sampleFlightPath(
-        state.startPosition,
-        state.startTarget,
-        state.endPosition,
-        state.endTarget,
-        t
-      )
-      // pathTarget is sampleFlightPath's own independently-lerped target —
-      // a straight line between two points that can each be on very
-      // different sides of a shared nearby parent (the ISS and Hubble,
-      // both near Earth), so the straight line between them can pass
-      // straight through that parent's own interior. Pushed back outside
-      // it (a no-op whenever it's already clear, including always at the
-      // flight's own real t=0/t=1 endpoints) BEFORE it's used as the
-      // look-at anchor for anything below — no amount of correcting the
-      // camera's own offset from target helps if target itself is buried
-      // inside the context body's own volume.
-      const target = keepClearOfContextBody(pathTarget, state.contextBody)
-      // Pulls the camera back further than the flight's own natural
-      // framing, only around the flight's own midpoint, if needed to keep
-      // a shared context body in frame — falls back to pathPosition
-      // completely untouched whenever there's no context body to guard
-      // for (see applyContextBulge's own comment for why it needs the
-      // flight's raw start/end points too, not just pathPosition itself).
-      const position = applyContextBulge(
-        pathPosition,
-        state.startPosition,
-        state.startTarget,
-        state.endPosition,
-        state.endTarget,
-        target,
-        state.contextBody,
-        t
-      )
+      // duration (see cameraFlightLifecycle's own FlightState comment,
+      // sixth bug) — no re-aiming at a live position here at all, which is
+      // what used to alias a fast orbiter's own motion into visible jitter.
+      const { position, target, progress } = sampleFlight(lifecycle, performance.now())
       void controls.setLookAt(position[0], position[1], position[2], target[0], target[1], target[2], false)
       // Still updated every frame — NOT for this flight's own math (which
       // no longer needs it), but so the steady-state branch's very first
@@ -445,15 +322,19 @@ export function CameraRig({
       // a big correction: by the time this flight ends, the body's real
       // live position should already almost exactly match the predicted
       // endTarget it flew to, since orbital motion is fully deterministic.
-      lastTrackedPosition.current = trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
-      if (t >= 1) settleFlight()
-    } else if (trackedPosition) {
+      lifecycle = recordLiveTrackedPosition(lifecycle, trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null)
+      if (progress >= 1) lifecycle = settleFlight(lifecycle, focusedId)
+    } else {
       // No flight in progress: rigidly translate the camera and its
       // target by however far the body moved since the last frame,
       // preserving whatever distance/angle is currently in effect (which
       // may differ from the flight's own, if the user has since dragged
       // or zoomed manually).
-      const delta = trackingDelta(lastTrackedPosition.current, trackedPosition as WorldVec)
+      const { state: nextLifecycle, delta } = advanceSteadyTracking(
+        lifecycle,
+        trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
+      )
+      lifecycle = nextLifecycle
       if (delta) {
         // receiveEndValue=false — shift the LIVE (actually rendered)
         // camera/target, not the transition-end state. Reading the end
@@ -484,10 +365,9 @@ export function CameraRig({
           false
         )
       }
-      lastTrackedPosition.current = [...(trackedPosition as WorldVec)]
-    } else {
-      lastTrackedPosition.current = null
     }
+
+    flightLifecycleRef.current = lifecycle
 
     // Report the live camera-to-target distance for LOD (see BodyMarker) —
     // epsilon-throttled so a continuous drag/zoom gesture doesn't trigger a
@@ -507,7 +387,7 @@ export function CameraRig({
     // miss). See this file's header comment for why the excluded set has
     // to be a moving window rather than a fixed "current selection" value.
     controls.colliderMeshes = colliderBodies
-      .filter((o) => !excludedColliderIds.current.has(o.id))
+      .filter((o) => !lifecycle.excludedColliderIds.has(o.id))
       .map((o) => colliderMeshRefs.current.get(o.id))
       .filter((m): m is THREE.Mesh => m != null)
   })

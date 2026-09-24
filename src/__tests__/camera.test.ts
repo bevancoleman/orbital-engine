@@ -10,6 +10,7 @@ import {
   computeFocusForBelt,
   computeFocusForBody,
   computeFocusForSystem,
+  computeSmoothedTrackedPosition,
   applyContextBulge,
   contextFitDistance,
   distanceToFit,
@@ -25,7 +26,7 @@ import {
   trackingDelta,
   type FocusTarget,
 } from '../camera'
-import type { WorldVec } from '../render'
+import { resolveWorldPosition, type WorldVec } from '../render'
 import { trueRadius } from '../scale'
 import type { CelestialBody, OrbitalElements, StarSystemData } from '../types'
 
@@ -1069,6 +1070,92 @@ describe('sampleFlightPath — the camera path CameraRig actually renders each f
     }
 
     expect(maxStepAngleDeg).toBeLessThan(6)
+  })
+})
+
+describe('computeSmoothedTrackedPosition — live counterpart to routeCameraSimulator\'s precomputed smoothing window', () => {
+  // A moon whose own PARENT is also orbiting — the genuinely epicyclic case
+  // smoothTrajectory/adaptiveSmoothingRadius exist for (see their own
+  // comments in camera.ts). Fast enough that a handful of frames either
+  // side of "now" already shows real curvature to smooth.
+  function epicycleSystem(): StarSystemData {
+    const planetOrbit: OrbitalElements = {
+      semiMajorAxisKm: 150_000_000,
+      eccentricity: 0,
+      inclinationDeg: 0,
+      longitudeOfAscendingNodeDeg: 0,
+      argumentOfPeriapsisDeg: 0,
+      meanAnomalyAtEpochDeg: 0,
+      orbitalPeriodDays: 200,
+      epoch: DATE.toISOString(),
+    }
+    const moonOrbit: OrbitalElements = {
+      semiMajorAxisKm: 30_000,
+      eccentricity: 0,
+      inclinationDeg: 5,
+      longitudeOfAscendingNodeDeg: 0,
+      argumentOfPeriapsisDeg: 0,
+      meanAnomalyAtEpochDeg: 0,
+      orbitalPeriodDays: 0.31891, // Phobos-ish — see timeScale.ts's MAX_HOURS_PER_SECOND
+      epoch: DATE.toISOString(),
+    }
+    return {
+      id: 'test',
+      name: 'Test',
+      bodies: [
+        body({ id: 'star', parentId: null, type: 'star', radiusKm: 600_000, fixedPosition: undefined }),
+        { ...body({ id: 'planet', parentId: 'star', type: 'planet', radiusKm: 6_000, fixedPosition: undefined }), orbit: planetOrbit },
+        { ...body({ id: 'moon', parentId: 'planet', type: 'moon', radiusKm: 400, fixedPosition: undefined }), orbit: moonOrbit },
+      ],
+    }
+  }
+
+  it('is a no-op (up to float noise) with windowRadius 0', () => {
+    const system = epicycleSystem()
+    const moon = system.bodies.find((b) => b.id === 'moon')!
+    const raw = resolveWorldPosition(moon, system.bodies, DATE)
+    const smoothed = computeSmoothedTrackedPosition(moon, system, DATE, 0.25, 0.05, 0)
+    expect(smoothed).toEqual(raw)
+  })
+
+  it('is a no-op (up to float noise) while paused — every window sample is identical', () => {
+    const system = epicycleSystem()
+    const moon = system.bodies.find((b) => b.id === 'moon')!
+    const raw = resolveWorldPosition(moon, system.bodies, DATE)
+    const smoothed = computeSmoothedTrackedPosition(moon, system, DATE, 0, 0.05)
+    for (let i = 0; i < 3; i++) {
+      expect(smoothed[i]!).toBeCloseTo(raw[i]!, 9)
+    }
+  })
+
+  it('falls back to less smoothing (staying closer to the raw position) for a tight, close-up viewing distance', () => {
+    // The exact adaptive-fallback pattern adaptiveSmoothingRadius exists
+    // for: a true-scale close orbiter can't afford the same absolute lag a
+    // wide establishing shot can — see that function's own comment for the
+    // measured framing-loss bug a fixed-radius window caused.
+    const system = epicycleSystem()
+    const moon = system.bodies.find((b) => b.id === 'moon')!
+    const raw = resolveWorldPosition(moon, system.bodies, DATE)
+    const distanceFrom = (p: WorldVec) => Math.hypot(...subtract(p, raw))
+
+    const closeUp = computeSmoothedTrackedPosition(moon, system, DATE, 6 / 24, 0.03)
+    const wideShot = computeSmoothedTrackedPosition(moon, system, DATE, 6 / 24, 5)
+    expect(distanceFrom(closeUp)).toBeLessThan(distanceFrom(wideShot))
+  })
+
+  it('never lags the tracked position by more than roughly maxLagFraction of the viewing distance', () => {
+    // Not an exact bound (adaptiveSmoothingRadius searches a discrete set
+    // of radii, so the chosen one can land comfortably under the fraction
+    // rather than exactly at it) — just confirms the safety margin
+    // computeSmoothedTrackedPosition inherits from adaptiveSmoothingRadius
+    // actually holds for a real, non-trivial epicycle case.
+    const system = epicycleSystem()
+    const moon = system.bodies.find((b) => b.id === 'moon')!
+    const raw = resolveWorldPosition(moon, system.bodies, DATE)
+    const viewingDistance = 0.03
+    const smoothed = computeSmoothedTrackedPosition(moon, system, DATE, 6 / 24, viewingDistance)
+    const lag = Math.hypot(...subtract(smoothed, raw))
+    expect(lag).toBeLessThanOrEqual(0.15 * viewingDistance)
   })
 })
 

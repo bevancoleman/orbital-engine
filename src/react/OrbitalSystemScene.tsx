@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
-import { resolveWorldPosition } from '../render'
 import { trueRadius } from '../scale'
 import {
   DEFAULT_CAMERA_DISTANCE,
@@ -14,13 +13,15 @@ import {
   computeFocusForBelt,
   computeFocusForBody,
   computeFocusForSystem,
+  computeSmoothedTrackedPosition,
   minCameraDistanceForRadius,
   nearPlaneForRadius,
+  safePredictFlightTarget,
   type FocusTarget,
 } from '../camera'
 import { formatDistanceKm } from '../units'
 import { distanceToSliderPosition, sliderPositionToDistance } from '../zoomSlider'
-import { DEFAULT_DAYS_PER_SECOND, MAX_DAYS_PER_SECOND, REAL_TIME_DAYS_PER_SECOND, formatPlaybackSpeed } from '../timeScale'
+import { DEFAULT_DAYS_PER_SECOND, MAX_DAYS_PER_SECOND, REAL_TIME_DAYS_PER_SECOND, clampPlaybackSpeed, formatPlaybackSpeed } from '../timeScale'
 import { computeObjectCounts, lodSummaryFor } from '../devStats'
 import type { ActionLogEntry } from '../actionLog'
 import { validateSystemData, type SystemDataWarning } from '../validateSystemData'
@@ -248,10 +249,14 @@ export interface OrbitalSystemSceneProps {
    */
   initialPlaying?: boolean
   /** Simulated days advanced per real second once playing — see
-   *  timeScale.ts for the full real-time-to-a-year-per-60s range this can
-   *  usefully span. Defaults to DEFAULT_DAYS_PER_SECOND. Only sets the
-   *  STARTING speed; the user's own Speed slider still changes it from
-   *  there like normal. */
+   *  timeScale.ts for the real-time-to-MAX_HOURS_PER_SECOND range this can
+   *  usefully span (clamped via clampPlaybackSpeed, so an out-of-range
+   *  value passed here is corrected rather than trusted directly — the
+   *  Speed slider's own drag handler already stays in range by construction,
+   *  but this prop comes from the consumer, e.g. a deep link or saved
+   *  session, and has no such guarantee). Defaults to DEFAULT_DAYS_PER_SECOND.
+   *  Only sets the STARTING speed; the user's own Speed slider still changes
+   *  it from there like normal. */
   initialDaysPerSecond?: number
   /** Fired for every recordable user interaction (selection, playback
    *  controls, camera zoom) — see actionLog.ts's ActionLogEntry. Lets a
@@ -278,7 +283,7 @@ export function OrbitalSystemScene({
 }: OrbitalSystemSceneProps) {
   const [simDate, setSimDate] = useState(() => new Date())
   const [playing, setPlaying] = useState(initialPlaying)
-  const [daysPerSecond, setDaysPerSecond] = useState(initialDaysPerSecond)
+  const [daysPerSecond, setDaysPerSecond] = useState(clampPlaybackSpeed(initialDaysPerSecond))
   // When the current log "session" started (performance.now()) — atMs on
   // every emitted entry is relative to this, not wall-clock time, since a
   // reproduction script cares about elapsed time between actions. Reset by
@@ -313,6 +318,20 @@ export function OrbitalSystemScene({
   function flightTargetDate(): Date {
     if (!playing) return simDate
     return new Date(simDate.getTime() + daysPerSecond * 86_400_000 * (FLY_DURATION_MS / 1000))
+  }
+  // computeFocusForBody, plus (while playing) where `body` will REALLY be
+  // at each moment of the flight there, not just at its predicted end point
+  // — see safePredictFlightTarget and FocusTarget.predictedTargetAt's own
+  // comments. Skipped entirely while paused: simDate === flightTargetDate()
+  // in that case, so every sample would be identical to the single fixed
+  // endpoint computeFocusForBody already predicts, same reasoning
+  // flightTargetDate itself already uses.
+  function focusOnBodyWithTrajectory(body: CelestialBody, previousBody: CelestialBody | null = null): FocusTarget {
+    const target = computeFocusForBody(body, system, flightTargetDate(), previousBody)
+    const predictedTargetAt = playing
+      ? (safePredictFlightTarget(body, system, simDate, daysPerSecond, target.distance) ?? undefined)
+      : undefined
+    return { ...target, predictedTargetAt }
   }
   const [selection, setSelection] = useState<Selection>(null)
   const [focus, setFocus] = useState<FocusTarget | null>(null)
@@ -379,10 +398,24 @@ export function OrbitalSystemScene({
   // (see CameraRig's minDistance prop) — shared so the slider's displayed
   // position always agrees with what range [0, 1] actually spans.
   const zoomSliderMinDistance = minCameraDistanceForRadius(selectedBodyRadius)
-  // The selected body's LIVE world position, recomputed every time simDate
+  // The selected body's world position, recomputed every time simDate
   // advances — see CameraRig's trackedPosition prop for why this exists
   // (a real orbiting body doesn't stay where it was when first selected).
-  const trackedPosition = selectedBody ? resolveWorldPosition(selectedBody, system.bodies, simDate) : null
+  // Routed through computeSmoothedTrackedPosition rather than a single raw
+  // resolveWorldPosition sample — see that function's own comment: a body
+  // whose own PARENT is also moving (a moon of an orbiting planet) can
+  // trace a genuinely epicyclic path that a plain per-frame backward
+  // difference tracks jerkily, and smoothing there is safe to apply
+  // unconditionally (not behind a toggle) because it already falls back to
+  // exact, unsmoothed tracking on its own whenever smoothing would risk
+  // lagging the target out of frame (a true-scale close orbiter) — the
+  // same adaptive-fallback pattern safePredictFlightTarget uses for the
+  // flight side above. cameraDistance (the LIVE camera-to-target distance
+  // reported by CameraRig, not a stale flight-start snapshot) is what that
+  // fallback check is measured against.
+  const trackedPosition = selectedBody
+    ? computeSmoothedTrackedPosition(selectedBody, system, simDate, daysPerSecond, cameraDistance)
+    : null
   // Every body, fed to CameraRig as invisible collision proxies (see
   // camera.ts's computeColliderBodies) — unfiltered; CameraRig itself
   // decides which of these are active colliders at any given moment (it
@@ -416,7 +449,7 @@ export function OrbitalSystemScene({
     // Earth for a flight between the ISS and Hubble. null when nothing
     // (or a belt) was selected before this.
     setSelection({ kind: 'body', id: body.id })
-    setFocus(computeFocusForBody(body, system, flightTargetDate(), selectedBody))
+    setFocus(focusOnBodyWithTrajectory(body, selectedBody))
     recordAction({ type: 'select-body', bodyId: body.id })
   }
   function selectBody(body: CelestialBody) {
@@ -478,7 +511,7 @@ export function OrbitalSystemScene({
     }
   }
   function recenter() {
-    if (selectedBody) setFocus(computeFocusForBody(selectedBody, system, flightTargetDate()))
+    if (selectedBody) setFocus(focusOnBodyWithTrajectory(selectedBody))
     else if (selectedBelt) setFocus(computeFocusForBelt(selectedBelt, system, flightTargetDate()))
     recordAction({ type: 'recenter' })
   }
@@ -736,7 +769,7 @@ export function OrbitalSystemScene({
                     recordAction({ type: 'set-speed', daysPerSecond: next })
                   }, 300)
                 }}
-                title="Playback speed — logarithmic, from real-time up to a simulated year every 60 seconds"
+                title={`Playback speed — logarithmic, from real-time up to ${MAX_DAYS_PER_SECOND * 24} simulated hours per second`}
               />
               <span style={{ color: UI_COLORS.text, fontFamily: 'monospace', width: 96 }}>
                 {formatPlaybackSpeed(daysPerSecond)}

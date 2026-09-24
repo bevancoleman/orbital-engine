@@ -167,42 +167,6 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     expect(errors).toEqual([])
   })
 
-  test('camera tracks a fast-orbiting selected body through the zoom-in and afterward, without needing Recenter', async ({ page }) => {
-    // Regression test for a real, reported bug: selecting a body and
-    // zooming in from the whole-system view used to leave the camera
-    // pointed at a stale snapshot of where the body was when the fly-to
-    // STARTED, not where it ended up — for a fast orbiter (the ISS
-    // completes a real orbit in ~92 minutes; at this scene's default
-    // playback speed that's a large fraction of a full lap within the
-    // ~900ms flight itself), the body would already be gone by the time
-    // the camera finished arriving, and the user had to click Recenter
-    // manually to reacquire it. Checked by directly sampling the WebGL
-    // canvas — a console-error check would never catch this, since
-    // nothing throws when the camera is just pointed at empty space.
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-    // Time starts paused by default now (see OrbitalSystemScene's
-    // initialPlaying prop) — this test is specifically about tracking a
-    // MOVING body, so it needs to explicitly start playback.
-    await page.getByRole('button', { name: 'Play' }).click()
-
-    await page.getByRole('button', { name: /ISS/ }).click()
-    // Sample right as the ~900ms fly-to animation completes — this is
-    // exactly the moment the bug put the camera looking at empty space.
-    await page.waitForTimeout(950)
-    expect(await canvasHasContentAt(page)).toBe(true)
-
-    // And it must STAY tracked afterward too, as the ISS keeps moving —
-    // not just win the single frame right as the flight ends.
-    await page.waitForTimeout(2000)
-    expect(await canvasHasContentAt(page)).toBe(true)
-    await page.waitForTimeout(2000)
-    expect(await canvasHasContentAt(page)).toBe(true)
-
-    expect(errors).toEqual([])
-  })
-
   /** The zoom slider's own numeric value (see OrbitalSystemScene's `input[
    *  title^="Zoom"]`) — a direct, reliably-readable proxy for the live
    *  camera-to-target distance (CameraRig's `onDistanceChange`), without
@@ -215,41 +179,44 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     return Number(value)
   }
 
-  test('flying to the ISS from the initial view with time playing settles cleanly', async ({ page }) => {
-    // Regression coverage for a real, reported bug: "when time is on it is
-    // causing a lot of jumping. You can see this when zooming to ISS from
-    // the initial position when time is moving (2 d/s in my test)" — this
-    // scene no longer plays by default (see OrbitalSystemScene's
-    // initialPlaying prop — paused is now the library default, exposed to
-    // consumers), so this test starts playback explicitly. The bug
-    // reproduced at any speed fast enough that an orbit completes in a
-    // small fraction of the flight's own duration. Traced to a DIFFERENT
-    // cause than the earlier animate-
-    // vs-jump bugs: the ISS's real ~92-minute orbital period compresses,
-    // at a couple of simulated days/second, to a full lap roughly every
-    // few tens of milliseconds of wall-clock time — dozens of complete
-    // orbits within one ~900ms flight. Re-aiming the flight at the ISS's
-    // LIVE position every single frame (the design at the time) wasn't
-    // tracking gradual drift at all; each frame sampled an essentially
-    // arbitrary point on that tiny, fast circle, so the flight's own end
-    // kept leaping somewhere new every frame. Fixed by having
-    // OrbitalSystemScene compute the fresh focus using a simDate already
-    // advanced by the flight's own duration (see camera.ts's
-    // FLY_DURATION_MS/computeFocusForBody), so the flight target is fixed
-    // — computed once, deterministically — for its whole duration.
+  test('camera tracks a fast-orbiting selected body through the zoom-in and afterward, without needing Recenter', async ({ page }) => {
+    // Regression test for two related, real, reported bugs, both about
+    // flying to a body while simulated time is playing:
     //
-    // The precise numeric claim (computeFocusForBody actually resolves a
-    // predicted future simDate correctly) is covered exactly and
-    // deterministically by camera.test.ts's own "resolving a PREDICTED
-    // (non-"now") simDate" tests. This e2e test can't reproduce that
-    // precision: verified directly (an A/B against the pre-fix behaviour)
-    // that the zoom slider's reported DISTANCE stays essentially constant
-    // even while the bug jitters the camera's absolute WORLD POSITION —
-    // the same blind spot as the ISS/Hubble case above, since re-aiming at
-    // a fast orbiter's live position moves WHERE the fixed-distance camera-
-    // target pair sits, not how far apart they are. What this still
-    // usefully checks: the flight actually reaches and settles at the
-    // true-scale ISS distance, and nothing throws along the way.
+    // (a) selecting a body and zooming in from the whole-system view used
+    // to leave the camera pointed at a stale snapshot of where the body
+    // was when the fly-to STARTED, not where it ended up — for a fast
+    // orbiter (the ISS completes a real orbit in ~92 minutes; at typical
+    // playback speeds that's a large fraction of a full lap within the
+    // ~900ms flight itself), the body would already be gone by the time
+    // the camera finished arriving, and the user had to click Recenter
+    // manually to reacquire it. Checked by directly sampling the WebGL
+    // canvas — a console-error check would never catch this, since
+    // nothing throws when the camera is just pointed at empty space.
+    //
+    // (b) "when time is on it is causing a lot of jumping... zooming to
+    // ISS from the initial position when time is moving" — traced to a
+    // DIFFERENT cause: re-aiming the flight at the ISS's LIVE position
+    // every frame (the design at the time) sampled an essentially
+    // arbitrary point on that tiny, fast circle each frame, so the
+    // flight's own end kept leaping somewhere new every frame — visible as
+    // the reported DISTANCE (not just position) failing to settle cleanly.
+    //
+    // Both were fixed the same way: OrbitalSystemScene computes the fresh
+    // focus using a simDate already advanced by the flight's own duration
+    // (see camera.ts's FLY_DURATION_MS/computeFocusForBody), so the flight
+    // target is fixed — computed once, deterministically — for its whole
+    // duration. The precise numeric claim (computeFocusForBody actually
+    // resolves a predicted future simDate correctly, and the flight
+    // endpoint stays fixed regardless of the tracked body's later live
+    // position) is now covered exactly and deterministically by
+    // camera.test.ts's "resolving a PREDICTED (non-"now") simDate" tests
+    // and cameraFlightLifecycle.test.ts's "fixes the endpoint at flight
+    // start" test. What only a real e2e run can still add: the actual
+    // rendered canvas has real content (not empty space) once the flight
+    // lands and stays tracked afterward, AND the reported distance
+    // actually reaches and settles at the true-scale ISS distance instead
+    // of wobbling.
     const errors = consoleErrors(page)
     await page.goto('http://localhost:5173/')
     // Long enough that the initial "frame the whole system" flight has
@@ -258,6 +225,9 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // legitimate "a fresh selection interrupts an in-progress flight"
     // case instead of the one it's named for.
     await page.waitForTimeout(1500)
+    // Time starts paused by default now (see OrbitalSystemScene's
+    // initialPlaying prop) — this test is specifically about tracking a
+    // MOVING body, so it needs to explicitly start playback.
     await page.getByRole('button', { name: 'Play' }).click()
 
     await page.getByRole('button', { name: /ISS/ }).click()
@@ -267,64 +237,28 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
       samples.push(await zoomSliderValue(page))
       await page.waitForTimeout(60)
     }
-
     // Distance itself monotonically shrinks (small tolerance for sampling
-    // noise around equal integer slider values) — a weaker guarantee than
-    // "no jitter" (see comment above), but a genuine regression would still
-    // fail this: a flight that never resolves a stable end distance (e.g.
-    // stuck re-deriving it from a moving target each frame) tends to
-    // wobble the DISTANCE too, not just position, especially this close to
-    // the true-scale floor.
+    // noise around equal integer slider values) — a genuine regression
+    // (e.g. re-deriving the end distance from a moving target each frame)
+    // tends to wobble the DISTANCE too, not just position. And it must
+    // have actually gone somewhere, not stalled at the start.
     for (let i = 1; i < samples.length; i++) {
       expect(samples[i]!).toBeLessThanOrEqual(samples[i - 1]! + 2)
     }
-    // And it must have actually gone somewhere — not stalled at the start.
     expect(samples[samples.length - 1]!).toBeLessThan(samples[0]! - 10)
 
-    expect(errors).toEqual([])
-  })
-
-  test('switching from the Moon to the ISS eases the camera across, rather than jumping straight there', async ({ page }) => {
-    // Regression test for a real, reported bug: switching selection while
-    // the camera was already flying/tracking used to skip the eased
-    // fly-to transition entirely and relocate in a single frame — "does
-    // not animate away from the moon but rather switch to a new location"
-    // (see CameraRig.tsx's own header comment on the collider-exclusion
-    // race this traces back to). Verified via the zoom slider's reported
-    // distance rather than screenshots: if the flight is genuinely eased,
-    // sampling shortly after the click must catch it partway there, not
-    // already at its final value.
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-
-    await page.locator('select').selectOption({ label: 'Moon' })
-    await page.waitForTimeout(1500) // let the Moon flight fully settle
-    const moonDistance = await zoomSliderValue(page)
-
-    await page.locator('select').selectOption({ label: 'ISS' })
-    // Sample soon after the click — well before FLY_SMOOTH_TIME's decay
-    // has meaningfully progressed — then again once it must have settled.
-    await page.waitForTimeout(80)
-    const soonAfterClick = await zoomSliderValue(page)
+    // And the canvas must show real content both right as the ~900ms
+    // fly-to completes (exactly the moment bug (a) put the camera looking
+    // at empty space) and afterward, as the ISS keeps moving — not just
+    // win the single frame right as the flight ends.
+    expect(await canvasHasContentAt(page)).toBe(true)
     await page.waitForTimeout(2000)
-    const issDistance = await zoomSliderValue(page)
-
-    // A real eased flight from the Moon's own framing distance down to the
-    // ISS's true-scale one is a huge drop (many orders of magnitude — see
-    // scale.ts's trueRadius) — 80ms into the ~900ms flight (CameraRig's own
-    // FLY_DURATION_MS) must still be well short of the final value, not
-    // already there.
-    expect(issDistance).toBeLessThan(moonDistance)
-    expect(Math.abs(soonAfterClick - issDistance)).toBeGreaterThan(5)
+    expect(await canvasHasContentAt(page)).toBe(true)
 
     expect(errors).toEqual([])
   })
 
   test('switching repeatedly between the ISS and Hubble never throws or destabilizes the camera', async ({ page }) => {
-    // 6 iterations x 3 waits/screenshots each legitimately runs past the
-    // default 30s test timeout — this isn't hung, just long.
-    test.setTimeout(60_000)
     // Regression coverage for a real, reported bug: "switching between ISS
     // and Hubble, it seems about 50:50 if it will animate or just jump to
     // the other object" — with playback paused, ruling out the moving-
@@ -336,24 +270,22 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // a few hundred km from Earth), and a genuine race between a
     // `useEffect`-driven flight start and R3F's own frame loop.
     //
-    // The exact numeric claim — that sampleFlightPath still produces real,
+    // Both the exact numeric claim (sampleFlightPath still produces real,
     // distinct intermediate points at THIS pair's own tiny (~1e-6 world
-    // unit) scale rather than collapsing to a snap — is covered precisely
-    // and deterministically by camera.test.ts's own "still animates
-    // smoothly across a true-scale-tiny distance (the ISS/Hubble case)"
-    // test, using the exact magnitude confirmed by direct instrumentation
-    // of a real run. That's a better home for the precise assertion than
-    // this e2e test can be: ISS and Hubble need almost IDENTICAL camera
-    // distances (both floored to a similar true-scale minimum), so the
-    // zoom slider's own reported distance — precise enough to catch the
-    // Moon→ISS transition below — is blind to a delta this small; it
-    // rounds to the same integer whether the flight animated correctly or
-    // not. What e2e coverage usefully adds instead: repeated real
-    // selection churn between two true-scale bodies never throws, and the
-    // canvas has real content both mid-flight and once settled — the
-    // former specifically guards the shared-parent "establishing shot"
-    // fix (see camera.ts's findContextBody/applyContextBulge), which a
-    // settled-only check would never catch.
+    // unit) scale rather than collapsing to a snap — camera.test.ts's own
+    // "still animates smoothly across a true-scale-tiny distance" test)
+    // AND the collider-exclusion sequencing behind the race itself
+    // (cameraFlightLifecycle.test.ts's "excludes both the outgoing and
+    // incoming body" test) are now covered precisely and deterministically
+    // by fast unit tests — this no longer needs many repeated iterations
+    // to have a reasonable chance of catching a timing-dependent race; 2 is
+    // enough to catch a REGRESSION in either while staying fast. What only
+    // e2e coverage can still usefully add: repeated real selection churn
+    // between two true-scale bodies never throws, and the canvas has real
+    // content both mid-flight and once settled — the latter specifically
+    // guards the shared-parent "establishing shot" fix (see camera.ts's
+    // findContextBody/applyContextBulge) actually rendering correctly,
+    // which no pure-function test can see (it doesn't render anything).
     const errors = consoleErrors(page)
     await page.goto('http://localhost:5173/')
     await page.waitForTimeout(800)
@@ -365,7 +297,7 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     await page.locator('select').selectOption({ label: 'ISS' })
     await page.waitForTimeout(1200)
 
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 2; i++) {
       const label = i % 2 === 0 ? 'Hubble Space Telescope' : 'ISS'
       await page.locator('select').selectOption({ label })
       // Mid-flight is now also asserted, not just settled: a separate,

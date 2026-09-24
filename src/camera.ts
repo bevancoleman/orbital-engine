@@ -13,6 +13,8 @@ import type { BeltRegion, CelestialBody, StarSystemData } from './types'
 
 export const DEFAULT_CAMERA_DISTANCE = 134 // matches the initial camera position in OrbitalSystemScene
 
+const MS_PER_DAY = 86_400_000
+
 /** How long a fly-to takes, start to end (CameraRig.tsx's own eased tween —
  *  see sampleFlightPath below). Exported from here, not just kept local to
  *  CameraRig, because OrbitalSystemScene needs the SAME number: computing
@@ -109,6 +111,19 @@ export interface FocusTarget {
    *  previous body was known (a fresh page load, say), not "definitely
    *  nothing to show." */
   contextBody: { position: WorldVec; radius: number } | null
+  /** Where the focused body will REALLY be at each moment of the flight
+   *  toward it, not just at its very end (`position` above already is that
+   *  end point) — see safePredictFlightTarget. Optional (and typically
+   *  undefined/null for a belt, the whole system, or a flight computed
+   *  while paused, where every sample would be identical anyway) rather
+   *  than a required field: computeFocusForBody itself doesn't compute
+   *  this (it has no daysPerSecond to predict FROM — see OrbitalSystemScene,
+   *  which computes it separately and merges it in for a body selection).
+   *  Consumed by CameraRig's sampleFlightPath call to keep the flight's own
+   *  look-at point tracking the body's real predicted trajectory, the same
+   *  "consider future locations" behaviour routeCameraSimulator.ts already
+   *  models for the fixed test fixture. */
+  predictedTargetAt?: ((t: number) => WorldVec) | null
 }
 
 /**
@@ -280,12 +295,46 @@ export function naturalFlightOffset(
   const startDirection = normalizeOr(startOffset, [0, 1, 0])
   const endDirection = normalizeOr(endOffset, [0, 1, 0])
   const easedT = easeOutCubic(Math.min(1, Math.max(0, t)))
-  const direction = normalizeOr(lerpVec3(startDirection, endDirection, easedT), startDirection)
+  const direction = slerpUnitVec3(startDirection, endDirection, easedT)
   const distance =
     startDistance > 0 && endDistance > 0
       ? startDistance * Math.pow(endDistance / startDistance, easedT)
       : startDistance + easedT * (endDistance - startDistance)
   return { direction, distance }
+}
+
+/**
+ * Pushes `target` radially outward, just clear of `contextBody`'s own
+ * surface, if it's currently inside or too close to it — a fix for a
+ * real, reported bug that survived even after applyContextBulge's own
+ * distance/direction fixes: `target` itself is sampleFlightPath's
+ * independently-lerped target(t), a straight line between two points that
+ * can each be on very different sides of a shared nearby parent (the ISS
+ * and Hubble, both near Earth, but not necessarily anywhere close to each
+ * other) — and the straight line between two points on opposite sides of
+ * a sphere passes straight through its interior. No amount of correcting
+ * the CAMERA's own offset from target helps if target — the point the
+ * camera is centred on and offset from — is itself buried inside the
+ * context body's own volume; the camera wants to end up skimming that
+ * body's surface no matter how far back it sits. Returns `target`
+ * completely unchanged whenever it's already outside `marginFactor`
+ * (default a modest safety margin over the body's own true radius, not a
+ * bump-scaled fade — the flight's own real endpoints are already outside
+ * this by construction, an orbiting body's altitude being part of its own
+ * real position, so this never fires at t=0 or t=1 regardless of margin).
+ */
+export function keepClearOfContextBody(
+  target: WorldVec,
+  contextBody: { position: WorldVec; radius: number } | null,
+  marginFactor = 1.05
+): WorldVec {
+  if (!contextBody) return target
+  const toTarget = subtractVec3(target, contextBody.position)
+  const distance = lengthVec3(toTarget)
+  const minDistance = contextBody.radius * marginFactor
+  if (distance >= minDistance) return target
+  const direction = normalizeOr(toTarget, [0, 1, 0])
+  return addVec3(contextBody.position, scaleVec3(direction, minDistance))
 }
 
 /**
@@ -336,41 +385,6 @@ export function naturalFlightOffset(
  *   course, since it's a gradual rotation of the viewing angle as bump
  *   ramps up, not a snap.
  */
-
-/**
- * Pushes `target` radially outward, just clear of `contextBody`'s own
- * surface, if it's currently inside or too close to it — a fix for a
- * real, reported bug that survived even after applyContextBulge's own
- * distance/direction fixes: `target` itself is sampleFlightPath's
- * independently-lerped target(t), a straight line between two points that
- * can each be on very different sides of a shared nearby parent (the ISS
- * and Hubble, both near Earth, but not necessarily anywhere close to each
- * other) — and the straight line between two points on opposite sides of
- * a sphere passes straight through its interior. No amount of correcting
- * the CAMERA's own offset from target helps if target — the point the
- * camera is centred on and offset from — is itself buried inside the
- * context body's own volume; the camera wants to end up skimming that
- * body's surface no matter how far back it sits. Returns `target`
- * completely unchanged whenever it's already outside `marginFactor`
- * (default a modest safety margin over the body's own true radius, not a
- * bump-scaled fade — the flight's own real endpoints are already outside
- * this by construction, an orbiting body's altitude being part of its own
- * real position, so this never fires at t=0 or t=1 regardless of margin).
- */
-export function keepClearOfContextBody(
-  target: WorldVec,
-  contextBody: { position: WorldVec; radius: number } | null,
-  marginFactor = 1.05
-): WorldVec {
-  if (!contextBody) return target
-  const toTarget = subtractVec3(target, contextBody.position)
-  const distance = lengthVec3(toTarget)
-  const minDistance = contextBody.radius * marginFactor
-  if (distance >= minDistance) return target
-  const direction = normalizeOr(toTarget, [0, 1, 0])
-  return addVec3(contextBody.position, scaleVec3(direction, minDistance))
-}
-
 export function applyContextBulge(
   pathPosition: WorldVec,
   startPosition: WorldVec,
@@ -452,6 +466,45 @@ function scaleVec3(a: WorldVec, s: number): WorldVec {
 
 function lengthVec3(a: WorldVec): number {
   return Math.hypot(a[0], a[1], a[2])
+}
+
+function dotVec3(a: WorldVec, b: WorldVec): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/**
+ * Spherical (constant-angular-velocity) interpolation between two UNIT
+ * vectors, `t` in [0, 1]. Used instead of a plain normalized lerp
+ * (`normalizeOr(lerpVec3(a, b, t), a)`) anywhere the two vectors can end up
+ * close to antipodal — real, reported bug: naturalFlightOffset used nlerp
+ * for its own direction blend, and for a flight whose start/end offset
+ * directions are ~160°+ apart, the straight-line lerp between them passes
+ * close to the ORIGIN around the midpoint (two vectors of length 1,
+ * pointing nearly opposite ways, add up to nearly zero) — renormalizing a
+ * near-zero vector there amplifies any small per-step change into a huge
+ * single-frame swing in viewing direction (measured directly at up to 70°+
+ * in one frame for a real route). This is the exact class of bug
+ * sampleFlightPath's own header comment describes fixing once already, at
+ * the position level — naturalFlightOffset's plain-nlerp direction blend
+ * turned out to reintroduce the identical failure mode one level down.
+ * Slerp traces the great-circle arc between the two directions at a
+ * constant angular rate instead, with no such collapse-toward-zero point
+ * for any angle short of exactly 180°. Falls back to nlerp (safe there —
+ * no collapse risk) when the vectors are close enough together that
+ * acos's derivative would itself be numerically unstable.
+ */
+function slerpUnitVec3(a: WorldVec, b: WorldVec, t: number): WorldVec {
+  // Exact endpoints, not just close ones — callers (and their own tests)
+  // rely on t=0/t=1 reproducing the input vectors bit-for-bit, which
+  // acos/cos round-tripping through the general case below can't
+  // guarantee even when mathematically t=1 should land exactly on `b`.
+  if (t <= 0) return a
+  if (t >= 1) return b
+  const cosTheta = Math.max(-1, Math.min(1, dotVec3(a, b)))
+  if (cosTheta > 0.9995) return normalizeOr(lerpVec3(a, b, t), a)
+  const theta = Math.acos(cosTheta) * t
+  const relative = normalizeOr(subtractVec3(b, scaleVec3(a, cosTheta)), b)
+  return addVec3(scaleVec3(a, Math.cos(theta)), scaleVec3(relative, Math.sin(theta)))
 }
 
 /** Normalizes `v`, falling back to `fallback` (assumed already sane —
@@ -562,8 +615,232 @@ export function trackingDelta(previous: WorldVec | null, live: WorldVec): WorldV
   return delta[0] === 0 && delta[1] === 0 && delta[2] === 0 ? null : delta
 }
 
+/**
+ * Moving-average smoothing of a precomputed sequence of positions (e.g.
+ * a tracked body's own live position at each upcoming track step, ALL
+ * precomputed up front, deterministically — not queried live/reactively
+ * frame by frame). Each output point is the plain average of the input
+ * points within `windowRadius` steps either side, clamped at the two
+ * ends of the sequence rather than requiring a full symmetric window
+ * there (so the first/last points are smoothed over whatever's actually
+ * available, not left unsmoothed or padded with fabricated data).
+ *
+ * Real, investigated problem this exists for: a tracked body whose own
+ * PARENT is also moving (a moon of an orbiting planet, say) traces a
+ * genuinely epicyclic path in absolute space — two real orbital motions
+ * at very different angular rates but comparable PER-FRAME magnitude.
+ * Sampled once per real frame and tracked with a plain backward
+ * difference (trackingDelta), the frame-to-frame direction can swing
+ * wildly (measured directly: 2° to 29° in a fixed test case) wherever the
+ * two motions' contributions partially cancel — the underlying motion is
+ * smooth, but a single-step finite difference is unusually sensitive to
+ * exactly where in that beat pattern each sample lands. A 1-tap central
+ * difference (previous version of this fix) barely helps: the beat
+ * period here (~15 samples, tied to the tracked body's own orbital
+ * period at whatever speed it's being viewed at) is far longer than a
+ * 3-point window can filter. `windowRadius` needs to be large enough to
+ * meaningfully span a fraction of that beat — measured directly on an
+ * UNBOUNDED (interior, far from either end of the sequence) run of the
+ * fixed camera-route fixture's own worst case (moonA at 2 d/s): radius 1
+ * barely moves the spike (29°→25°), radius 4 cuts it to ~10°, radius 7
+ * (a 15-point average, matching the beat period) all but eliminates it
+ * (~0°). A FINITE track phase (as in this fixture, which has to stop
+ * somewhere to be testable) still shows a smaller residual spike within
+ * `windowRadius` steps of its own start/end, purely because the clamped
+ * window there has fewer real samples to average — real, continuous
+ * tracking in the actual app has no such edge to begin with, since it
+ * only ever stops when the user does something else.
+ *
+ * Real, accepted tradeoff: smoothing the POSITIONS this way means
+ * consecutive trackingDelta calls between them no longer reconstruct the
+ * body's own exact live position — so CameraRouteFrame's own
+ * `trackingError` (target vs. the body's true, unsmoothed live position)
+ * is no longer expected to stay near-zero the way it does with plain,
+ * unsmoothed tracking. That's the explicit "small error, in exchange for
+ * not spiking" tradeoff this exists for — see
+ * SimulateCameraRouteOptions.smoothTracking's own comment for measured
+ * bounds on both sides of it.
+ */
+export function smoothTrajectory(points: readonly WorldVec[], windowRadius: number): WorldVec[] {
+  if (windowRadius <= 0) return points.slice()
+  return points.map((_, i) => {
+    const lo = Math.max(0, i - windowRadius)
+    const hi = Math.min(points.length - 1, i + windowRadius)
+    let sx = 0,
+      sy = 0,
+      sz = 0
+    for (let k = lo; k <= hi; k++) {
+      sx += points[k]![0]
+      sy += points[k]![1]
+      sz += points[k]![2]
+    }
+    const n = hi - lo + 1
+    return [sx / n, sy / n, sz / n]
+  })
+}
+
 function lerpVec3(a: WorldVec, b: WorldVec, t: number): WorldVec {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+}
+
+/**
+ * Picks the largest window radius (up to `maxRadius`) smoothTrajectory
+ * can use on `points` without ever moving a point by more than
+ * `maxLagFraction` of `viewingDistance` — falls back toward 0 (no
+ * smoothing, exact tracking) rather than smoothing far enough to risk
+ * losing the target out of frame entirely, which is strictly worse than
+ * a jerky-but-in-frame result.
+ *
+ * Real, measured problem this fixes: smoothTrajectory's own window is
+ * sized in absolute world units (however many track steps either side),
+ * with no idea how far away the camera actually is from what it's
+ * looking at. For a true-scale close orbiter — the camera can genuinely
+ * sit a tiny fraction of a world unit from its target — a window that
+ * comfortably smooths a wide shot can average in enough of the body's
+ * OWN real motion to shift the smoothed position by MORE than the
+ * camera's entire viewing distance, swinging the target completely out
+ * of frame (measured directly: a lag of just ~0.009 world units, smaller
+ * than the fixed window's own typical output, was already enough to
+ * zero out targetFramingScore for a close orbiter). A wide/establishing
+ * shot has no such problem — the same absolute lag is a rounding error
+ * relative to how far back the camera already is — so the right answer
+ * scales with the shot, not a single fixed radius for every shot.
+ */
+export function adaptiveSmoothingRadius(
+  points: readonly WorldVec[],
+  maxRadius: number,
+  viewingDistance: number,
+  maxLagFraction: number = 0.15
+): number {
+  const maxLag = maxLagFraction * viewingDistance
+  for (let radius = maxRadius; radius > 0; radius--) {
+    let worstExcursion = 0
+    for (let i = 0; i < points.length; i++) {
+      const lo = Math.max(0, i - radius)
+      const hi = Math.min(points.length - 1, i + radius)
+      let sx = 0,
+        sy = 0,
+        sz = 0
+      for (let k = lo; k <= hi; k++) {
+        sx += points[k]![0]
+        sy += points[k]![1]
+        sz += points[k]![2]
+      }
+      const n = hi - lo + 1
+      const dist = lengthVec3(subtractVec3(points[i]!, [sx / n, sy / n, sz / n]))
+      worstExcursion = Math.max(worstExcursion, dist)
+    }
+    if (worstExcursion <= maxLag) return radius
+  }
+  return 0
+}
+
+/** Matches routeCameraSimulator's own default smoothTrackingWindow ceiling
+ *  — see computeSmoothedTrackedPosition below for why the same reasoning
+ *  (enough to resolve a ~15-sample epicycle beat period, reined in by
+ *  adaptiveSmoothingRadius when framing is tight) applies to live tracking
+ *  too, not just the fixed test fixture's own finite track phase. */
+export const DEFAULT_TRACKING_SMOOTHING_WINDOW = 7
+
+/**
+ * Live-tracking counterpart to routeCameraSimulator's own precomputed
+ * smoothTrajectory/adaptiveSmoothingRadius window — usable every frame from
+ * a real, open-ended tracking loop (see CameraRig.tsx), not just across a
+ * fixed, finite, precomputed track phase built for a test fixture.
+ *
+ * The obstacle that design would otherwise hit: adaptiveSmoothingRadius
+ * needs points on BOTH sides of each sample to average over, but a live
+ * `useFrame` loop only ever has PAST frames actually rendered — there's no
+ * real "future" to look ahead into yet. The way around that: orbital motion
+ * is fully deterministic (see resolveWorldPosition), so a body's position
+ * `k` frames from now is exactly as computable, right now, as its position
+ * `k` frames ago — nothing needs to be waited for. This evaluates a small
+ * window CENTRED on `simDate` (`-windowRadius`..`+windowRadius`, spaced at
+ * one `assumedFps`-frame's worth of simulated time per step — see
+ * daysPerSecondToTrackStepMs in cameraRouteFixture.ts for the equivalent
+ * fixture-side reasoning) and returns the smoothed MIDPOINT of that window,
+ * in place of a single raw live-position sample.
+ *
+ * `viewingDistance` should be the camera's own LIVE distance to what it's
+ * tracking (not a stale flight-start snapshot) — adaptiveSmoothingRadius
+ * uses it to shrink the window, down to 0 (exact tracking) if needed,
+ * rather than risk lagging the target out of frame for a true-scale close
+ * orbiter (see that function's own comment for the measured bug this
+ * avoids). `daysPerSecond` of 0 (paused) makes every sample in the window
+ * identical by construction — nothing to smooth, the same value an
+ * unsmoothed read would give, no special-casing needed for it here either.
+ */
+export function computeSmoothedTrackedPosition(
+  body: CelestialBody,
+  system: StarSystemData,
+  simDate: Date,
+  daysPerSecond: number,
+  viewingDistance: number,
+  windowRadius: number = DEFAULT_TRACKING_SMOOTHING_WINDOW,
+  assumedFps: number = 60
+): WorldVec {
+  if (windowRadius <= 0) return resolveWorldPosition(body, system.bodies, simDate)
+  const stepMs = (daysPerSecond * MS_PER_DAY) / assumedFps
+  const points: WorldVec[] = []
+  for (let k = -windowRadius; k <= windowRadius; k++) {
+    points.push(resolveWorldPosition(body, system.bodies, new Date(simDate.getTime() + k * stepMs)))
+  }
+  const effectiveRadius = adaptiveSmoothingRadius(points, windowRadius, viewingDistance)
+  return smoothTrajectory(points, effectiveRadius)[windowRadius]!
+}
+
+/**
+ * Front-loaded ease — like easeOutCubic but converges much faster near
+ * t=0, with NO freeze/kink point anywhere in [0, 1] (unlike an "ease to
+ * 1.0 by some fraction, then hold" curve, whose derivative has to bend
+ * sharply right at the hold point — see fastTargetLerp's own comment for
+ * the real, measured instability that shape caused). Reaches 1-2^-24
+ * (>99.9999%) of the way by t=0.5, vs. easeOutCubic's 87.5%, while
+ * staying perfectly smooth (still exactly 0 at t=0, exactly 1 at t=1)
+ * across the WHOLE domain — the curve keeps easing, it just does almost
+ * all of its easing very early. The exponent was tuned directly against
+ * the fixed camera-route fixture's own flight-path-bend ceiling (20°/
+ * frame), checked across EVERY body in that fixture flown to
+ * independently from the default view (not just chained from whatever
+ * the previous leg happened to leave the camera facing, which is a less
+ * extreme starting angle for some of them) — the worst case (a close,
+ * off-axis body) measured ~8.7° at this exponent, comfortable margin
+ * below the ceiling; a shallower ease (lower exponent) leaves measurably
+ * less room, and 6 already exceeds the ceiling outright for the same
+ * body. */
+function easeOutSteep(t: number): number {
+  return 1 - Math.pow(1 - t, 24)
+}
+
+/** The LOOK-AT point uses this much steeper ease than the camera's own
+ *  offset (still easeOutCubic, via naturalFlightOffset) — see
+ *  sampleFlightPath's own comment for the real bug this fixes (the
+ *  destination not staying in view for most of the flight). An earlier
+ *  version of this fix used an "ease to 1.0 by some fixed fraction of the
+ *  flight, then hold" curve instead: simpler to reason about, but its
+ *  forced stop introduces a real kink in the LOOK-AT point's own velocity
+ *  right at the hold fraction — measured directly reintroducing a ~29°
+ *  single-frame swing in the fixed camera-route fixture (a real flight,
+ *  not just the synthetic worst-case test), because the camera's own
+ *  (still-moving) offset and the newly-stationary target no longer track
+ *  each other smoothly at that exact moment. easeOutSteep has no such
+ *  moment — it's smooth (derivative continuous) across the entire [0, 1]
+ *  domain, same guarantee naturalFlightOffset's own easeOutCubic already
+ *  has, just front-loaded. */
+function fastTargetLerp(startTarget: WorldVec, endTarget: WorldVec, t: number): WorldVec {
+  return lerpVec3(startTarget, endTarget, easeOutSteep(t))
+}
+
+/** Same front-loaded blend as fastTargetLerp, but toward a MOVING
+ *  predicted point (`predictedTargetAt(t)` — see predictBodyTrajectory)
+ *  instead of a single fixed `endTarget`. Blending toward
+ *  `predictedTargetAt(t)` itself, not just `predictedTargetAt(1)`, is
+ *  what makes the look-at point track the destination's real trajectory
+ *  DURING the flight rather than just arriving at the right final point —
+ *  by construction this still lands exactly on predictedTargetAt(1) at
+ *  t=1, so the flight's own end-of-flight guarantees are unaffected. */
+function fastTargetLerpToTrajectory(startTarget: WorldVec, predictedTargetAt: (t: number) => WorldVec, t: number): WorldVec {
+  return lerpVec3(startTarget, predictedTargetAt(t), easeOutSteep(t))
 }
 
 /** Ease-out cubic — fast at the start, settling gently into place, rather
@@ -580,58 +857,94 @@ export interface FlightPathPoint {
 
 /**
  * Where the camera + its look-at target should sit at progress `t` (0 at
- * the flight's start, 1 at its end) along a fly-to — a plain eased lerp,
- * computed entirely in our own code rather than delegated to
- * camera-controls' own transition/smoothDamp system (see CameraRig.tsx's
- * own header comment for why that turned out to be the wrong call: it
- * decides per-component whether to animate or instantly SNAP by comparing
- * the distance/position delta against a fixed, scale-unaware constant
- * (1e-5 world units) — fine for an ordinary scene, but this engine's whole
- * premise is true-to-scale rendering, where a flight between two nearby
- * true-scale bodies (e.g. the ISS and Hubble, both a few hundred km from
- * Earth, both needing camera distances many orders of magnitude below
- * that threshold) routinely has a delta SMALLER than 1e-5 — so whether it
- * animated or just jumped there came down to an essentially arbitrary
- * comparison against a constant that has nothing to do with this scene's
- * own scale, reported directly as "about 50:50 if it will animate or just
- * jump"). Sampling our own explicit intermediate value every frame, at
- * full floating-point precision, has no such comparison anywhere in it —
- * every `t` in (0, 1) produces a genuinely distinct point on the path,
- * regardless of how small the total distance travelled is.
+ * the flight's start, 1 at its end) along a fly-to — computed entirely in
+ * our own code rather than delegated to camera-controls' own transition/
+ * smoothDamp system (see CameraRig.tsx's own header comment for why that
+ * turned out to be the wrong call: it decides per-component whether to
+ * animate or instantly SNAP by comparing the distance/position delta
+ * against a fixed, scale-unaware constant (1e-5 world units) — fine for an
+ * ordinary scene, but this engine's whole premise is true-to-scale
+ * rendering, where a flight between two nearby true-scale bodies (e.g. the
+ * ISS and Hubble, both a few hundred km from Earth, both needing camera
+ * distances many orders of magnitude below that threshold) routinely has
+ * a delta SMALLER than 1e-5 — so whether it animated or just jumped there
+ * came down to an essentially arbitrary comparison against a constant
+ * that has nothing to do with this scene's own scale, reported directly
+ * as "about 50:50 if it will animate or just jump"). Sampling our own
+ * explicit intermediate value every frame, at full floating-point
+ * precision, has no such comparison anywhere in it — every `t` in (0, 1)
+ * produces a genuinely distinct point on the path, regardless of how
+ * small the total distance travelled is.
  *
  * `t` is clamped to [0, 1] — values outside that range (a stray timing
  * bug upstream) land on the nearer endpoint rather than overshooting or
  * extrapolating backwards.
  *
- * Position is NOT a plain lerp of the two endpoint positions — that was a
- * real, reported bug ("the camera rotation for the final part is a bit
- * violent... like whiplash"): once DEFAULT_LOOK_BIAS_WEIGHT (see camera.ts)
- * was raised to actually land the parent on screen, a flight's start and
- * end camera OFFSETS from their (independently lerped) targets routinely
- * point in very different directions. Lerping the two raw positions in
- * that case still traces a straight line, but that line's distance from
- * the ALSO-moving target dips toward zero somewhere in the middle (two
- * vectors pointing in different directions, blended linearly, shrink
- * before they grow again) — and normalizing an offset that's momentarily
- * near-zero-length amplifies any small per-frame change into a huge
- * swing in viewing direction, measured directly at up to ~18° in a single
- * frame right before settling. Using naturalFlightOffset here instead —
- * the same nlerp-direction / geometric-distance approach already used by
- * applyContextBulge to fix an identical vector-cancellation bug — keeps
- * the offset's direction turning at a steady, eased rate and its distance
- * shrinking/growing smoothly, with no near-zero pinch point to swing
- * around.
+ * TARGET and the camera's OFFSET from it (naturalFlightOffset's direction
+ * + distance) still use the same decomposition as before — that part was
+ * never the problem, and keeps its own well-tested guarantees (slerp'd
+ * direction, geometrically-interpolated distance, no near-zero-offset
+ * pinch point by construction). The real, reported problem was the PACE
+ * the two moved at relative to each other: for a flight whose camera
+ * DISTANCE changes by orders of magnitude (true-scale rendering makes
+ * this the common case, not an edge case — zooming from a whole-system
+ * view into one small body), the offset's fast GEOMETRIC shrink and the
+ * target's plain LINEAR lerp reached their own destinations at very
+ * different real rates. The camera ended up sitting almost exactly on the
+ * straight line between the OLD and NEW look-at points for a long stretch
+ * in the middle of the flight — looking at neither body, since its own
+ * (already-collapsed) offset from that drifting point was tiny. Measured
+ * directly on a real zoom-in flight: the destination was out of frame for
+ * the middle ~80% of the flight, only entering view in the last few
+ * frames — and the resulting path meandered to roughly 1.5-3x the direct
+ * chord length between start and end position, "backing into" the final
+ * framing at the very end.
+ *
+ * Fixed with fastTargetLerp: `target` now eases via easeOutSteep instead
+ * of easeOutCubic — front-loaded much harder, so the look-at point is
+ * already at (or very near) the real destination for the great majority
+ * of the flight, not just its final few frames, while the offset keeps
+ * using its own existing (slower) easeOutCubic pace. An explicit
+ * "reshape POSITION into its own independent spline" version of this fix
+ * was tried and reverted: it reintroduced the exact class of bug
+ * naturalFlightOffset already solves once — a curve that can pass
+ * coincidentally close to a now-nearly-stationary target partway through,
+ * collapsing the offset toward zero and amplifying noise into a large
+ * single-frame swing — just at an unpredictable point that depends on the
+ * specific flight's geometry rather than always at the same spot. Only
+ * changing the TARGET's pace, while leaving the already-proven offset
+ * decomposition alone, gets the same "destination back in view early" and
+ * "much shorter path" results (a direct side effect of the destination
+ * being correct so much earlier) without that risk.
+ *
+ * `predictedTargetAt`, when given, refines this further: instead of
+ * blending toward the single fixed `endTarget` (where the destination
+ * will be at the very END of the flight — see computeFocusForBody), it
+ * blends toward `predictedTargetAt(t)` — where the destination will
+ * ACTUALLY be at THIS moment of the flight (see predictBodyTrajectory,
+ * which precomputes this once, up front, same spirit as
+ * computeFocusForBody's own single-point prediction, extended to several
+ * points across the flight instead of just its end). For a body that's
+ * genuinely moving during the flight (a fast orbiter, or any orbiter at a
+ * high playback speed) this keeps the look-at point tracking where the
+ * body REALLY is throughout, not a straight-line lerp toward a point
+ * that's already slightly stale by the time the camera arrives. Omitting
+ * it falls back to the plain fastTargetLerp behaviour above (a body
+ * that's stationary — or treated as such — for the flight's own short
+ * duration).
  */
 export function sampleFlightPath(
   startPosition: WorldVec,
   startTarget: WorldVec,
   endPosition: WorldVec,
   endTarget: WorldVec,
-  t: number
+  t: number,
+  predictedTargetAt?: (t: number) => WorldVec
 ): FlightPathPoint {
   const clampedT = Math.min(1, Math.max(0, t))
-  const eased = easeOutCubic(clampedT)
-  const target = lerpVec3(startTarget, endTarget, eased)
+  const target = predictedTargetAt
+    ? fastTargetLerpToTrajectory(startTarget, predictedTargetAt, clampedT)
+    : fastTargetLerp(startTarget, endTarget, clampedT)
   const { direction, distance } = naturalFlightOffset(startPosition, startTarget, endPosition, endTarget, clampedT)
   return { position: addVec3(target, scaleVec3(direction, distance)), target }
 }
@@ -732,6 +1045,137 @@ export function computeFocusForBody(
   const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
 
   return { position: bodyPos, distance: distanceToFit(maxExtent), lookBias, contextBody }
+}
+
+/** Default sample count for predictBodyTrajectory/safePredictFlightTarget —
+ *  one sample per rendered frame of a flight at a reasonable 60fps
+ *  assumption, not an arbitrary round number. Real, measured consequence of
+ *  getting this too low: the previous default (6) let a fast orbiter's real
+ *  motion alias into a 60°/frame flight-path-bend spike on the fixed
+ *  camera-route fixture (see routeCameraSimulator.ts, which now always
+ *  passes its own frame-accurate sample count explicitly) — a caller that
+ *  omits `samples` entirely should still land somewhere safe, not silently
+ *  reproduce that bug. A caller running at a different actual frame rate can
+ *  still override this; it's a safe default, not a hard requirement. */
+export const DEFAULT_TRAJECTORY_SAMPLES = Math.round((FLY_DURATION_MS / 1000) * 60)
+
+/**
+ * Where `body` is predicted to actually be at `samples + 1` evenly-spaced
+ * moments across a flight's own real-time span (`durationMs`, i.e.
+ * FLY_DURATION_MS), given the playback rate in effect when the flight
+ * starts (`daysPerSecond` — see timeScale.ts) — used by sampleFlightPath's
+ * `predictedTargetAt` to make the look-at point track where the
+ * destination REALLY will be throughout the flight, not just where it'll
+ * be at the very end (computeFocusForBody already predicts that single
+ * endpoint; this extends the same idea to the points in between).
+ *
+ * Deliberately a small number of samples computed ONCE, up front, not a
+ * live per-frame re-query of the body's current position: computeFocusForBody's
+ * own comment explains why continuously re-aiming at a fast orbiter's
+ * LIVE position mid-flight causes visible jitter once the orbital period
+ * approaches the flight's own duration. A handful of fixed, precomputed
+ * points sidesteps that the same way the single-endpoint prediction
+ * already did — the trajectory is fully decided before the flight starts,
+ * so there's nothing to react to frame by frame. The real, accepted
+ * tradeoff (matching the caller's own decision to fly this route in the
+ * first place) is that these predictions can go stale if the playback
+ * speed actually in effect changes mid-flight — a real error, but a small
+ * one bounded by how much a speed change could plausibly shift where a
+ * body ends up within one ~900ms flight, and no worse than the SAME
+ * staleness computeFocusForBody's own single-point prediction already
+ * accepts for the endpoint.
+ */
+export function predictBodyTrajectory(
+  body: CelestialBody,
+  system: StarSystemData,
+  startDate: Date,
+  daysPerSecond: number,
+  durationMs: number,
+  samples: number = DEFAULT_TRAJECTORY_SAMPLES
+): WorldVec[] {
+  const points: WorldVec[] = []
+  for (let i = 0; i <= samples; i++) {
+    const elapsedRealMs = (i / samples) * durationMs
+    const elapsedSimMs = daysPerSecond * MS_PER_DAY * (elapsedRealMs / 1000)
+    const date = new Date(startDate.getTime() + elapsedSimMs)
+    points.push(resolveWorldPosition(body, system.bodies, date))
+  }
+  return points
+}
+
+/** Reads a value at fraction `t` (0..1) out of `points`, treating them as
+ *  evenly spaced across [0, 1] — plain piecewise-LINEAR interpolation
+ *  between the two nearest samples, not a spline: this feeds directly
+ *  into a camera look-at curve, and a spline through points that can
+ *  legitimately bend sharply (a fast orbiter's own real path) risks
+ *  overshooting between samples exactly the way this codebase has already
+ *  hit more than once (see naturalFlightOffset/sampleFlightPath's own
+ *  history) — linear interpolation can't overshoot past its two
+ *  neighbours no matter how the real trajectory curves between them. */
+function sampleTrajectory(points: readonly WorldVec[], t: number): WorldVec {
+  const clampedT = Math.min(1, Math.max(0, t))
+  const scaled = clampedT * (points.length - 1)
+  const i0 = Math.min(points.length - 2, Math.floor(scaled))
+  const i1 = i0 + 1
+  const localT = scaled - i0
+  return lerpVec3(points[i0]!, points[i1]!, localT)
+}
+
+/** Largest distance between any two points in a precomputed trajectory —
+ *  "how far did the body actually wander" over the span it was sampled
+ *  across, as opposed to just its start-to-end displacement (which can
+ *  understate a body that loops most of the way back to where it began).
+ *  O(n²) in sample count, fine at the sizes this engine actually uses
+ *  (tens to low hundreds of samples). */
+export function trajectoryDiameter(points: readonly WorldVec[]): number {
+  let maxDist = 0
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      maxDist = Math.max(maxDist, lengthVec3(subtractVec3(points[i]!, points[j]!)))
+    }
+  }
+  return maxDist
+}
+
+/** Convenience wrapper combining predictBodyTrajectory + sampleTrajectory
+ *  into the one thing sampleFlightPath's `predictedTargetAt` parameter
+ *  actually wants — precomputes the trajectory ONCE (at flight start) and
+ *  returns a plain `(t) => WorldVec` closure over those fixed points. The
+ *  caller (CameraRig.tsx, or a test) needs to already know the flight's
+ *  own start date and the playback rate in effect when it starts.
+ *
+ * Returns `null` — meaning "don't do this, use the plain fixed-endpoint
+ * fastTargetLerp instead" — when the body's own predicted excursion over
+ * the flight (see trajectoryDiameter) is too large relative to
+ * `viewingDistance` (this flight's own final camera distance —
+ * FocusTarget.distance): a fast/close orbiter's real orbital curvature,
+ * once its excursion becomes comparable to how close the camera is
+ * ending up, gets inherited directly into the camera's own position (see
+ * sampleFlightPath's `position = target(t) + offset(t)`) and reproduces
+ * the exact class of curvature spike this whole feature exists to avoid
+ * — measured directly on the fixed camera-route fixture: a close orbiter
+ * whose own orbit is a meaningful fraction of its final viewing distance
+ * showed flight-path bends of 50-90°/frame with trajectory-tracking
+ * forced on, vs. under 9° with the plain fixed endpoint. Falling back
+ * to the fixed endpoint in that regime still predicts the RIGHT final
+ * destination (computeFocusForBody already handles that) — it just stops
+ * trying to also track the body's every wiggle en route, the same
+ * "accept a smaller, understood error over spiking" tradeoff
+ * adaptiveSmoothingRadius makes for tracking.
+ */
+export function safePredictFlightTarget(
+  body: CelestialBody,
+  system: StarSystemData,
+  startDate: Date,
+  daysPerSecond: number,
+  viewingDistance: number,
+  durationMs: number = FLY_DURATION_MS,
+  samples: number = DEFAULT_TRAJECTORY_SAMPLES,
+  maxExcursionFraction: number = 0.5
+): ((t: number) => WorldVec) | null {
+  const points = predictBodyTrajectory(body, system, startDate, daysPerSecond, durationMs, samples)
+  if (trajectoryDiameter(points) > maxExcursionFraction * viewingDistance) return null
+  return (t: number) => sampleTrajectory(points, t)
 }
 
 /**
