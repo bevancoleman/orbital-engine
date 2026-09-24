@@ -472,15 +472,23 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
 
     const speedSlider = page.getByLabel('Speed')
     const rawChangeCount = 15
-    for (let i = 0; i < rawChangeCount; i++) {
-      const value = String(100 + i * 50)
-      await speedSlider.evaluate((el, v) => {
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-        setter.call(el, v)
+    // Dispatched from inside one page.evaluate() rather than rawChangeCount
+    // separate Playwright round-trips: each round-trip's own IPC overhead is
+    // unpredictable under load (confirmed: this reproduced reliably in CI —
+    // 14 of 15 changes each getting their own log entry, i.e. no debouncing
+    // at all — while passing locally every time), and 15 round-trips each
+    // needing to land within the fixed 300ms debounce window is exactly the
+    // shape of test that overhead breaks. A single synchronous in-page loop
+    // has no such per-step overhead, making the real gap between events the
+    // ~few ms the setTimeout calls below actually take, not whatever the
+    // test runner's IPC happened to cost that run.
+    await speedSlider.evaluate((el, count) => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+      for (let i = 0; i < count; i++) {
+        setter.call(el, String(100 + i * 50))
         el.dispatchEvent(new window.Event('input', { bubbles: true }))
-      }, value)
-      await page.waitForTimeout(20) // well under the 300ms debounce window
-    }
+      }
+    }, rawChangeCount)
     // Let the debounce settle once dragging stops — poll rather than a
     // single fixed wait, same reasoning as the ordering test above.
     await expect(async () => {
