@@ -383,6 +383,22 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     expect(errors).toEqual([])
   })
 
+  test('ringed planets render their own ring systems when selected, without errors', async ({ page }) => {
+    const errors = consoleErrors(page)
+    await page.goto('http://localhost:5173/')
+    await page.waitForTimeout(800)
+    for (const label of ['Saturn', 'Uranus']) {
+      await page.locator('select').selectOption({ label })
+      await page.waitForTimeout(2500)
+      // The rings are part of the planet: framing takes them in, so the
+      // centre of the view has the planet and its rings in it.
+      expect(await canvasHasContentAt(page, 0.5, 0.5, 0.4)).toBe(true)
+    }
+    await page.locator('select').selectOption({ label: 'Asteroid Belt' })
+    await page.waitForTimeout(1500)
+    expect(errors).toEqual([])
+  })
+
   test('sanity check: canvasHasContentAt can actually detect empty space', async ({ page }) => {
     // Proves the helper above isn't just trivially always-true. The exact
     // center of frame isn't safe to assume is empty (the default view is

@@ -14,9 +14,10 @@ A body's journey from data to pixel goes through roughly this sequence every fra
 6. **Screen-space thinning** — `labelDeclutter.ts` (`thinByScreenProximity`, and `computeVisibleLabels` as its label-specific wrapper) is the shared greedy algorithm for "too many things landed too close together on screen this frame" — applied both to whether a body's TEXT LABEL draws and, separately, to whether its own DOT renders at all, on top of whatever step 5 already decided.
 7. **Selection** — `proximitySelection.ts` (`findNearestCandidate`) is bubble-cursor hit-testing: snap to the nearest visible body within a screen-space radius, since raycasting fails once a body's on-screen size drops under a pixel.
 8. **Camera framing** — `camera.ts` computes where a fly-to should end up (`computeFocusForBody`/`computeFocusForSystem`/`computeFocusForBelt`, `distanceToFit`) and the per-selection near-plane/min-distance floor (`nearPlaneForRadius`/`minCameraDistanceForRadius`) that lets the camera get arbitrarily close to something true-scale-tiny without a one-size-fits-all floor holding it at arm's length.
-9. **The zoom slider's mapping** — `zoomSlider.ts` (`sliderPositionToDistance`/`distanceToSliderPosition`) is a small, isolated log-scale conversion, kept separate because getting the direction/curve wrong here is exactly the kind of thing worth unit-testing in isolation from the rest of the camera rig.
+9. **Rings and belts** — `rings.ts` (`ringWorldRadius`/`ringTiltRadians`/`ringOuterRadiusKm`) sizes and tilts a body's own ring system relative to the body as rendered; `belts.ts` (`beltShape`/`sampleBeltParticles`/`beltGlowInnerRatio`) resolves a belt's shape and produces its seeded, area-uniform, gap-aware scatter. Both also carry the validation checks `validateSystemData` runs (`findInvalidRings`/`findInvalidBelts`).
+10. **The zoom slider's mapping** — `zoomSlider.ts` (`sliderPositionToDistance`/`distanceToSliderPosition`) is a small, isolated log-scale conversion, kept separate because getting the direction/curve wrong here is exactly the kind of thing worth unit-testing in isolation from the rest of the camera rig.
 
-Steps 1–9 are all pure functions in `src/*.ts` — no React, no three.js scene graph, 100% unit-tested. Nothing here needs a real renderer to verify.
+Steps 1–10 are all pure functions in `src/*.ts` — no React, no three.js scene graph, 100% unit-tested. Nothing here needs a real renderer to verify.
 
 ## The rendering layer (`src/react/`)
 
@@ -31,7 +32,8 @@ Steps 1–9 are all pure functions in `src/*.ts` — no React, no three.js scene
 | `BodyMarker.tsx` | One body's rendered group — shape + label + the grow/shrink fade animation when a body crosses in/out of the visible set |
 | `BodyShapes.tsx` | The actual geometry per body type (`PlaceholderBodyShape`), the real-model/real-texture loading paths and their fallbacks, `AtmosphereRim` |
 | `OrbitLines.tsx` | `OrbitPathLine` (real Kepler orbit), `ReferenceOrbitRing` (a `fixedPosition` body's flat reference circle), `RoutePreviewLine` |
-| `BeltRendering.tsx` | Belt/ring glow disc and particle scatter |
+| `BeltRendering.tsx` | Belt glow disc (ring-shaped belts only), particle scatter, and in-belt site markers |
+| `BodyRings.tsx` | A body's own ring system, drawn inside the body's group at its axial tilt |
 | `theme.ts`, `bodyTypeStyles.ts`, `textures.ts` | Small, dependency-free constants and canvas-texture helpers shared across the above |
 
 **A load-bearing detail**: every line-drawing component (`OrbitLines.tsx`) keeps its own vertex data *parent-relative* (small numbers) and applies the parent's own (potentially large) world offset via a wrapping `<group position={...}>`, never by baking that offset into the vertices themselves. Three.js composes `Object3D` transforms in double precision (regular JS numbers) all the way through matrix multiplication, converting to float32 only at the final GPU upload — baking a large absolute offset directly into a `Float32Array`-backed geometry instead wastes most of float32's ~7 significant digits on the shared offset, which showed up as visible jittering for a tight orbit (the ISS) around a body far from the origin (Earth's own compressed distance from the star is ~31 world units). If you add a new line/point-cloud component, follow the same pattern.

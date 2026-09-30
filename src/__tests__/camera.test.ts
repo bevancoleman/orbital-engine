@@ -1162,3 +1162,25 @@ describe('computeSmoothedTrackedPosition — live counterpart to routeCameraSimu
 function subtract(a: WorldVec, b: WorldVec): WorldVec {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
+
+describe('computeFocusForBody — ring systems', () => {
+  function ringedSystem(rings: CelestialBody['rings']): StarSystemData {
+    return {
+      id: 'test',
+      name: 'Test',
+      bodies: [
+        body({ id: 'star', parentId: null, type: 'star', radiusKm: 600_000, fixedPosition: undefined }),
+        body({ id: 'planet', parentId: 'star', type: 'planet', radiusKm: 10_000, fixedPosition: { xKm: 1e9, yKm: 0, zKm: 0 }, rings }),
+      ],
+    }
+  }
+
+  it('frames the whole ring system when it reaches past the body\'s own framing margin', () => {
+    const bare = ringedSystem(undefined)
+    const ringed = ringedSystem([{ innerRadiusKm: 20_000, outerRadiusKm: 80_000 }])
+    const bareFocus = computeFocusForBody(bare.bodies[1]!, bare, DATE)
+    const ringedFocus = computeFocusForBody(ringed.bodies[1]!, ringed, DATE)
+    expect(ringedFocus.distance).toBeGreaterThan(bareFocus.distance)
+    expect(ringedFocus.distance).toBeGreaterThanOrEqual(distanceToFit(trueRadius(80_000)))
+  })
+})

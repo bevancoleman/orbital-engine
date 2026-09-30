@@ -9,11 +9,11 @@ npm run dev
 
 ## What's real here
 
-21 of `SOLAR_SYSTEM`'s 30 bodies have a real asset from NASA's public-domain [3D Resources](https://science.nasa.gov/3d-resources/) collection ([github.com/nasa/NASA-3D-Resources](https://github.com/nasa/NASA-3D-Resources)):
+Every body a spacecraft has mapped or shaped has a real asset — see [ASSETS.md](./ASSETS.md) for each one's source, credit and processing:
 
-- **Real 3D models** (`.glb`, `public/models/`): ISS, Hubble Space Telescope — NASA's collection covers spacecraft/instruments, not planetary bodies, which is why this list is short.
-- **Real surface textures** (`.jpg`, `public/textures/`): Earth, Moon, Venus, Mars, Phobos, Deimos, Jupiter, Io, Europa, Ganymede, Callisto, Saturn, Titan, Rhea, Titania, Neptune, Triton, Pluto, Charon.
+- **Real 3D models** (`.glb`, `public/models/`): the ISS and Hubble, and spacecraft shape models of Halley's Comet (Giotto/Vega), Vesta and Ceres (Dawn), Eros (NEAR Shoemaker), Bennu (OSIRIS-REx) and Arrokoth (New Horizons).
+- **Real surface maps** (`.jpg`, `public/textures/`): Mercury, Venus, Earth (true-colour Blue Marble), the Moon (LRO), Mars and its moons, Jupiter and the Galilean moons, Saturn with Titan, Enceladus, Tethys, Dione, Rhea and Iapetus (Cassini), Uranus's five major moons (Voyager 2), Neptune, Triton, Pluto and Charon.
 
-Every other body (Sun, Mercury, Ceres, Vesta, Pallas, Hygiea, Uranus, Eris, Halley's Comet) has no real asset published in that collection, so it renders through the ordinary placeholder shape — the same fallback this whole component uses whenever `modelUrl`/`textureUrl` aren't set at all, or fail to load.
+The rest (Sun, Pallas, Hygiea, Uranus, Eris) have no spacecraft map, so they render through the ordinary placeholder shape — the same fallback this whole component uses whenever `modelUrl`/`textureUrl` aren't set, or fail to load.
 
-All assets are NASA public domain ("free to download and use, no copyright" — see the [NASA-3D-Resources README](https://github.com/nasa/NASA-3D-Resources/blob/master/README.md)).
+`asset-tools/` rebuilds the processed assets from their original sources.

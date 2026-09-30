@@ -1,5 +1,6 @@
 import { SOLAR_SYSTEM } from '../solarSystemData'
 import { positionAtTime } from '../kepler'
+import { validateSystemData } from '../validateSystemData'
 
 describe('SOLAR_SYSTEM data integrity', () => {
   const byId = new Map(SOLAR_SYSTEM.bodies.map((b) => [b.id, b]))
@@ -93,5 +94,43 @@ describe('SOLAR_SYSTEM data integrity', () => {
       .sort((a, b) => a.orbit!.semiMajorAxisKm - b.orbit!.semiMajorAxisKm)
       .map((b) => b.id)
     expect(sorted).toEqual(planetOrder)
+  })
+})
+
+describe('SOLAR_SYSTEM — ring systems belong to their planets', () => {
+  const bodyById = (id: string) => SOLAR_SYSTEM.bodies.find((b) => b.id === id)!
+
+  it('has no belt standing in for a planet\'s own rings', () => {
+    const planetIds = new Set(SOLAR_SYSTEM.bodies.filter((b) => b.type === 'planet').map((b) => b.id))
+    expect((SOLAR_SYSTEM.belts ?? []).filter((b) => planetIds.has(b.parentId))).toEqual([])
+  })
+
+  it('gives Saturn its main rings, with the Cassini Division left clear between B and A', () => {
+    const saturn = bodyById('saturn')
+    const band = (name: string) => saturn.rings!.find((r) => r.name === name)!
+    expect(band('B').outerRadiusKm).toBeLessThan(band('A').innerRadiusKm)
+    expect(band('A').innerRadiusKm - band('B').outerRadiusKm).toBeGreaterThan(4_000)
+    expect(saturn.axialTiltDeg).toBeCloseTo(26.73, 1)
+  })
+
+  it('tilts Uranus (and its rings) nearly on its side', () => {
+    const uranus = bodyById('uranus')
+    expect(uranus.rings?.length).toBeGreaterThan(0)
+    expect(uranus.axialTiltDeg).toBeGreaterThan(90)
+  })
+
+  it('gives Jupiter and Neptune their faint ring systems too', () => {
+    expect(bodyById('jupiter').rings?.length).toBeGreaterThan(0)
+    expect(bodyById('neptune').rings?.length).toBeGreaterThan(0)
+  })
+
+  it('keeps the asteroid belt clear at the Kirkwood gaps', () => {
+    const belt = SOLAR_SYSTEM.belts!.find((b) => b.id === 'asteroid-belt')!
+    expect(belt.gaps?.map((g) => g.name)).toEqual(expect.arrayContaining(['3:1', '5:2', '7:3']))
+  })
+
+  it('passes every ring and belt check', () => {
+    const problems = validateSystemData(SOLAR_SYSTEM).filter((w) => w.kind === 'invalid-ring' || w.kind === 'invalid-belt')
+    expect(problems).toEqual([])
   })
 })

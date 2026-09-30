@@ -5,9 +5,10 @@ import { trueRadius } from '../scale'
 import { renderRadius } from '../pixelFloor'
 import { computeVisibleBodyIds, isAlwaysVisible } from '../visibility'
 import { computeOrbitalDepth } from '../labelDeclutter'
+import { beltShape } from '../belts'
 import type { CelestialBody, StarSystemData } from '../types'
 import { OrbitPathLine, ReferenceOrbitRing, RoutePreviewLine } from './OrbitLines'
-import { BeltGlowRing, BeltPoints } from './BeltRendering'
+import { BeltGlowRing, BeltPoints, BeltSites } from './BeltRendering'
 import { BodyMarker } from './BodyMarker'
 import { ProximitySelector } from './ProximitySelector'
 import { NON_ORBITING_MARKER_TYPES } from './bodyTypeStyles'
@@ -152,11 +153,13 @@ export function SceneContent({
       {system.belts?.map((belt) => (
         <group key={belt.id}>
           {/* A flat glow disc only makes sense for something genuinely
-              flat and full-circle — a 'cloud' (e.g. Oort) is a spherical
-              shell, not a ring, and a co-orbital cluster only occupies a
-              narrow arc, so both would look actively misleading here. */}
-          {!belt.coOrbital && belt.type === 'belt' && <BeltGlowRing belt={belt} system={system} simDate={simDate} />}
+              flat and full-circle — a shell (e.g. Oort) is spherical, a
+              cluster only occupies local patches, and a co-orbital
+              population only a narrow arc, so all three would look
+              actively misleading here. */}
+          {!belt.coOrbital && beltShape(belt) === 'ring' && <BeltGlowRing belt={belt} system={system} simDate={simDate} />}
           <BeltPoints belt={belt} system={system} simDate={simDate} />
+          <BeltSites belt={belt} system={system} simDate={simDate} />
         </group>
       ))}
     </>

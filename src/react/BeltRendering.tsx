@@ -1,23 +1,24 @@
 import { useMemo } from 'react'
 import { Points, PointMaterial } from '@react-three/drei'
 import * as THREE from 'three'
+import { beltGlowInnerRatio, sampleBeltParticles } from '../belts'
 import { coOrbitalReferenceAngle } from '../resolve'
 import { compressVec, resolveWorldPosition, type WorldVec } from '../render'
 import { compressDistance } from '../scale'
-import type { BeltRegion, StarSystemData } from '../types'
+import type { BeltRegion, BeltSite, StarSystemData } from '../types'
 import { glowSprite, ringGlowTexture } from './textures'
 
 /**
  * A flat, soft-edged glow disc spanning a belt's full inner-to-outer
  * radius — only makes sense for a belt spread around the whole circle
- * (the main asteroid belt, Kuiper belt, Saturn's rings), not a co-orbital
+ * (the main asteroid belt, the Kuiper belt), not a co-orbital
  * cluster like the Trojans, which only occupies a narrow arc.
  */
 export function BeltGlowRing({ belt, system, simDate }: { belt: BeltRegion; system: StarSystemData; simDate: Date }) {
   const parent = system.bodies.find((b) => b.id === belt.parentId)
   const [x, y, z] = parent ? resolveWorldPosition(parent, system.bodies, simDate) : ([0, 0, 0] as WorldVec)
   const outerWorldRadius = compressDistance(belt.outerRadiusKm)
-  const innerRatio = belt.innerRadiusKm / belt.outerRadiusKm
+  const innerRatio = beltGlowInnerRatio(belt)
   const texture = useMemo(() => ringGlowTexture(innerRatio), [innerRatio])
 
   return (
@@ -36,34 +37,14 @@ export function BeltGlowRing({ belt, system, simDate }: { belt: BeltRegion; syst
   )
 }
 
-/** Per-particle (radiusKm, angleOffsetRad, phiRad) — generated once and
- *  reused every frame, so a co-orbital population's particles keep their
- *  own fixed slot in the cluster and just carry it around as the reference
- *  angle moves, rather than re-randomising (visibly "sparkling") every tick. */
-function useBeltShape(belt: BeltRegion): Float32Array {
-  return useMemo(() => {
-    const spreadRad = (belt.inclinationSpreadDeg * Math.PI) / 180
-    const angularSpreadRad = belt.coOrbital ? (belt.coOrbital.angularSpreadDeg * Math.PI) / 180 : Math.PI * 2
-    const arr = new Float32Array(belt.particleCount * 3)
-    for (let i = 0; i < belt.particleCount; i++) {
-      arr[i * 3] = belt.innerRadiusKm + Math.random() * (belt.outerRadiusKm - belt.innerRadiusKm)
-      arr[i * 3 + 1] = belt.coOrbital ? (Math.random() - 0.5) * angularSpreadRad : Math.random() * Math.PI * 2
-      arr[i * 3 + 2] = (Math.random() - 0.5) * spreadRad
-    }
-    return arr
-    // Deliberately NOT depending on belt.innerRadiusKm/outerRadiusKm/
-    // inclinationSpreadDeg/coOrbital/particleCount — this scatter is meant
-    // to stay fixed per belt (see this function's own comment on avoiding
-    // "sparkling" from re-randomizing every tick), keyed only on belt.id.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [belt.id])
-}
-
 export function BeltPoints({ belt, system, simDate }: { belt: BeltRegion; system: StarSystemData; simDate: Date }) {
-  // Only build the synthetic scatter shape when there's no real data to use
-  // instead — calling the hook unconditionally (not inside the branch
-  // below) keeps hook order stable across renders either way.
-  const syntheticShape = useBeltShape(belt)
+  // Per-particle (radius, angle offset, elevation), generated once per belt
+  // and reused every frame, so a co-orbital population's particles keep
+  // their own fixed slot in the cluster and just carry it round as the
+  // reference angle moves. Seeded from the belt's id (see belts.ts), so the
+  // pattern is also the same on every load. Built unconditionally — before
+  // the realPositions branch below — to keep hook order stable.
+  const syntheticShape = useMemo(() => sampleBeltParticles(belt), [belt])
 
   const positions = useMemo(() => {
     const parent = system.bodies.find((b) => b.id === belt.parentId)
@@ -100,7 +81,7 @@ export function BeltPoints({ belt, system, simDate }: { belt: BeltRegion; system
       // parent's own (already hierarchically-compressed) world position —
       // same reasoning as render.ts's resolveWorldPosition: compressing a
       // combined absolute-style vector would flatten a ring's real spread
-      // for any parent far from the star (e.g. Saturn's rings).
+      // for any parent far from the star.
       const [rx, ry, rz] = compressVec({
         x: radiusKm * Math.cos(theta) * Math.cos(phi),
         y: radiusKm * Math.sin(theta) * Math.cos(phi),
@@ -133,3 +114,52 @@ export function BeltPoints({ belt, system, simDate }: { belt: BeltRegion; system
     </Points>
   )
 }
+
+/**
+ * Named sites inside a belt (see BeltRegion.sites) — drawn as larger,
+ * brighter markers among the belt's own population, so they read as
+ * "these particular places, in this belt" rather than as another belt.
+ */
+export function BeltSites({ belt, system, simDate }: { belt: BeltRegion; system: StarSystemData; simDate: Date }) {
+  const parent = system.bodies.find((b) => b.id === belt.parentId)
+  const parentWorld = useMemo(
+    () => (parent ? resolveWorldPosition(parent, system.bodies, simDate) : ([0, 0, 0] as WorldVec)),
+    [parent, system, simDate]
+  )
+  if (!belt.sites?.length) return null
+  return (
+    <>
+      {belt.sites.map((site) => (
+        <SiteMarkers key={site.name} site={site} parentWorld={parentWorld} fallbackColor={belt.color} />
+      ))}
+    </>
+  )
+}
+
+function SiteMarkers({ site, parentWorld, fallbackColor }: { site: BeltSite; parentWorld: WorldVec; fallbackColor?: string }) {
+  const positions = useMemo(() => {
+    const arr = new Float32Array(site.positions.length * 3)
+    site.positions.forEach((p, i) => {
+      const [rx, ry, rz] = compressVec({ x: p.xKm, y: p.yKm, z: p.zKm })
+      arr[i * 3] = parentWorld[0] + rx
+      arr[i * 3 + 1] = parentWorld[1] + ry
+      arr[i * 3 + 2] = parentWorld[2] + rz
+    })
+    return arr
+  }, [site, parentWorld])
+  return (
+    <Points positions={positions}>
+      <PointMaterial
+        map={glowSprite()}
+        color={site.color ?? fallbackColor ?? '#fbbf24'}
+        size={7}
+        sizeAttenuation={false}
+        transparent
+        opacity={0.85}
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </Points>
+  )
+}
+

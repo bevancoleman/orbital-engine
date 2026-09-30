@@ -238,6 +238,15 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 69_911,
       color: '#d97706',
+      // Obliquity and ring radii: NASA NSSDCA Jupiter fact sheet and
+      // Jupiter rings fact sheet. The rings are faint dust — halo, main
+      // ring, and the two gossamer rings merged into one wide, faint band.
+      axialTiltDeg: 3.13,
+      rings: [
+        { name: 'Halo', innerRadiusKm: 92_000, outerRadiusKm: 122_500, opacity: 0.05, color: '#b89a7a' },
+        { name: 'Main', innerRadiusKm: 122_500, outerRadiusKm: 129_000, opacity: 0.14, color: '#b89a7a' },
+        { name: 'Gossamer', innerRadiusKm: 129_000, outerRadiusKm: 226_000, opacity: 0.03, color: '#b89a7a' },
+      ],
       fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 5.202887 * AU_KM,
@@ -335,6 +344,18 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 58_232,
       color: '#eab308',
+      // Obliquity and ring radii: NASA NSSDCA Saturn fact sheet and Saturn
+      // rings fact sheet. The Cassini Division (117,580–122,170 km) is the
+      // gap left between the B and A bands; the F ring's ~200 km width is a
+      // representative figure (it varies from ~50 to ~500 km).
+      axialTiltDeg: 26.73,
+      rings: [
+        { name: 'D', innerRadiusKm: 66_900, outerRadiusKm: 74_510, opacity: 0.08, color: '#cbbd9e' },
+        { name: 'C', innerRadiusKm: 74_658, outerRadiusKm: 92_000, opacity: 0.25, color: '#cbbd9e' },
+        { name: 'B', innerRadiusKm: 92_000, outerRadiusKm: 117_580, opacity: 0.7, color: '#efe3c4' },
+        { name: 'A', innerRadiusKm: 122_170, outerRadiusKm: 136_775, opacity: 0.5, color: '#e3d6b6' },
+        { name: 'F', innerRadiusKm: 140_080, outerRadiusKm: 140_280, opacity: 0.35, color: '#e3d6b6' },
+      ],
       fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 9.53667594 * AU_KM,
@@ -385,6 +406,87 @@ export const SOLAR_SYSTEM: StarSystemData = {
         epoch: J2000,
       },
     },
+    // Saturn's mid-sized moons: mean elements from JPL SSD (ssd.jpl.nasa.gov/sats/elem),
+    // radii from the NASA planetary fact sheets. Inclinations are to Saturn's
+    // equatorial (Laplace) plane, same convention as Rhea above.
+    {
+      id: 'enceladus',
+      name: 'Enceladus',
+      type: 'moon',
+      parentId: 'saturn',
+      radiusKm: 252.1,
+      color: '#f8fafc',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 238_400,
+        eccentricity: 0.005,
+        inclinationDeg: 0.0,
+        longitudeOfAscendingNodeDeg: 0.0,
+        argumentOfPeriapsisDeg: 119.5,
+        meanAnomalyAtEpochDeg: 57.0,
+        orbitalPeriodDays: 1.370218,
+        epoch: J2000,
+      },
+    },
+    {
+      id: 'tethys',
+      name: 'Tethys',
+      type: 'moon',
+      parentId: 'saturn',
+      radiusKm: 531.1,
+      color: '#e7e5e4',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 295_000,
+        eccentricity: 0.001,
+        inclinationDeg: 1.1,
+        longitudeOfAscendingNodeDeg: 273.0,
+        argumentOfPeriapsisDeg: 335.3,
+        meanAnomalyAtEpochDeg: 0.0,
+        orbitalPeriodDays: 1.887802,
+        epoch: J2000,
+      },
+    },
+    {
+      id: 'dione',
+      name: 'Dione',
+      type: 'moon',
+      parentId: 'saturn',
+      radiusKm: 561.4,
+      color: '#d6d3d1',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 377_700,
+        eccentricity: 0.002,
+        inclinationDeg: 0.0,
+        longitudeOfAscendingNodeDeg: 0.0,
+        argumentOfPeriapsisDeg: 116.0,
+        meanAnomalyAtEpochDeg: 212.0,
+        orbitalPeriodDays: 2.736916,
+        epoch: J2000,
+      },
+    },
+    {
+      id: 'iapetus',
+      name: 'Iapetus',
+      type: 'moon',
+      parentId: 'saturn',
+      radiusKm: 734.5,
+      color: '#a8a29e',
+      fixedPosition: null,
+      orbit: {
+      // Iapetus orbits far out, tilted ~15° to Saturn's equator — its orbit follows
+      // a Laplace plane between Saturn's equator and its orbital plane.
+        semiMajorAxisKm: 3_561_700,
+        eccentricity: 0.028,
+        inclinationDeg: 7.6,
+        longitudeOfAscendingNodeDeg: 86.5,
+        argumentOfPeriapsisDeg: 254.5,
+        meanAnomalyAtEpochDeg: 74.8,
+        orbitalPeriodDays: 79.331002,
+        epoch: J2000,
+      },
+    },
 
     // ── Uranus + major moons ─────────────────────────────────────────────
     {
@@ -394,6 +496,15 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 25_362,
       color: '#67e8f9',
+      // Obliquity and ring radii: NASA NSSDCA Uranus fact sheet and Uranian
+      // rings fact sheet. Thirteen narrow, dark rings, grouped here into the
+      // inner set (6, 5, 4, α, β), the η–δ set, and the bright ε ring.
+      axialTiltDeg: 97.77,
+      rings: [
+        { name: '6–β', innerRadiusKm: 41_800, outerRadiusKm: 45_700, opacity: 0.12, color: '#8c8c8c' },
+        { name: 'η–δ', innerRadiusKm: 47_150, outerRadiusKm: 48_320, opacity: 0.14, color: '#8c8c8c' },
+        { name: 'ε', innerRadiusKm: 51_100, outerRadiusKm: 51_200, opacity: 0.5, color: '#a3a3a3' },
+      ],
       fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 19.18916464 * AU_KM,
@@ -427,6 +538,85 @@ export const SOLAR_SYSTEM: StarSystemData = {
         epoch: J2000,
       },
     },
+    // Uranus's other major moons: mean elements from JPL SSD, radii from the
+    // NASA fact sheets. Inclination adds Uranus's ~97.8° axial tilt, same
+    // convention as Titania above.
+    {
+      id: 'miranda',
+      name: 'Miranda',
+      type: 'moon',
+      parentId: 'uranus',
+      radiusKm: 235.8,
+      color: '#a8a29e',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 129_846,
+        eccentricity: 0.001,
+        inclinationDeg: 102.2,
+        longitudeOfAscendingNodeDeg: 100.9,
+        argumentOfPeriapsisDeg: 154.8,
+        meanAnomalyAtEpochDeg: 73.0,
+        orbitalPeriodDays: 1.413479,
+        epoch: J2000,
+      },
+    },
+    {
+      id: 'ariel',
+      name: 'Ariel',
+      type: 'moon',
+      parentId: 'uranus',
+      radiusKm: 578.9,
+      color: '#c4c0bc',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 190_929,
+        eccentricity: 0.001,
+        inclinationDeg: 97.8,
+        longitudeOfAscendingNodeDeg: 0.0,
+        argumentOfPeriapsisDeg: 9.6,
+        meanAnomalyAtEpochDeg: 193.5,
+        orbitalPeriodDays: 2.520379,
+        epoch: J2000,
+      },
+    },
+    {
+      id: 'umbriel',
+      name: 'Umbriel',
+      type: 'moon',
+      parentId: 'uranus',
+      radiusKm: 584.7,
+      color: '#78716c',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 265_986,
+        eccentricity: 0.004,
+        inclinationDeg: 97.9,
+        longitudeOfAscendingNodeDeg: 174.8,
+        argumentOfPeriapsisDeg: 183.4,
+        meanAnomalyAtEpochDeg: 253.0,
+        orbitalPeriodDays: 4.144177,
+        epoch: J2000,
+      },
+    },
+    {
+      id: 'oberon',
+      name: 'Oberon',
+      type: 'moon',
+      parentId: 'uranus',
+      radiusKm: 761.4,
+      color: '#8a8580',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 583_511,
+        eccentricity: 0.002,
+        inclinationDeg: 97.9,
+        longitudeOfAscendingNodeDeg: 76.8,
+        argumentOfPeriapsisDeg: 132.2,
+        meanAnomalyAtEpochDeg: 143.6,
+        orbitalPeriodDays: 13.463237,
+        epoch: J2000,
+      },
+    },
 
     // ── Neptune + Triton ─────────────────────────────────────────────────
     {
@@ -436,6 +626,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 24_622,
       color: '#60a5fa',
+      // Obliquity and ring radii: NASA NSSDCA Neptune fact sheet and
+      // Neptunian rings fact sheet — faint dusty rings, with the narrow Le
+      // Verrier and Adams rings the brightest.
+      axialTiltDeg: 28.32,
+      rings: [
+        { name: 'Galle', innerRadiusKm: 40_900, outerRadiusKm: 42_900, opacity: 0.05, color: '#9a9a9a' },
+        { name: 'Le Verrier', innerRadiusKm: 53_140, outerRadiusKm: 53_260, opacity: 0.25, color: '#9a9a9a' },
+        { name: 'Lassell', innerRadiusKm: 53_260, outerRadiusKm: 57_200, opacity: 0.04, color: '#9a9a9a' },
+        { name: 'Adams', innerRadiusKm: 62_900, outerRadiusKm: 62_960, opacity: 0.3, color: '#b0b0b0' },
+      ],
       fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 30.06992276 * AU_KM,
@@ -558,6 +758,70 @@ export const SOLAR_SYSTEM: StarSystemData = {
         epoch: '2026-06-09T00:00:00Z',
       },
     },
+    // Small bodies visited by spacecraft — osculating elements from JPL's
+    // Small-Body Database (ssd-api.jpl.nasa.gov/sbdb.api), radius as the
+    // mean of the published diameter.
+    {
+      id: 'eros',
+      name: '433 Eros',
+      type: 'asteroid',
+      parentId: 'sun',
+      radiusKm: 8.42,
+      color: '#a8906c',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 1.458244 * AU_KM,
+        eccentricity: 0.222878,
+        inclinationDeg: 10.8285,
+        longitudeOfAscendingNodeDeg: 304.268,
+        argumentOfPeriapsisDeg: 178.918,
+        meanAnomalyAtEpochDeg: 62.5115,
+        orbitalPeriodDays: 643.196,
+        epoch: '2026-06-09T00:00:00Z',
+      },
+      note: 'Near-Earth asteroid, 34 × 11 × 11 km — visited by NEAR Shoemaker (2000–01).',
+    },
+    {
+      id: 'bennu',
+      name: '101955 Bennu',
+      type: 'asteroid',
+      parentId: 'sun',
+      radiusKm: 0.2422,
+      color: '#57534e',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 1.126391 * AU_KM,
+        eccentricity: 0.203745,
+        inclinationDeg: 6.03494,
+        longitudeOfAscendingNodeDeg: 2.06087,
+        argumentOfPeriapsisDeg: 66.2231,
+        meanAnomalyAtEpochDeg: 101.704,
+        orbitalPeriodDays: 436.649,
+        epoch: '2011-01-01T00:00:00Z',
+      },
+      note: 'Near-Earth asteroid, ~490 m across — sampled by OSIRIS-REx (2020).',
+    },
+    {
+      id: 'arrokoth',
+      name: '486958 Arrokoth',
+      type: 'asteroid',
+      parentId: 'sun',
+      radiusKm: 9,
+      color: '#b45309',
+      beltId: 'kuiper-belt',
+      fixedPosition: null,
+      orbit: {
+        semiMajorAxisKm: 44.052578 * AU_KM,
+        eccentricity: 0.035557,
+        inclinationDeg: 2.45061,
+        longitudeOfAscendingNodeDeg: 159.038,
+        argumentOfPeriapsisDeg: 188.851,
+        meanAnomalyAtEpochDeg: 310.984,
+        orbitalPeriodDays: 106796.1,
+        epoch: '2026-06-09T00:00:00Z',
+      },
+      note: 'Kuiper belt contact binary, 36 × 20 × 10 km — flown past by New Horizons (2019). Radius is volume-equivalent.',
+    },
     {
       id: 'pluto',
       name: 'Pluto',
@@ -659,6 +923,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       inclinationSpreadDeg: 20,
       particleCount: 4000,
       color: '#a8a29e',
+      // The Kirkwood gaps — orbits cleared by resonance with Jupiter, named
+      // by the ratio of the asteroid's orbital period to Jupiter's. Centred
+      // on the semi-major axes of the 3:1 (2.50 AU), 5:2 (2.82 AU) and 7:3
+      // (2.95 AU) resonances, ±0.03 AU. (The 2:1 gap at 3.27 AU lies past
+      // this belt's outer edge.)
+      gaps: [
+        { name: '3:1', innerRadiusKm: 2.47 * AU_KM, outerRadiusKm: 2.53 * AU_KM },
+        { name: '5:2', innerRadiusKm: 2.79 * AU_KM, outerRadiusKm: 2.85 * AU_KM },
+        { name: '7:3', innerRadiusKm: 2.92 * AU_KM, outerRadiusKm: 2.98 * AU_KM },
+      ],
     },
     {
       id: 'kuiper-belt',
@@ -682,18 +956,6 @@ export const SOLAR_SYSTEM: StarSystemData = {
       particleCount: 3000,
       color: '#e0f2fe',
       note: 'Scale is illustrative — the Oort Cloud\'s real outer edge is roughly a light-year out, far beyond where this engine\'s distance compression stays legible.',
-    },
-    {
-      id: 'saturn-rings',
-      name: "Saturn's Rings",
-      type: 'belt',
-      parentId: 'saturn',
-      innerRadiusKm: 66_900,
-      outerRadiusKm: 140_180,
-      inclinationSpreadDeg: 0.5,
-      particleCount: 3000,
-      color: '#fef3c7',
-      note: 'Demonstrates a belt around a planet, not just the star — same BeltRegion shape either way.',
     },
 
     // ── Jupiter Trojans — a real, distinct population from the main belt:

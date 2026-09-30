@@ -4,7 +4,10 @@ export type {
   OrbitalElements,
   FixedPosition,
   CelestialBody,
+  RingBand,
   BeltRegion,
+  BeltShape,
+  BeltSite,
   StarSystemData,
 } from './types'
 
@@ -26,6 +29,12 @@ export {
   resolveAllWorldPositions,
 } from './render'
 export { resolveAbsolutePosition, resolveAllPositions, coOrbitalReferenceAngle } from './resolve'
+
+// A body's own ring system, and belt populations
+export type { InvalidRingWarning } from './rings'
+export { ringOuterRadiusKm, ringWorldRadius, ringTiltRadians, findInvalidRings } from './rings'
+export type { InvalidBeltWarning } from './belts'
+export { beltShape, sampleBeltParticles, beltGlowInnerRatio, findInvalidBelts } from './belts'
 
 // True-scale compression + the pixel-floor visibility system
 export { compressDistance, trueRadius } from './scale'

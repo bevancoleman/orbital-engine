@@ -33,4 +33,24 @@ describe('validateSystemData', () => {
     // both are real, correct findings about the same fixture, not a bug.
     expect(kinds).toEqual(new Set(['missing-position', 'unrecognized-type', 'embedded-in-parent', 'embedded-in-sibling']))
   })
+
+  it('reports invalid rings and belts alongside the other warning kinds', () => {
+    const star = body({ id: 'star', parentId: null, type: 'star' })
+    const planet = body({
+      id: 'planet',
+      parentId: 'star',
+      type: 'planet',
+      radiusKm: 60_000,
+      fixedPosition: { xKm: 1e9, yKm: 0, zKm: 0 },
+      rings: [{ innerRadiusKm: 30_000, outerRadiusKm: 90_000 }],
+    })
+    const warnings = validateSystemData({
+      ...system([star, planet]),
+      belts: [{ id: 'orphan', name: 'Orphan', type: 'belt', parentId: 'nowhere', innerRadiusKm: 1, outerRadiusKm: 2, inclinationSpreadDeg: 1, particleCount: 1 }],
+    })
+    expect(warnings).toEqual([
+      expect.objectContaining({ kind: 'invalid-ring', bodyId: 'planet', problem: 'inside-body' }),
+      expect.objectContaining({ kind: 'invalid-belt', beltId: 'orphan', problem: 'unknown-parent' }),
+    ])
+  })
 })
