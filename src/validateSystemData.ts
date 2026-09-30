@@ -1,5 +1,7 @@
 import { findBodiesWithoutExplicitPosition, findBodiesWithUnrecognizedType } from './dataContractWarnings'
 import { findBodiesInsideParent, findBodiesInsideSiblings } from './embeddedBodyWarnings'
+import { findInvalidBelts } from './belts'
+import { findInvalidRings } from './rings'
 import type { StarSystemData } from './types'
 
 /**
@@ -9,14 +11,17 @@ import type { StarSystemData } from './types'
  * contract explicitness checks (would this body's location/type only
  * "work" because of a silent default?); two are rendering-legibility
  * checks (is this body's real, correct position going to render occluded
- * inside another body?) — see each finder's own doc comment
- * (dataContractWarnings.ts, embeddedBodyWarnings.ts) for the distinction.
+ * inside another body?); two check that ring bands and belts can be drawn
+ * as described — see each finder's own doc comment
+ * (dataContractWarnings.ts, embeddedBodyWarnings.ts, rings.ts, belts.ts).
  */
 export type SystemDataWarning =
   | ({ kind: 'missing-position' } & ReturnType<typeof findBodiesWithoutExplicitPosition>[number])
   | ({ kind: 'unrecognized-type' } & ReturnType<typeof findBodiesWithUnrecognizedType>[number])
   | ({ kind: 'embedded-in-parent' } & ReturnType<typeof findBodiesInsideParent>[number])
   | ({ kind: 'embedded-in-sibling' } & ReturnType<typeof findBodiesInsideSiblings>[number])
+  | ({ kind: 'invalid-ring' } & ReturnType<typeof findInvalidRings>[number])
+  | ({ kind: 'invalid-belt' } & ReturnType<typeof findInvalidBelts>[number])
 
 /**
  * Runs every data-contract/rendering-legibility check this engine has
@@ -35,5 +40,7 @@ export function validateSystemData(system: StarSystemData): SystemDataWarning[] 
     ...findBodiesWithUnrecognizedType(system).map((w) => ({ kind: 'unrecognized-type' as const, ...w })),
     ...findBodiesInsideParent(system).map((w) => ({ kind: 'embedded-in-parent' as const, ...w })),
     ...findBodiesInsideSiblings(system).map((w) => ({ kind: 'embedded-in-sibling' as const, ...w })),
+    ...findInvalidRings(system).map((w) => ({ kind: 'invalid-ring' as const, ...w })),
+    ...findInvalidBelts(system).map((w) => ({ kind: 'invalid-belt' as const, ...w })),
   ]
 }

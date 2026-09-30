@@ -13,6 +13,13 @@ const FLY_TARGETS = [
   { id: 'saturn', label: 'Saturn' },
   { id: 'iss', label: 'ISS' },
   { id: 'hubble', label: 'Hubble' },
+  { id: 'mercury', label: 'Mercury' },
+  { id: 'iapetus', label: 'Iapetus' },
+  { id: 'vesta', label: 'Vesta' },
+  { id: 'eros', label: 'Eros' },
+  { id: 'bennu', label: 'Bennu' },
+  { id: 'arrokoth', label: 'Arrokoth' },
+  { id: 'halley', label: "Halley's Comet" },
   { id: 'sun', label: 'Sun (no real asset)' },
 ]
 
@@ -65,7 +72,7 @@ export function App() {
 
         <p style={{ maxWidth: 700, fontSize: 13, opacity: 0.85, margin: 0 }}>
           {mode === 'real-assets'
-            ? 'CelestialBody.modelUrl (a real 3D model) and CelestialBody.textureUrl (a real surface photo wrapped around the built-in sphere) are both opt-in per body. 21 of the 30 bodies here have one; the other 9 (Sun, Mercury, Ceres, Vesta, Pallas, Hygiea, Uranus, Eris, and the comet) fall through to the ordinary placeholder shape because no real NASA asset exists for them — that fallback is the same code path this whole scene uses when neither field is set at all.'
+            ? `CelestialBody.modelUrl (a real 3D model) and CelestialBody.textureUrl (a real surface map wrapped around the built-in sphere) are both opt-in per body. ${HAS_REAL_ASSET.size} of the ${SOLAR_SYSTEM_WITH_ASSETS.bodies.length} bodies here have one — spacecraft shape models for Halley's Comet, Vesta, Ceres, Eros, Bennu and Arrokoth, and spacecraft maps for the rest. The others (Sun, Pallas, Hygiea, Uranus, Eris) fall through to the ordinary placeholder shape: no spacecraft has mapped them. That fallback is the same code path this whole scene uses when neither field is set at all.`
             : 'The same SOLAR_SYSTEM data, with modelUrl/textureUrl stripped — everything renders through the built-in placeholder shapes. Compare against the other mode to see exactly what changes.'}
         </p>
 

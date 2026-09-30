@@ -216,21 +216,95 @@ export interface CelestialBody {
    * anything real about them.
    */
   atmosphereHeightKm?: number
+  /**
+   * Obliquity, degrees — the tilt of this body's equator (and so of its
+   * ring plane) against its own orbital reference plane. Saturn's rings sit
+   * at its 26.7°, Uranus's at a near-sideways 97.8°. Only `rings` use it
+   * so far; unset means 0 (rings flat in the reference plane).
+   */
+  axialTiltDeg?: number
+  /**
+   * The body's own ring system — part of the body, not a separate object:
+   * drawn with it, moving with it, selected and framed with it, in its
+   * equatorial plane (see `axialTiltDeg`). Radii are real km from the
+   * body's centre and scale with the body as it's rendered, so a ring stays
+   * in proportion even while a small body is floored to a minimum on-screen
+   * size (see pixelFloor.ts). For a population that surrounds a star, or a
+   * large belt a planet merely sits inside, use a `BeltRegion` instead —
+   * those are objects in their own right.
+   */
+  rings?: RingBand[]
 }
 
 /**
- * A belt or cloud isn't a single orbiting body — it's a population spread
- * across a radius range (asteroid belt, Kuiper belt) or a very wide
- * inclination spread (Oort cloud), or a physically thin ring around a
- * planet (Saturn's rings — same shape, different parent/scale). Rendered as
- * a scattered point cloud rather than a discrete tracked position.
+ * One band of a body's ring system (see CelestialBody.rings) — e.g.
+ * Saturn's A, B and C rings are three bands, with the Cassini Division as
+ * the gap left between B and A.
+ */
+export interface RingBand {
+  name?: string
+  innerRadiusKm: number
+  outerRadiusKm: number
+  /**
+   * 'disc' (the default): a smooth, translucent band — dust and ice rings
+   * like Saturn's, too fine to show as individual particles. 'particles': a
+   * scatter of individual points — a ring of actual rocks, like an asteroid
+   * belt around a moon.
+   */
+  style?: 'disc' | 'particles'
+  color?: string
+  /** 0–1; how solid a 'disc' band reads. Defaults to a faint 0.35. */
+  opacity?: number
+  /** How many points a 'particles' band draws. Defaults to 600. */
+  particleCount?: number
+}
+
+/**
+ * The overall shape of a belt's population:
+ * - 'ring': spread round the whole circle between the two radii (the
+ *   asteroid belt, the Kuiper belt) — drawn with a soft glow disc under
+ *   its points.
+ * - 'shell': spread in every direction (the Oort cloud) — points only.
+ * - 'cluster': concentrated in one or more local patches rather than round
+ *   the whole circle (e.g. asteroid clusters at a Lagrange point) — points
+ *   only, since a full-circle glow disc would draw a belt that isn't there.
+ */
+export type BeltShape = 'ring' | 'shell' | 'cluster'
+
+/**
+ * A named set of sites inside a belt — e.g. mining stations scattered
+ * through an asteroid belt. Part of the belt (drawn with it, as distinct
+ * markers), not a separate belt stacked on top of it.
+ */
+export interface BeltSite {
+  name: string
+  /** Real positions, km, relative to the belt's own `parentId`. */
+  positions: { xKm: number; yKm: number; zKm: number }[]
+  color?: string
+  note?: string
+  wikiSummary?: string
+  wikiUrl?: string
+}
+
+/**
+ * A population spread across a region rather than one tracked body: a belt
+ * round a star (the asteroid belt, the Kuiper belt), a shell (the Oort
+ * cloud), or local clusters (a Lagrange point's asteroids). These are
+ * objects in their own right — selectable and framed as belts. A planet's
+ * own ring system is not a belt: it's part of the planet (see
+ * CelestialBody.rings).
  */
 export interface BeltRegion {
   id: string
   name: string
   type: 'belt' | 'cloud'
-  /** id of the body this surrounds — usually the star, but a ring system
-   *  (e.g. Saturn's) surrounds a planet instead. */
+  /**
+   * The population's shape (see BeltShape). Defaults from `type`: 'belt' →
+   * 'ring', 'cloud' → 'shell'. Set 'cluster' for a population that isn't
+   * spread round the whole circle.
+   */
+  shape?: BeltShape
+  /** id of the body this surrounds or clusters round — usually the star. */
   parentId: string
   innerRadiusKm: number
   outerRadiusKm: number
@@ -255,6 +329,15 @@ export interface BeltRegion {
    * distribution, whenever real data actually exists.
    */
   realPositions?: { xKm: number; yKm: number; zKm: number }[]
+  /**
+   * Radius ranges the scattered population keeps clear of — e.g. the
+   * asteroid belt's Kirkwood gaps, cleared by resonance with Jupiter. Only
+   * affects the statistical scatter; ignored when `realPositions` is set.
+   */
+  gaps?: { name?: string; innerRadiusKm: number; outerRadiusKm: number }[]
+  /** Named sites inside this belt (see BeltSite), drawn as distinct
+   *  markers among its population. */
+  sites?: BeltSite[]
   /**
    * When set, this population isn't spread uniformly around the full
    * circle — it clusters in a libration zone leading or trailing a specific

@@ -9,6 +9,7 @@
 
 import { resolveWorldPosition, type WorldVec } from './render'
 import { compressDistance, trueRadius } from './scale'
+import { ringOuterRadiusKm } from './rings'
 import type { BeltRegion, CelestialBody, StarSystemData } from './types'
 
 export const DEFAULT_CAMERA_DISTANCE = 134 // matches the initial camera position in OrbitalSystemScene
@@ -1033,6 +1034,11 @@ export function computeFocusForBody(
   // radius) could come out enormously larger than the body's actual
   // rendered size — for the ISS, ~10⁶ times larger.
   let maxExtent = trueRadius(body.radiusKm) * 4
+  // A ring system is part of the body (see CelestialBody.rings), so the
+  // frame has to take it in too — with a small margin so the outer edge
+  // doesn't sit right on the screen's edge.
+  const ringOuterKm = ringOuterRadiusKm(body)
+  if (ringOuterKm !== null) maxExtent = Math.max(maxExtent, trueRadius(ringOuterKm) * 1.2)
   for (const child of children) {
     const childPos = resolveWorldPosition(child, system.bodies, simDate)
     const dist = Math.hypot(childPos[0] - bodyPos[0], childPos[1] - bodyPos[1], childPos[2] - bodyPos[2])

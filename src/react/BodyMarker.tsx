@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { apparentSize } from '../levelOfDetail'
 import type { CelestialBody } from '../types'
 import { BodyShape } from './BodyShapes'
+import { BodyRings } from './BodyRings'
 import { BODY_TYPE_COLOR_FALLBACK } from './bodyTypeStyles'
 import { stepToward } from './animation'
 
@@ -118,6 +119,7 @@ export function BodyMarker({
   return (
     <group ref={groupRef} position={position} scale={Math.max(scaleRef.current, 0.0001)}>
       <BodyShape body={body} radius={radius} color={color} detailSize={detailSize} />
+      <BodyRings body={body} radius={radius} color={color} />
       {(showLabel || isHighlighted) && (
       <Html center style={{ transform: `translateY(${-(radius * 8 + 14)}px)` }}>
         <div

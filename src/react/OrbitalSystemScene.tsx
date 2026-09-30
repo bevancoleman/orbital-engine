@@ -94,6 +94,10 @@ function describeDataWarning(w: SystemDataWarning): { title: string; detail: str
         title: `${w.bodyName} / ${w.otherBodyName}`,
         detail: `${w.distanceKm.toFixed(0)} km apart (radii ${w.bodyRadiusKm.toLocaleString()}/${w.otherBodyRadiusKm.toLocaleString()} km)`,
       }
+    case 'invalid-ring':
+      return { title: `ring on ${w.bodyId}`, detail: w.message }
+    case 'invalid-belt':
+      return { title: `belt ${w.beltId}`, detail: w.message }
   }
 }
 

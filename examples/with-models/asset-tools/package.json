@@ -1,0 +1,16 @@
+{
+  "name": "orbital-engine-example-asset-tools",
+  "private": true,
+  "type": "module",
+  "description": "Rebuilds the with-models example's real NASA/USGS/PDS assets from source. Not installed by the example or CI.",
+  "scripts": {
+    "build": "node build-assets.mjs"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "^4.5.0",
+    "@gltf-transform/extensions": "^4.5.0",
+    "@gltf-transform/functions": "^4.5.0",
+    "adm-zip": "^0.5.16",
+    "sharp": "^0.35.4"
+  }
+}

@@ -9,24 +9,36 @@ import type { StarSystemData } from 'orbital-engine'
 const BASE = import.meta.env.BASE_URL
 
 /**
- * Real 3D models (glTF) — NASA's own spacecraft/instrument collection
- * (github.com/nasa/NASA-3D-Resources), public domain. NASA's collection
- * only covers spacecraft and instruments, not planets/moons — that's why
- * this list is short (ISS, Hubble) while TEXTURE_URLS below is long.
+ * Real 3D models (glTF). Spacecraft from NASA 3D Resources
+ * (github.com/nasa/NASA-3D-Resources); small bodies from NASA's own
+ * spacecraft-derived shape models (science.nasa.gov 3D resources: Vesta
+ * and Ceres from Dawn, Eros from NEAR Shoemaker, Bennu from OSIRIS-REx,
+ * Arrokoth from New Horizons) and, for Halley, the Stooke/Abergel nucleus
+ * model from the PDS Small Bodies Node. See ASSETS.md for every source,
+ * and asset-tools/ to rebuild them.
  */
 const MODEL_URLS: Record<string, string> = {
   iss: `${BASE}models/iss.glb`,
   hubble: `${BASE}models/hubble.glb`,
+  vesta: `${BASE}models/vesta.glb`,
+  ceres: `${BASE}models/ceres.glb`,
+  eros: `${BASE}models/eros.glb`,
+  bennu: `${BASE}models/bennu.glb`,
+  arrokoth: `${BASE}models/arrokoth.glb`,
+  halley: `${BASE}models/halley.glb`,
 }
 
 /**
- * Real surface textures (equirectangular JPGs), same NASA source. Covers
- * every body in SOLAR_SYSTEM that source actually publishes imagery for —
- * every round body NOT listed here (Sun, Mercury, Ceres, Vesta, Pallas,
- * Hygiea, Uranus, Eris) genuinely has no real imagery published there, so
- * it stays a flat-colour placeholder rather than a fabricated texture.
+ * Real surface textures (equirectangular JPGs) — NASA Blue Marble for
+ * Earth, the LRO-based CGI Moon Kit for the Moon, USGS global mosaics
+ * (MESSENGER, Cassini) for Mercury and Saturn's mid-sized moons, and NASA
+ * 3D Resources for the rest. See ASSETS.md. Bodies not listed here (Sun,
+ * Pallas, Hygiea, Uranus, Eris) have no spacecraft map to draw from — Pallas,
+ * Hygiea and Eris have never been visited, and Uranus is near-featureless —
+ * so they keep the flat-colour placeholder rather than a fabricated texture.
  */
 const TEXTURE_URLS: Record<string, string> = {
+  mercury: `${BASE}textures/mercury.jpg`,
   earth: `${BASE}textures/earth.jpg`,
   moon: `${BASE}textures/moon.jpg`,
   venus: `${BASE}textures/venus.jpg`,
@@ -41,7 +53,15 @@ const TEXTURE_URLS: Record<string, string> = {
   saturn: `${BASE}textures/saturn.jpg`,
   titan: `${BASE}textures/titan.jpg`,
   rhea: `${BASE}textures/rhea.jpg`,
+  enceladus: `${BASE}textures/enceladus.jpg`,
+  tethys: `${BASE}textures/tethys.jpg`,
+  dione: `${BASE}textures/dione.jpg`,
+  iapetus: `${BASE}textures/iapetus.jpg`,
   titania: `${BASE}textures/titania.jpg`,
+  miranda: `${BASE}textures/miranda.jpg`,
+  ariel: `${BASE}textures/ariel.jpg`,
+  umbriel: `${BASE}textures/umbriel.jpg`,
+  oberon: `${BASE}textures/oberon.jpg`,
   neptune: `${BASE}textures/neptune.jpg`,
   triton: `${BASE}textures/triton.jpg`,
   pluto: `${BASE}textures/pluto.jpg`,

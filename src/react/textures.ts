@@ -52,3 +52,49 @@ export function ringGlowTexture(innerRatio: number): THREE.CanvasTexture {
   ctx.fillRect(0, 0, size, size)
   return new THREE.CanvasTexture(canvas)
 }
+
+/**
+ * Fine concentric streaks for a ring band (see BodyRings) — real rings are
+ * made of many narrow ringlets of varying density, not one flat sheet.
+ * RingGeometry's UVs map the disc flat across the texture, centred at
+ * (0.5, 0.5) with the outer edge at radius 0.5, so concentric circles drawn
+ * here line up with the ring's own radius. White, varying only in alpha, so
+ * the material's colour tints it. Seeded from `key`, so a band keeps the
+ * same streak pattern on every load.
+ */
+const ringStreakCache = new Map<string, THREE.CanvasTexture>()
+export function ringStreakTexture(key: string, innerRatio: number): THREE.CanvasTexture {
+  const cacheKey = `${key}:${innerRatio.toFixed(4)}`
+  const cached = ringStreakCache.get(cacheKey)
+  if (cached) return cached
+  const size = 512
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  let seed = 0
+  for (let i = 0; i < key.length; i++) seed = (Math.imul(seed, 31) + key.charCodeAt(i)) | 0
+  const rand = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const centre = size / 2
+  const innerPx = innerRatio * centre
+  const steps = Math.max(1, Math.round(centre - innerPx))
+  for (let i = 0; i < steps; i++) {
+    const r = innerPx + i + 0.5
+    // Slowly varying density plus fine per-ringlet flicker.
+    const alpha = 0.55 + 0.3 * Math.sin((i / steps) * Math.PI * 3 + rand() * 0.3) + (rand() - 0.5) * 0.35
+    ctx.strokeStyle = `rgba(255,255,255,${Math.min(1, Math.max(0.05, alpha)).toFixed(3)})`
+    ctx.lineWidth = 1.2
+    ctx.beginPath()
+    ctx.arc(centre, centre, r, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  ringStreakCache.set(cacheKey, texture)
+  return texture
+}
