@@ -54,7 +54,7 @@
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src e2e",
+    "lint": "eslint src e2e scripts",
     "plot:camera-route": "tsx scripts/plotCameraRoute.ts",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
