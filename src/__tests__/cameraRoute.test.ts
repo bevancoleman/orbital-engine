@@ -102,6 +102,31 @@ function assertWithinTolerance(value: number, limit: number, label: string): voi
   if (value > limit) throw new Error(`${label}: ${value} exceeds tolerance ${limit}`)
 }
 
+/** The nullable per-frame metrics — each is null on exactly the frames
+ *  where it doesn't apply (see CameraRouteFrame's own field comments). */
+const NULLABLE_METRICS = [
+  'convergence',
+  'positionConvergence',
+  'trackingError',
+  'turnRateDeg',
+  'flightPathTurnDeg',
+  'parentFramingScore',
+] as const
+
+/** Throws when a nullable metric is null on one side and a number on the
+ *  other. The numeric comparisons below skip a metric when either side is
+ *  null, so without this a regression that turned a real value INTO null
+ *  (or the reverse) would pass silently. */
+function assertNullnessMatches(frame: CameraRouteFrame, expected: CameraRouteFrame, label: string): void {
+  for (const metric of NULLABLE_METRICS) {
+    const actualIsNull = frame[metric] === null
+    const expectedIsNull = expected[metric] === null
+    if (actualIsNull !== expectedIsNull) {
+      throw new Error(`${label}: ${metric} is ${actualIsNull ? 'null' : frame[metric]} but the reference has ${expectedIsNull ? 'null' : expected[metric]}`)
+    }
+  }
+}
+
 describe('simulateCameraRoute — fixed fixture', () => {
   const frames = simulateCameraRoute(
     CAMERA_ROUTE_FIXTURE_SYSTEM,
@@ -261,6 +286,7 @@ describe('simulateCameraRoute — fixed fixture', () => {
         if (!expected) throw new Error(`no reference frame at index ${i} (${frameLabel(frame)})`)
 
         const label = frameLabel(frame)
+        assertNullnessMatches(frame, expected, label)
         const posDrift = vecDistance(frame.cameraPos, expected.cameraPos)
         const targetDrift = vecDistance(frame.target, expected.target)
         assertWithinTolerance(posDrift, TOLERANCE_WORLD_UNITS, `cameraPos drift at ${label}`)
