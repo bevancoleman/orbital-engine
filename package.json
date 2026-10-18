@@ -70,6 +70,7 @@
     "docs": "typedoc",
     "prepare": "npm run build",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:coverage": "node --experimental-vm-modules node_modules/.bin/jest --coverage",
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src e2e",
