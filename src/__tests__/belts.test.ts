@@ -129,3 +129,51 @@ describe('findInvalidBelts', () => {
     ])
   })
 })
+
+describe('sampleBeltParticles — elevation spread semantics', () => {
+  // inclinationSpreadDeg is the population's full angular thickness:
+  // ±half above/below the plane. The asteroid belt's rendering depended on
+  // that, so it's what the docs now say too.
+  it('spreads a ring across ±half the inclination spread', () => {
+    const samples = sampleBeltParticles(belt({ inclinationSpreadDeg: 20 }))
+    const elevations = Array.from({ length: samples.length / 3 }, (_, i) => Math.abs(samples[i * 3 + 2]!))
+    expect(Math.max(...elevations)).toBeLessThanOrEqual((10 * Math.PI) / 180 + 1e-6)
+    expect(Math.max(...elevations)).toBeGreaterThan((9 * Math.PI) / 180)
+  })
+
+  it("doesn't change a ring's scatter — the same seeded draws as before shells were fixed", () => {
+    const ring = sampleBeltParticles(belt({ id: 'asteroid-belt', inclinationSpreadDeg: 20, particleCount: 3 }))
+    const before = [176.34228515625, 3.2919869422912598, -0.09477093815803528, 123.5227279663086, 5.641486167907715, -0.1269283890724182, 121.51610565185547, 0.9743309617042542, -0.058049485087394714]
+    Array.from(ring).forEach((v, i) => expect(v).toBeCloseTo(before[i]!, 5))
+  })
+})
+
+describe('sampleBeltParticles — shells', () => {
+  const shell = (overrides: Partial<BeltRegion> = {}) =>
+    sampleBeltParticles(belt({ type: 'cloud', innerRadiusKm: 100, outerRadiusKm: 200, inclinationSpreadDeg: 180, particleCount: 20_000, ...overrides }))
+
+  it('fills a full sphere uniformly by solid angle, not piled up at the poles', () => {
+    const samples = shell()
+    // Uniform on a sphere ⇔ sin(elevation) uniform on [−1, 1], so half the
+    // points have |sin| > 0.5. Uniform-in-ANGLE sampling (the old
+    // behaviour) gives two thirds.
+    let polar = 0
+    for (let i = 2; i < samples.length; i += 3) if (Math.abs(Math.sin(samples[i]!)) > 0.5) polar++
+    expect(polar / (samples.length / 3)).toBeCloseTo(0.5, 1)
+  })
+
+  it('spreads radius uniformly by VOLUME (r³), not by area', () => {
+    const r = radii(shell())
+    const median = [...r].sort((a, b) => a - b)[Math.floor(r.length / 2)]!
+    // Volume-uniform median: cbrt((100³ + 200³) / 2) ≈ 165.1; area-uniform ≈ 158.1.
+    expect(median).toBeGreaterThan(162)
+    expect(median).toBeLessThan(168)
+    expect(Math.min(...r)).toBeGreaterThanOrEqual(100 - 1e-3)
+    expect(Math.max(...r)).toBeLessThanOrEqual(200 + 1e-3)
+  })
+
+  it('leaves the polar caps empty for a shell thinner than a full sphere', () => {
+    const samples = shell({ inclinationSpreadDeg: 90 })
+    for (let i = 2; i < samples.length; i += 3) expect(Math.abs(samples[i]!)).toBeLessThanOrEqual(Math.PI / 4 + 1e-6)
+  })
+})

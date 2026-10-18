@@ -120,3 +120,15 @@ describe('orbitDetailFor', () => {
     }
   })
 })
+
+describe('detail levels — degenerate sizes', () => {
+  // Real, observed bug: `find` over the levels found nothing for NaN or a
+  // negative size (e.g. a body with no radiusKm) and the `level!` that
+  // followed threw a TypeError mid-render.
+  it.each([Number.NaN, -1])('falls back to the lowest level for size = %s instead of throwing', (size) => {
+    expect(sphereDetailFor(size)).toEqual({ widthSegments: 14, heightSegments: 10 })
+    expect(icosahedronDetailFor(size)).toBe(0)
+    expect(torusDetailFor(size)).toEqual({ radialSegments: 8, tubularSegments: 16 })
+    expect(orbitDetailFor(size)).toBe(48)
+  })
+})
