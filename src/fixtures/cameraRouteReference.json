@@ -8,8 +8,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      59.89800000000001,
-      119.79600000000002
+      59.92662179699436,
+      119.85324359398872
     ],
     "target": [
       0,
@@ -19,7 +19,7 @@
     "turnRateDeg": null,
     "flightPathTurnDeg": null,
     "convergence": 0,
-    "positionConvergence": 1.4871272778113646e-15,
+    "positionConvergence": 0,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -34,8 +34,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      60.14921150782825,
-      120.2984230156565
+      60.17638560887121,
+      120.35277121774241
     ],
     "target": [
       0,
@@ -45,7 +45,7 @@
     "turnRateDeg": 0,
     "flightPathTurnDeg": null,
     "convergence": 0.05453309962912145,
-    "positionConvergence": 0.05257720148132493,
+    "positionConvergence": 0.052589236441247786,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -60,20 +60,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      60.39211569301353,
-      120.78423138602706
+      60.417883797081956,
+      120.83576759416391
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
+    "turnRateDeg": 0.0000012074182697257333,
     "flightPathTurnDeg": 0,
     "convergence": 0.10704669003708767,
-    "positionConvergence": 0.1034157255423938,
+    "positionConvergence": 0.10343809730909129,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -86,8 +86,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      60.62678085901917,
-      121.25356171803834
+      60.65118491346348,
+      121.30236982692696
     ],
     "target": [
       0,
@@ -95,9 +95,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0,
     "convergence": 0.15757887517146785,
-    "positionConvergence": 0.1525298677263687,
+    "positionConvergence": 0.15256101659511176,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -112,8 +112,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      60.853281444721425,
-      121.70656288944285
+      60.87636357682943,
+      121.75272715365885
     ],
     "target": [
       0,
@@ -123,9 +123,9 @@
     "turnRateDeg": 0,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.2061677589798303,
-    "positionConvergence": 0.19993520768494913,
+    "positionConvergence": 0.19997370572845533,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -138,8 +138,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      61.07169785918312,
-      122.14339571836624
+      61.093500309136246,
+      122.18700061827249
     ],
     "target": [
       0,
@@ -149,7 +149,7 @@
     "turnRateDeg": 0,
     "flightPathTurnDeg": 0,
     "convergence": 0.25285144540974436,
-    "positionConvergence": 0.2456485745973937,
+    "positionConvergence": 0.24569311907963273,
     "trackingError": null,
     "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
@@ -164,18 +164,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      61.282116313604824,
-      122.56423262720965
+      61.302681368903066,
+      122.60536273780613
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0,
     "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.2976680384087793,
-    "positionConvergence": 0.28968801199881655,
+    "positionConvergence": 0.28973741888609267,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -190,8 +190,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      61.48462865085018,
-      122.96925730170037
+      61.50399858227703,
+      123.00799716455406
     ],
     "target": [
       0,
@@ -199,9 +199,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "flightPathTurnDeg": 0,
     "convergence": 0.34065564192450337,
-    "positionConvergence": 0.33207274210076343,
+    "positionConvergence": 0.3321259396820385,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -216,8 +216,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      61.67933217293693,
-      123.35866434587386
+      61.69754917212784,
+      123.39509834425569
     ],
     "target": [
       0,
@@ -225,9 +225,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.38185235990448607,
-    "positionConvergence": 0.3728231296860233,
+    "positionConvergence": 0.3728791523132839,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -242,8 +242,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      61.866329466876614,
-      123.73265893375323
+      61.88343558554928,
+      123.76687117109856
     ],
     "target": [
       0,
@@ -251,9 +251,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "flightPathTurnDeg": 0,
     "convergence": 0.42129629629629617,
-    "positionConvergence": 0.4119606456578288,
+    "positionConvergence": 0.4120186276166781,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -268,8 +268,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      62.045728229239145,
-      124.09145645847829
+      62.06176532013716,
+      124.12353064027432
     ],
     "target": [
       0,
@@ -277,11 +277,11 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "flightPathTurnDeg": 0,
     "convergence": 0.45902555504750275,
-    "positionConvergence": 0.4495078303221717,
+    "positionConvergence": 0.4495669998419202,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -294,8 +294,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      62.21764108980991,
-      124.43528217961982
+      62.232650749405416,
+      124.46530149881083
     ],
     "target": [
       0,
@@ -303,9 +303,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.495078240105675,
-    "positionConvergence": 0.4854882564801955,
+    "positionConvergence": 0.4855479298918806,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -320,8 +320,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      62.38218543469803,
-      124.76437086939606
+      62.3962089476927,
+      124.7924178953854
     ],
     "target": [
       0,
@@ -329,11 +329,11 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.5294924554183813,
-    "positionConvergence": 0.5199264924057181,
+    "positionConvergence": 0.5199860684556676,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -346,8 +346,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      62.539483229245334,
-      125.07896645849067
+      62.552561514903466,
+      125.10512302980693
     ],
     "target": [
       0,
@@ -355,9 +355,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.562306304933191,
-    "positionConvergence": 0.5528480647810414,
+    "positionConvergence": 0.552907019106827,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -372,8 +372,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      62.689660841075785,
-      125.37932168215157
+      62.70183440141722,
+      125.40366880283445
     ],
     "target": [
       0,
@@ -383,9 +383,9 @@
     "turnRateDeg": 0,
     "flightPathTurnDeg": 0,
     "convergence": 0.5935578925976732,
-    "positionConvergence": 0.5842794216621613,
+    "positionConvergence": 0.5843373014369599,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -398,8 +398,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      62.832848863615325,
-      125.66569772723065
+      62.844157733490285,
+      125.68831546698057
     ],
     "target": [
       0,
@@ -407,9 +407,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.6232853223593964,
-    "positionConvergence": 0.6142478955424309,
+    "positionConvergence": 0.6143043142930378,
     "trackingError": null,
     "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
@@ -424,8 +424,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      62.96918194040093,
-      125.93836388080186
+      62.979665639463526,
+      125.95933127892705
     ],
     "target": [
       0,
@@ -435,9 +435,9 @@
     "turnRateDeg": 0.0000012074182697257333,
     "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.65152669816593,
-    "positionConvergence": 0.6427816665814013,
+    "positionConvergence": 0.6428362991844239,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -450,8 +450,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.0987985904881,
-      126.1975971809762
+      63.108496077079444,
+      126.21699215415889
     ],
     "target": [
       0,
@@ -459,9 +459,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 0.0000014787793334710982,
     "convergence": 0.6783201239648429,
-    "positionConvergence": 0.6699097260635609,
+    "positionConvergence": 0.6699623039234675,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -476,8 +476,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.221841035253846,
-      126.44368207050769
+      63.230790662201194,
+      126.46158132440239
     ],
     "target": [
       0,
@@ -487,9 +487,9 @@
     "turnRateDeg": 0,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.7037037037037036,
-    "positionConvergence": 0.69566184014914,
+    "positionConvergence": 0.6957121465612921,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -502,20 +502,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.338455026882166,
-      126.67691005376433
+      63.34669449921488,
+      126.69338899842975
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0,
     "convergence": 0.7277155413300818,
-    "positionConvergence": 0.7200685139770592,
+    "positionConvergence": 0.720116379678001,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -528,18 +528,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.44878967880685,
-      126.8975793576137
+      63.456356013385346,
+      126.91271202677069
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0,
     "convergence": 0.750393740791546,
-    "positionConvergence": 0.7431609561775258,
+    "positionConvergence": 0.7432062550842093,
     "trackingError": null,
     "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
@@ -554,8 +554,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.55299729837578,
-      127.10599459675156
+      63.55992678542512,
+      127.11985357085024
     ],
     "target": [
       0,
@@ -563,9 +563,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0,
     "convergence": 0.7717764060356652,
-    "positionConvergence": 0.7649710438495881,
+    "positionConvergence": 0.7650136889885569,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -580,20 +580,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.65123322198877,
-      127.30246644397754
+      63.65756138852364,
+      127.31512277704728
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "turnRateDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0,
     "convergence": 0.7919016410100087,
-    "positionConvergence": 0.7855312880563764,
+    "positionConvergence": 0.7855712276832626,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -606,8 +606,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.74365565294994,
-      127.48731130589988
+      63.74941722807393,
+      127.49883445614786
     ],
     "target": [
       0,
@@ -615,9 +615,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000014787793334710982,
+    "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.810807549662145,
-    "positionConvergence": 0.8048747998884923,
+    "positionConvergence": 0.8049120137976316,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -632,8 +632,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.83042550226374,
-      127.66085100452749
+      63.835654384321494,
+      127.67130876864299
     ],
     "target": [
       0,
@@ -643,7 +643,7 @@
     "turnRateDeg": 0,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.8285322359396433,
-    "positionConvergence": 0.8230352571434809,
+    "positionConvergence": 0.8230697531668565,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -658,8 +658,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.911706232592536,
-      127.82341246518507
+      63.9164354581493,
+      127.8328709162986
     ],
     "target": [
       0,
@@ -667,11 +667,11 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.8451138037900727,
-    "positionConvergence": 0.8400468716670002,
+    "positionConvergence": 0.8400786823611436,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -684,8 +684,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      63.987663705582065,
-      127.97532741116413
+      63.991925420201824,
+      127.98385084040365
     ],
     "target": [
       0,
@@ -695,7 +695,7 @@
     "turnRateDeg": 0,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.8605903571610019,
-    "positionConvergence": 0.855944357398877,
+    "positionConvergence": 0.8559735369178895,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -710,8 +710,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.0584660327497,
-      128.1169320654994
+      64.06229146353918,
+      128.12458292707836
     ],
     "target": [
       0,
@@ -719,11 +719,11 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.875,
-    "positionConvergence": 0.8707628991648255,
+    "positionConvergence": 0.8707895203171501,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -736,18 +736,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.12428343011948,
-      128.24856686023895
+      64.12770286000215,
+      128.2554057200043
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000014787793334710982,
+    "turnRateDeg": 0,
     "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.8883808362546359,
-    "positionConvergence": 0.8845381222523474,
+    "positionConvergence": 0.8845622737384469,
     "trackingError": null,
     "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
@@ -762,18 +762,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.18528807677654,
-      128.3705761535531
+      64.18833082045765,
+      128.3766616409153
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000014787793334710982,
+    "turnRateDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9007709698724788,
-    "positionConvergence": 0.8973060628069603,
+    "positionConvergence": 0.897327846634641,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -788,18 +788,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.24165397750302,
-      128.48330795500604
+      64.24434835908365,
+      128.4886967181673
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
+    "turnRateDeg": 0.0000012074182697257333,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9122085048010974,
-    "positionConvergence": 0.909103139082616,
+    "positionConvergence": 0.9091226681563102,
     "trackingError": null,
     "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
@@ -814,8 +814,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.29355682964649,
-      128.58711365929298
+      64.29593016184182,
+      128.59186032368365
     ],
     "target": [
       0,
@@ -823,9 +823,9 @@
       0
     ],
     "turnRateDeg": 0.0000012074182697257333,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0.0000014787793334710982,
     "convergence": 0.9227315449880608,
-    "positionConvergence": 0.9199661235780096,
+    "positionConvergence": 0.9199835194579118,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -840,18 +840,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.34117389436206,
-      128.68234778872412
+      64.34325245927674,
+      128.68650491855348
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "turnRateDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.9323781943809378,
-    "positionConvergence": 0.9299321160882388,
+    "positionConvergence": 0.9299475069148898,
     "trackingError": null,
     "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
@@ -866,20 +866,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.38468387235855,
-      128.7693677447171
+      64.38649290376908,
+      128.77298580753816
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9411865569272977,
-    "positionConvergence": 0.9390385176991621,
+    "positionConvergence": 0.9390520362786298,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -892,20 +892,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.4242667842698,
-      128.8485335685396
+      64.42583045136254,
+      128.8516609027251
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0,
     "convergence": 0.9491947365747091,
-    "positionConvergence": 0.947323005749759,
+    "positionConvergence": 0.9473347877944155,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -918,8 +918,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.46010385576231,
-      128.92020771152463
+      64.4614452482726,
+      128.9228904965452
     ],
     "target": [
       0,
@@ -929,9 +929,9 @@
     "turnRateDeg": 0.0000012074182697257333,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9564408372707413,
-    "positionConvergence": 0.9548235097857863,
+    "positionConvergence": 0.9548336923051833,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -944,20 +944,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.49237740748113,
-      128.98475481496226
+      64.49351852217804,
+      128.98703704435607
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0,
     "flightPathTurnDeg": 0.0000014787793334710982,
     "convergence": 0.9629629629629629,
-    "positionConvergence": 0.9615781885260546,
+    "positionConvergence": 0.9615869083623186,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -970,8 +970,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.52127074992715,
-      129.0425414998543
+      64.52223247838626,
+      129.04446495677252
     ],
     "target": [
       0,
@@ -979,11 +979,11 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0,
     "convergence": 0.9687992175989433,
-    "positionConvergence": 0.9676254078608162,
+    "positionConvergence": 0.9676328003626472,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -996,20 +996,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.54696808335042,
-      129.09393616670084
+      64.54777020095531,
+      129.09554040191063
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0,
     "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.9739877051262511,
-    "positionConvergence": 0.973003719899975,
+    "positionConvergence": 0.9730099177291024,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 0.9999999408488267,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1022,20 +1022,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.56965440273548,
-      129.13930880547096
+      64.57031555884764,
+      129.14063111769528
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "turnRateDeg": 0,
+    "flightPathTurnDeg": 0,
     "convergence": 0.9785665294924554,
-    "positionConvergence": 0.9777518430870442,
+    "positionConvergence": 0.9777569751508427,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 0.9999999408488267,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1048,8 +1048,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.58951540794754,
-      129.1790308158951
+      64.59005311718279,
+      129.18010623436558
     ],
     "target": [
       0,
@@ -1057,11 +1057,11 @@
       0
     ],
     "turnRateDeg": 0.0000012074182697257333,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9825737946451252,
-    "positionConvergence": 0.9819086433932241,
+    "positionConvergence": 0.9819128338969928,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1074,18 +1074,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.60673741910026,
-      129.2134748382005
+      64.60716805364882,
+      129.21433610729764
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "turnRateDeg": 0,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9860476045318295,
-    "positionConvergence": 0.9855131166043353,
+    "positionConvergence": 0.9855164842165707,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -1100,8 +1100,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.62150729719922,
-      129.24301459439843
+      64.62184608012544,
+      129.24369216025087
     ],
     "target": [
       0,
@@ -1111,9 +1111,9 @@
     "turnRateDeg": 0,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9890260631001372,
-    "positionConvergence": 0.9886043717119418,
+    "positionConvergence": 0.9886070288357819,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1126,20 +1126,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.63401237010844,
-      129.26802474021687
+      64.63427336956556,
+      129.26854673913112
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
+    "turnRateDeg": 0.0000014787793334710982,
     "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.9915472742976172,
-    "positionConvergence": 0.991221615418533,
+    "positionConvergence": 0.9912236675625036,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1152,20 +1152,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.64444036388109,
-      129.28888072776218
+      64.6446364881752,
+      129.2892729763504
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "turnRateDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0,
     "convergence": 0.9936493420718386,
-    "positionConvergence": 0.9934041377654216,
+    "positionConvergence": 0.9934056830063558,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999408488267,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1178,20 +1178,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.65297933948955,
-      129.3059586789791
+      64.6531223329269,
+      129.3062446658538
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0,
     "flightPathTurnDeg": 0,
     "convergence": 0.9953703703703703,
-    "positionConvergence": 0.9951912988906876,
+    "positionConvergence": 0.9951924274218,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1204,18 +1204,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.65981763498489,
-      129.31963526996978
+      64.65991807443547,
+      129.31983614887093
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0,
-    "flightPathTurnDeg": 0,
+    "turnRateDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9967484631407814,
-    "positionConvergence": 0.9966225169234748,
+    "positionConvergence": 0.996623310680276,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -1230,20 +1230,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.66514381311102,
-      129.33028762622203
+      64.66521110522136,
+      129.33042221044272
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "turnRateDeg": 0,
+    "flightPathTurnDeg": 0,
     "convergence": 0.9978217243306406,
-    "positionConvergence": 0.9977372570199124,
+    "positionConvergence": 0.9977377893767629,
     "trackingError": null,
-    "targetFramingScore": 0.9999999408488267,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1256,20 +1256,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.66914661439337,
-      129.33829322878674
+      64.66918899338103,
+      129.33837798676205
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0,
     "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.9986282578875172,
-    "positionConvergence": 0.9985750215448399,
+    "positionConvergence": 0.9985753570747957,
     "trackingError": null,
-    "targetFramingScore": 1,
+    "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1282,8 +1282,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.67201491571943,
-      129.34402983143886
+      64.67203944168091,
+      129.34407888336182
     ],
     "target": [
       0,
@@ -1291,9 +1291,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 0.0000014787793334710982,
     "convergence": 0.9992061677589799,
-    "positionConvergence": 0.9991753414029276,
+    "positionConvergence": 0.9991755356934658,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -1308,8 +1308,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.67393769442319,
-      129.34787538884638
+      64.67395025208766,
+      129.34790050417533
     ],
     "target": [
       0,
@@ -1317,9 +1317,9 @@
       0
     ],
     "turnRateDeg": 0,
-    "flightPathTurnDeg": 0.0000012074182697257333,
+    "flightPathTurnDeg": 8.537736462515939e-7,
     "convergence": 0.9995935578925976,
-    "positionConvergence": 0.9995777685217544,
+    "positionConvergence": 0.9995778680390532,
     "trackingError": null,
     "targetFramingScore": 1,
     "parentFramingScore": null,
@@ -1334,18 +1334,18 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.67510399788382,
-      129.35020799576765
+      64.67510929574375,
+      129.3502185914875
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
-    "flightPathTurnDeg": 8.537736462515939e-7,
+    "turnRateDeg": 0,
+    "flightPathTurnDeg": 0,
     "convergence": 0.9998285322359396,
-    "positionConvergence": 0.9998218694889766,
+    "positionConvergence": 0.9998219114832084,
     "trackingError": null,
     "targetFramingScore": 0.9999999517032692,
     "parentFramingScore": null,
@@ -1360,20 +1360,20 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.67570291864507,
-      129.35140583729014
+      64.67570448839585,
+      129.3514089767917
     ],
     "target": [
       0,
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
-    "flightPathTurnDeg": 0,
+    "turnRateDeg": 0,
+    "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 0.9999491947365747,
-    "positionConvergence": 0.9999472203449455,
+    "positionConvergence": 0.999947232789262,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 1,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1386,8 +1386,8 @@
     "simDate": "2026-01-01T00:00:00.000Z",
     "cameraPos": [
       0,
-      64.67592357506048,
-      129.35184715012096
+      64.67592377127998,
+      129.35184754255997
     ],
     "target": [
       0,
@@ -1395,11 +1395,11 @@
       0
     ],
     "turnRateDeg": 0.0000012074182697257333,
-    "flightPathTurnDeg": 0,
+    "flightPathTurnDeg": 0.0000014787793334710982,
     "convergence": 0.9999936493420718,
-    "positionConvergence": 0.999993402531866,
+    "positionConvergence": 0.9999934040874756,
     "trackingError": null,
-    "targetFramingScore": 0.9999999517032692,
+    "targetFramingScore": 0.9999999408488267,
     "parentFramingScore": null,
     "moved": true
   },
@@ -1420,7 +1420,7 @@
       0,
       0
     ],
-    "turnRateDeg": 0.0000012074182697257333,
+    "turnRateDeg": 0,
     "flightPathTurnDeg": 0.0000012074182697257333,
     "convergence": 1,
     "positionConvergence": 1,

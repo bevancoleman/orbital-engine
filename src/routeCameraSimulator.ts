@@ -21,25 +21,28 @@
 
 import {
   DEFAULT_CAMERA_DISTANCE,
+  DEFAULT_VIEW_DIRECTION,
   VERTICAL_FOV_DEG,
   FLY_DURATION_MS,
   computeFlightEndpoint,
   computeFocusForBody,
-  sampleFlightPath,
+  sampleFlightFrame,
   safePredictFlightTarget,
   trackingDelta,
   smoothTrajectory,
   adaptiveSmoothingRadius,
   easeOutCubic,
+  type FocusTarget,
 } from './camera'
+import { MS_PER_DAY } from './constants'
 import { resolveWorldPosition, type WorldVec } from './render'
+import { addVec3, angleBetweenDeg, lengthVec3, scaleVec3, subtractVec3 } from './vec3'
 import type { CelestialBody, StarSystemData } from './types'
 
-/** Matches CameraRig.tsx's own initial `lastGoodDirection` ref, so the
- *  fixture's first leg starts from the same real default view. */
-const MS_PER_DAY = 86_400_000
-
-const INITIAL_DIRECTION: WorldVec = [0, 0.447, 0.894]
+/** Matches CameraRig.tsx's own initial `lastGoodDirection` (both are
+ *  camera.ts's DEFAULT_VIEW_DIRECTION), so the fixture's first leg starts
+ *  from the same real default view. */
+const INITIAL_DIRECTION: WorldVec = DEFAULT_VIEW_DIRECTION
 const INITIAL_TARGET: WorldVec = [0, 0, 0]
 
 export type CameraRouteFramePhase = 'flight' | 'track'
@@ -186,22 +189,6 @@ export interface SimulateCameraRouteOptions {
   smoothTrackingWindow?: number
 }
 
-function subtract(a: WorldVec, b: WorldVec): WorldVec {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-function length(v: WorldVec): number {
-  return Math.hypot(v[0], v[1], v[2])
-}
-
-function angleBetweenDeg(a: WorldVec, b: WorldVec): number {
-  const la = length(a)
-  const lb = length(b)
-  if (la < 1e-12 || lb < 1e-12) return 0
-  const cos = Math.max(-1, Math.min(1, (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (la * lb)))
-  return (Math.acos(cos) * 180) / Math.PI
-}
-
 const HALF_FOV_DEG = VERTICAL_FOV_DEG / 2
 
 /** 1 when `realPos` sits dead-centre of the camera's actual view direction
@@ -212,8 +199,8 @@ const HALF_FOV_DEG = VERTICAL_FOV_DEG / 2
  *  for a near-zero-length vector) reads as a perfect 1: nothing to be
  *  off-centre FROM. */
 function framingScore(cameraPos: WorldVec, viewTarget: WorldVec, realPos: WorldVec): number {
-  const viewDir = subtract(viewTarget, cameraPos)
-  const toReal = subtract(realPos, cameraPos)
+  const viewDir = subtractVec3(viewTarget, cameraPos)
+  const toReal = subtractVec3(realPos, cameraPos)
   const offCentreDeg = angleBetweenDeg(viewDir, toReal)
   return Math.max(0, 1 - offCentreDeg / HALF_FOV_DEG)
 }
@@ -222,6 +209,100 @@ function findBody(system: StarSystemData, id: string): CelestialBody {
   const found = system.bodies.find((b) => b.id === id)
   if (!found) throw new Error(`simulateCameraRoute: no body '${id}' in system '${system.id}'`)
   return found
+}
+
+type ResolvedRouteOptions = Required<SimulateCameraRouteOptions>
+
+/** Fills in defaults and rejects option values that would otherwise turn
+ *  into NaN frames — samplesPerFlight=0 used to divide 0/0 into a NaN `t`
+ *  for every flight frame, then crash deep inside trajectory sampling. */
+function resolveRouteOptions(options: SimulateCameraRouteOptions): ResolvedRouteOptions {
+  const resolved: ResolvedRouteOptions = {
+    samplesPerFlight: options.samplesPerFlight ?? 10,
+    trackSteps: options.trackSteps ?? 6,
+    trackStepMs: options.trackStepMs ?? 30 * 60 * 1000,
+    flightDaysPerSecond: options.flightDaysPerSecond ?? 0,
+    smoothTracking: options.smoothTracking ?? false,
+    smoothTrackingWindow: options.smoothTrackingWindow ?? 7,
+  }
+  if (!Number.isInteger(resolved.samplesPerFlight) || resolved.samplesPerFlight < 1) {
+    throw new RangeError(`simulateCameraRoute: samplesPerFlight must be a positive integer, got ${resolved.samplesPerFlight}`)
+  }
+  if (!Number.isInteger(resolved.trackSteps) || resolved.trackSteps < 0) {
+    throw new RangeError(`simulateCameraRoute: trackSteps must be a non-negative integer, got ${resolved.trackSteps}`)
+  }
+  return resolved
+}
+
+/** How far simulated time has advanced `t` of the way through a flight
+ *  that started at `legStartMs` — the same playback-speed × real-elapsed-
+ *  time conversion OrbitalSystemScene applies to predict a flight's
+ *  arrival. */
+function flightSampleDate(legStartMs: number, flightDaysPerSecond: number, t: number): Date {
+  return new Date(legStartMs + flightDaysPerSecond * MS_PER_DAY * ((t * FLY_DURATION_MS) / 1000))
+}
+
+/** Everything that carries over from one frame (and one leg) to the next —
+ *  the camera itself, the sim clock, and the previous-frame history the
+ *  turn-rate/flight-path-bend metrics compare against. */
+interface RouteTrace {
+  cameraPos: WorldVec
+  target: WorldVec
+  direction: WorldVec
+  simMs: number
+  previousBody: CelestialBody | null
+  previousOffset: WorldVec | null
+  previousPathPos: WorldVec | null
+  previousMoveDirection: WorldVec | null
+}
+
+// Shared by both the flight and track phases below — measures how much
+// the camera's own trajectory bends at `newPos` relative to wherever it
+// was just heading. A move shorter than this counts as "didn't really
+// move" (e.g. a settled, perfectly-locked track frame) — and, critically,
+// FORGETS the tracked direction rather than leaving it in place: a real,
+// reproduced bug during this fixture's own build was comparing a brand
+// new leg's first real movement against the PREVIOUS leg's last real
+// movement direction (carried stale across an intervening track phase
+// that moved 0 distance), producing a nonsense ~169° "spike" that was
+// really just "new flight, unrelated old direction" — not a real path
+// bend. Once the camera has genuinely stopped, there's no direction left
+// to be continuous WITH.
+const MIN_MOVE_DISTANCE = 1e-9
+
+function recordMove(trace: RouteTrace, newPos: WorldVec): { turn: number | null; moved: boolean } {
+  let turn: number | null = null
+  let moved = false
+  if (trace.previousPathPos) {
+    const delta = subtractVec3(newPos, trace.previousPathPos)
+    moved = lengthVec3(delta) > MIN_MOVE_DISTANCE
+    if (moved) {
+      if (trace.previousMoveDirection) turn = angleBetweenDeg(trace.previousMoveDirection, delta)
+      trace.previousMoveDirection = delta
+    } else {
+      trace.previousMoveDirection = null
+    }
+  }
+  trace.previousPathPos = newPos
+  return { turn, moved }
+}
+
+/** Angle between this frame's camera offset and the previous frame's
+ *  (turnRateDeg), updating the trace's history as it goes. */
+function recordTurn(trace: RouteTrace, cameraPos: WorldVec, target: WorldVec): number | null {
+  const offset = subtractVec3(cameraPos, target)
+  const turnRateDeg = trace.previousOffset ? angleBetweenDeg(trace.previousOffset, offset) : null
+  trace.previousOffset = offset
+  return turnRateDeg
+}
+
+/** One leg's fixed inputs, shared by its flight and track phases. */
+interface RouteLeg {
+  legIndex: number
+  waypointId: string
+  targetBody: CelestialBody
+  parentBody: CelestialBody | null
+  focus: FocusTarget
 }
 
 /** Runs the full fixed route and returns every frame in order. Pure/
@@ -233,261 +314,262 @@ export function simulateCameraRoute(
   startDate: Date,
   options: SimulateCameraRouteOptions = {}
 ): CameraRouteFrame[] {
-  const samplesPerFlight = options.samplesPerFlight ?? 10
-  const trackSteps = options.trackSteps ?? 6
-  const trackStepMs = options.trackStepMs ?? 30 * 60 * 1000
-  const flightDaysPerSecond = options.flightDaysPerSecond ?? 0
-  const smoothTracking = options.smoothTracking ?? false
-  const smoothTrackingWindow = options.smoothTrackingWindow ?? 7
-
+  const resolved = resolveRouteOptions(options)
   const frames: CameraRouteFrame[] = []
-
-  let cameraPos: WorldVec = [
-    INITIAL_TARGET[0] + INITIAL_DIRECTION[0] * DEFAULT_CAMERA_DISTANCE,
-    INITIAL_TARGET[1] + INITIAL_DIRECTION[1] * DEFAULT_CAMERA_DISTANCE,
-    INITIAL_TARGET[2] + INITIAL_DIRECTION[2] * DEFAULT_CAMERA_DISTANCE,
-  ]
-  let target: WorldVec = INITIAL_TARGET
-  let direction: WorldVec = INITIAL_DIRECTION
-  let simMs = startDate.getTime()
-  let previousBody: CelestialBody | null = null
-  let previousOffset: WorldVec | null = null
-  let previousPathPos: WorldVec | null = null
-  let previousMoveDirection: WorldVec | null = null
-
-  // Shared by both the flight and track loops below — measures how much
-  // the camera's own trajectory bends at `newPos` relative to wherever it
-  // was just heading. A move shorter than this counts as "didn't really
-  // move" (e.g. a settled, perfectly-locked track frame) — and, critically,
-  // FORGETS the tracked direction rather than leaving it in place: a real,
-  // reproduced bug during this fixture's own build was comparing a brand
-  // new leg's first real movement against the PREVIOUS leg's last real
-  // movement direction (carried stale across an intervening track phase
-  // that moved 0 distance), producing a nonsense ~169° "spike" that was
-  // really just "new flight, unrelated old direction" — not a real path
-  // bend. Once the camera has genuinely stopped, there's no direction left
-  // to be continuous WITH.
-  const MIN_MOVE_DISTANCE = 1e-9
-  function recordMove(newPos: WorldVec): { turn: number | null; moved: boolean } {
-    let turn: number | null = null
-    let moved = false
-    if (previousPathPos) {
-      const delta = subtract(newPos, previousPathPos)
-      moved = length(delta) > MIN_MOVE_DISTANCE
-      if (moved) {
-        if (previousMoveDirection) turn = angleBetweenDeg(previousMoveDirection, delta)
-        previousMoveDirection = delta
-      } else {
-        previousMoveDirection = null
-      }
-    }
-    previousPathPos = newPos
-    return { turn, moved }
+  const trace: RouteTrace = {
+    cameraPos: addVec3(INITIAL_TARGET, scaleVec3(INITIAL_DIRECTION, DEFAULT_CAMERA_DISTANCE)),
+    target: INITIAL_TARGET,
+    direction: INITIAL_DIRECTION,
+    simMs: startDate.getTime(),
+    previousBody: null,
+    previousOffset: null,
+    previousPathPos: null,
+    previousMoveDirection: null,
   }
 
   waypoints.forEach((waypointId, legIndex) => {
     const targetBody = findBody(system, waypointId)
-    const parentBodyId = targetBody.parentId
-    const parentBody = parentBodyId ? findBody(system, parentBodyId) : null
-    const legStartDate = new Date(simMs)
+    const parentBody = targetBody.parentId ? findBody(system, targetBody.parentId) : null
     // Focus on where the body will REALLY be once the flight actually
     // lands, not where it is at the moment of selection — same reasoning
     // computeFocusForBody's own docstring already gives for exactly this
     // (the real, reported ISS-style jitter it fixes). A real, found bug
-    // while wiring up safePredictFlightTarget below: leaving this as
-    // `legStartDate` unadvanced made `endpoint.target` (this focus's own
-    // position) disagree with predictedTargetAt(1) — the SAME real
-    // future moment, computed two different ways — for any nonzero
+    // while wiring up safePredictFlightTarget: leaving this at the
+    // unadvanced leg start date made `endpoint.target` (this focus's own
+    // position) disagree with predictedTargetAt(1) — the SAME real future
+    // moment, computed two different ways — for any nonzero
     // flightDaysPerSecond, silently defeating the whole point of
     // predicting the destination's trajectory.
-    const predictedArrivalDate = new Date(legStartDate.getTime() + flightDaysPerSecond * MS_PER_DAY * (FLY_DURATION_MS / 1000))
-    const focus = computeFocusForBody(targetBody, system, predictedArrivalDate, previousBody)
-    const endpoint = computeFlightEndpoint(cameraPos, target, focus, direction)
-    // Where the destination ACTUALLY will be at several points across the
-    // flight (not just its very end, which `endpoint.target` alone
-    // already covers) — see safePredictFlightTarget/predictBodyTrajectory in
-    // camera.ts. Drives both sampleFlightPath's own look-at curve (so it
-    // tracks the real trajectory, not a straight lerp toward a
-    // potentially-stale single endpoint) and targetFramingScore's ground
-    // truth below (so "is the target in view" is checked against where it
-    // REALLY is at THIS moment, not the eased/lerped `point.target` or a
-    // fixed prediction). At flightDaysPerSecond=0 (the default) every
-    // sample is identical to `endpoint.target`, i.e. exactly the previous
-    // behaviour.
-    // Sample count matches samplesPerFlight — one trajectory sample per
-    // real rendered frame, same "don't under-sample" rule already applied
-    // to the flight/track step counts themselves (see this file's own
-    // header comment). Real, measured consequence of getting this wrong:
-    // under-sampling a fast orbiter this badly (the OLD default of 6
-    // samples) can let the piecewise-linear path between samples cut
-    // straight across a large chunk of its real orbit — a moon covering
-    // ~1.8 real orbits across one flight, sampled only 6 times, produced
-    // a 60°/frame flight-path-bend spike; matching the real per-frame
-    // density drops that to ~16° on its own.
-    //
-    // safePredictFlightTarget (not the plain, unconditional predictor)
-    // because denser sampling alone isn't always enough: a close/fast
-    // orbiter whose own predicted excursion during the flight is a large
-    // fraction of `focus.distance` (this leg's own final viewing
-    // distance) still bent the flight path 50-90°/frame even at full
-    // sample density — genuine inherited curvature, not aliasing. Falls
-    // back to `null` (plain fixed-endpoint fastTargetLerp) in that
-    // regime — see its own comment in camera.ts.
-    const predictedTargetAt =
-      safePredictFlightTarget(targetBody, system, legStartDate, flightDaysPerSecond, focus.distance, FLY_DURATION_MS, samplesPerFlight) ??
-      undefined
-    const realParentPosAtFlightStart = parentBody ? resolveWorldPosition(parentBody, system.bodies, legStartDate) : null
+    const predictedArrivalDate = flightSampleDate(trace.simMs, resolved.flightDaysPerSecond, 1)
+    const focus = computeFocusForBody(targetBody, system, predictedArrivalDate, trace.previousBody)
+    const leg: RouteLeg = { legIndex, waypointId, targetBody, parentBody, focus }
 
-    const flightStartPos = cameraPos
-    const flightStartTarget = target
-    const totalPosDist = length(subtract(endpoint.position, flightStartPos))
-    const totalTargetDist = length(subtract(endpoint.target, flightStartTarget))
-
-    // A new flight's own movement direction has no reason to be
-    // continuous with whatever came before it (the previous leg's flight,
-    // or that leg's own track-phase orbital drift) — those are physically
-    // different kinds of motion. Forget it explicitly rather than let
-    // flightPathTurnDeg compare against a stale, unrelated direction (see
-    // recordMove's own comment for the real ~169° false positive this was
-    // producing before this reset existed).
-    previousMoveDirection = null
-
-    for (let step = 0; step <= samplesPerFlight; step++) {
-      const t = step / samplesPerFlight
-      const point = sampleFlightPath(flightStartPos, flightStartTarget, endpoint.position, endpoint.target, t, predictedTargetAt)
-      const posDist = length(subtract(point.position, flightStartPos))
-      const targetDist = length(subtract(point.target, flightStartTarget))
-      // Degenerate leg (start and end target coincide, e.g. a flight that
-      // only changes distance/angle, not look-at point): falls back to the
-      // closed-form easeOutCubic(t) rather than a 0/0 ratio.
-      const convergence = totalTargetDist > 1e-9 ? targetDist / totalTargetDist : easeOutCubic(t)
-      const positionConvergence = totalPosDist > 1e-9 ? posDist / totalPosDist : easeOutCubic(t)
-
-      const offset = subtract(point.position, point.target)
-      const turnRateDeg = previousOffset ? angleBetweenDeg(previousOffset, offset) : null
-      previousOffset = offset
-      const { turn: flightPathTurnDeg, moved } = recordMove(point.position)
-
-      const targetFramingScore = framingScore(point.position, point.target, predictedTargetAt ? predictedTargetAt(t) : endpoint.target)
-      const parentFramingScore = realParentPosAtFlightStart
-        ? framingScore(point.position, point.target, realParentPosAtFlightStart)
-        : null
-
-      frames.push({
-        leg: legIndex,
-        bodyId: waypointId,
-        parentBodyId,
-        phase: 'flight',
-        step,
-        simDate: legStartDate.toISOString(),
-        cameraPos: point.position,
-        target: point.target,
-        turnRateDeg,
-        flightPathTurnDeg,
-        convergence,
-        positionConvergence,
-        trackingError: null,
-        targetFramingScore,
-        parentFramingScore,
-        moved,
-      })
-    }
-
-    cameraPos = endpoint.position
-    target = endpoint.target
-    direction = endpoint.direction
+    simulateFlightPhase(system, leg, resolved, trace, frames)
     // The running sim clock has to actually CATCH UP to predictedArrivalDate
     // here — a real, found bug: `target` already sits at the body's
-    // PREDICTED position at that future moment (via focus/endpoint above),
-    // but until this line the clock itself still read `legStartDate`
-    // (unadvanced). The track phase's own first reference position was
-    // then sampled at the WRONG (earlier) date — a real position jump
-    // right at the flight/track seam, for any nonzero flightDaysPerSecond,
-    // measured directly as an immediate ~0.12-unit trackingError and
-    // targetFramingScore dropping to 0 at the very first track frame, with
-    // smoothTracking OFF — i.e. nothing to do with smoothing at all.
-    simMs = predictedArrivalDate.getTime()
+    // PREDICTED position at that future moment (via focus/endpoint), but
+    // the clock itself still read the leg's start date (unadvanced). The
+    // track phase's own first reference position was then sampled at the
+    // WRONG (earlier) date — a real position jump right at the flight/
+    // track seam, for any nonzero flightDaysPerSecond, measured directly
+    // as an immediate ~0.12-unit trackingError and targetFramingScore
+    // dropping to 0 at the very first track frame, with smoothTracking
+    // OFF — i.e. nothing to do with smoothing at all.
+    trace.simMs = predictedArrivalDate.getTime()
+    simulateTrackPhase(system, leg, resolved, trace, frames)
 
-    // Same reasoning as the reset above: the settle/track phase's own
-    // motion (a tiny rigid shift matching the target body's orbital
-    // drift) is a different kind of movement than the flight that just
-    // ended (a large positioning translation) — no continuity expected.
-    previousMoveDirection = null
-
-    // All of this leg's track-phase dates/raw positions, precomputed up
-    // front (deterministic, not a live/reactive per-frame re-query) so
-    // smoothTracking can average over a window that includes FUTURE
-    // samples, not just past ones — see smoothTrajectory's own comment.
-    const trackStartDate = new Date(simMs)
-    const trackDates: Date[] = []
-    for (let step = 1; step <= trackSteps; step++) {
-      simMs += trackStepMs
-      trackDates.push(new Date(simMs))
-    }
-    const rawLivePositions = [trackStartDate, ...trackDates].map((d) => resolveWorldPosition(targetBody, system.bodies, d))
-    // smoothTrackingWindow is a CEILING, not the radius actually used —
-    // adaptiveSmoothingRadius picks the largest radius (up to that
-    // ceiling) that won't lag the target out of frame relative to
-    // `focus.distance` (this leg's own settled viewing distance, ~constant
-    // through tracking since a rigid translation preserves it). See that
-    // function's own comment for the real, measured framing-loss bug a
-    // fixed-radius window caused for a true-scale close orbiter.
-    const effectiveSmoothingRadius = smoothTracking
-      ? adaptiveSmoothingRadius(rawLivePositions, smoothTrackingWindow, focus.distance)
-      : 0
-    const trackedPositions = smoothTrajectory(rawLivePositions, effectiveSmoothingRadius)
-
-    for (let step = 1; step <= trackSteps; step++) {
-      const trackDate = trackDates[step - 1]!
-      const live = rawLivePositions[step]! // the body's REAL, unsmoothed position — trackingError's own ground truth
-      const delta = trackingDelta(trackedPositions[step - 1]!, trackedPositions[step]!)
-      if (delta) {
-        cameraPos = [cameraPos[0] + delta[0], cameraPos[1] + delta[1], cameraPos[2] + delta[2]]
-        target = [target[0] + delta[0], target[1] + delta[1], target[2] + delta[2]]
-      }
-      // Error is measured AFTER applying the rigid delta: a perfectly
-      // locked camera has its target land exactly on the body's live
-      // position, so any remaining gap is genuine tracking error, not
-      // just "the body moved" (which trackingDelta already accounts for).
-      // With smoothTracking on, this is EXPECTED to read a small but
-      // nonzero value — see SimulateCameraRouteOptions.smoothTracking.
-      const trackingError = length(subtract(target, live))
-
-      const offset = subtract(cameraPos, target)
-      const turnRateDeg = previousOffset ? angleBetweenDeg(previousOffset, offset) : null
-      previousOffset = offset
-      const { turn: flightPathTurnDeg, moved } = recordMove(cameraPos)
-
-      // Parent re-resolved every track step (not just once, unlike the
-      // flight-phase case above) — it can genuinely keep moving over a
-      // long tracking phase (e.g. planetA drifting slowly while moonA is
-      // being tracked), however slightly.
-      const realParentPosAtTrack = parentBody ? resolveWorldPosition(parentBody, system.bodies, trackDate) : null
-      const targetFramingScore = framingScore(cameraPos, target, live)
-      const parentFramingScore = realParentPosAtTrack ? framingScore(cameraPos, target, realParentPosAtTrack) : null
-
-      frames.push({
-        leg: legIndex,
-        bodyId: waypointId,
-        parentBodyId,
-        phase: 'track',
-        step,
-        simDate: trackDate.toISOString(),
-        cameraPos,
-        target,
-        turnRateDeg,
-        flightPathTurnDeg,
-        convergence: null,
-        positionConvergence: null,
-        trackingError,
-        targetFramingScore,
-        parentFramingScore,
-        moved,
-      })
-    }
-
-    previousBody = targetBody
+    trace.previousBody = targetBody
   })
 
   return frames
+}
+
+/** One leg's flight phase: samplesPerFlight + 1 frames from wherever the
+ *  camera currently is to the leg's settled framing, via the same
+ *  sampleFlightFrame composition (tween + context-body clearance + bulge)
+ *  CameraRig renders. Leaves `trace` at the flight's exact end. */
+function simulateFlightPhase(
+  system: StarSystemData,
+  leg: RouteLeg,
+  options: ResolvedRouteOptions,
+  trace: RouteTrace,
+  frames: CameraRouteFrame[]
+): void {
+  const { focus, targetBody, parentBody } = leg
+  const legStartMs = trace.simMs
+  const endpoint = computeFlightEndpoint(trace.cameraPos, trace.target, focus, trace.direction)
+  // Where the destination ACTUALLY will be at several points across the
+  // flight (not just its very end, which `endpoint.target` alone already
+  // covers) — see safePredictFlightTarget/predictBodyTrajectory in
+  // camera.ts. Drives sampleFlightFrame's own look-at curve, so it tracks
+  // the real trajectory rather than a straight lerp toward a potentially-
+  // stale single endpoint. At flightDaysPerSecond=0 (the default) every
+  // sample is identical to `endpoint.target`, i.e. exactly the previous
+  // behaviour.
+  //
+  // Sample count matches samplesPerFlight — one trajectory sample per real
+  // rendered frame, same "don't under-sample" rule already applied to the
+  // flight/track step counts themselves (see this file's own header
+  // comment). Real, measured consequence of getting this wrong: under-
+  // sampling a fast orbiter this badly (the OLD default of 6 samples) can
+  // let the piecewise-linear path between samples cut straight across a
+  // large chunk of its real orbit — a moon covering ~1.8 real orbits
+  // across one flight, sampled only 6 times, produced a 60°/frame flight-
+  // path-bend spike; matching the real per-frame density drops that to
+  // ~16° on its own.
+  //
+  // safePredictFlightTarget (not the plain, unconditional predictor)
+  // because denser sampling alone isn't always enough: a close/fast
+  // orbiter whose own predicted excursion during the flight is a large
+  // fraction of `focus.distance` (this leg's own final viewing distance)
+  // still bent the flight path 50-90°/frame even at full sample density —
+  // genuine inherited curvature, not aliasing. Falls back to `null` (plain
+  // fixed-endpoint fastTargetLerp) in that regime — see its own comment in
+  // camera.ts.
+  const predictedTargetAt = safePredictFlightTarget(
+    targetBody,
+    system,
+    new Date(legStartMs),
+    options.flightDaysPerSecond,
+    focus.distance,
+    FLY_DURATION_MS,
+    options.samplesPerFlight
+  )
+  const flight = {
+    startPosition: trace.cameraPos,
+    startTarget: trace.target,
+    endPosition: endpoint.position,
+    endTarget: endpoint.target,
+    contextBody: focus.contextBody,
+    predictedTargetAt,
+  }
+  const totalPosDist = lengthVec3(subtractVec3(endpoint.position, flight.startPosition))
+  const totalTargetDist = lengthVec3(subtractVec3(endpoint.target, flight.startTarget))
+
+  // A new flight's own movement direction has no reason to be continuous
+  // with whatever came before it (the previous leg's flight, or that leg's
+  // own track-phase orbital drift) — those are physically different kinds
+  // of motion. Forget it explicitly rather than let flightPathTurnDeg
+  // compare against a stale, unrelated direction (see recordMove's own
+  // comment for the real ~169° false positive this was producing before
+  // this reset existed).
+  trace.previousMoveDirection = null
+
+  for (let step = 0; step <= options.samplesPerFlight; step++) {
+    const t = step / options.samplesPerFlight
+    const point = sampleFlightFrame(flight, t)
+    // Degenerate leg (start and end target coincide, e.g. a flight that
+    // only changes distance/angle, not look-at point): falls back to the
+    // closed-form easeOutCubic(t) rather than a 0/0 ratio.
+    const targetDist = lengthVec3(subtractVec3(point.target, flight.startTarget))
+    const posDist = lengthVec3(subtractVec3(point.position, flight.startPosition))
+    const convergence = totalTargetDist > 1e-9 ? targetDist / totalTargetDist : easeOutCubic(t)
+    const positionConvergence = totalPosDist > 1e-9 ? posDist / totalPosDist : easeOutCubic(t)
+
+    const turnRateDeg = recordTurn(trace, point.position, point.target)
+    const { turn: flightPathTurnDeg, moved } = recordMove(trace, point.position)
+
+    // Framing ground truth is where the target (and its parent) REALLY
+    // are at this moment of the flight — resolved at this sample's own sim
+    // date, not a single fixed prediction or the leg's start date. A real
+    // fidelity gap this closes: with a nonzero flightDaysPerSecond and the
+    // trajectory guard falling back (predictedTargetAt null), the target's
+    // score used to be measured against its fixed ARRIVAL position for the
+    // whole flight, and the parent's against where it was when the leg
+    // began — neither is where the body actually is mid-flight. At
+    // flightDaysPerSecond=0 (the reference fixture) the sample date never
+    // advances, so this is identical to before.
+    const sampleDate = flightSampleDate(legStartMs, options.flightDaysPerSecond, t)
+    const realTargetPos = resolveWorldPosition(targetBody, system.bodies, sampleDate)
+    const realParentPos = parentBody ? resolveWorldPosition(parentBody, system.bodies, sampleDate) : null
+
+    frames.push({
+      leg: leg.legIndex,
+      bodyId: leg.waypointId,
+      parentBodyId: targetBody.parentId,
+      phase: 'flight',
+      step,
+      simDate: sampleDate.toISOString(),
+      cameraPos: point.position,
+      target: point.target,
+      turnRateDeg,
+      flightPathTurnDeg,
+      convergence,
+      positionConvergence,
+      trackingError: null,
+      targetFramingScore: framingScore(point.position, point.target, realTargetPos),
+      parentFramingScore: realParentPos ? framingScore(point.position, point.target, realParentPos) : null,
+      moved,
+    })
+  }
+
+  trace.cameraPos = endpoint.position
+  trace.target = endpoint.target
+  trace.direction = endpoint.direction
+}
+
+/** One leg's settle/track phase: trackSteps frames following the arrived-
+ *  at body as it keeps moving, starting at `trace.simMs` (the predicted
+ *  arrival moment). Leaves `trace` (camera, target, clock) at the phase's
+ *  last frame. */
+function simulateTrackPhase(
+  system: StarSystemData,
+  leg: RouteLeg,
+  options: ResolvedRouteOptions,
+  trace: RouteTrace,
+  frames: CameraRouteFrame[]
+): void {
+  const { targetBody, parentBody } = leg
+  // Same reasoning as the flight phase's own reset: the settle/track
+  // phase's own motion (a tiny rigid shift matching the target body's
+  // orbital drift) is a different kind of movement than the flight that
+  // just ended (a large positioning translation) — no continuity expected.
+  trace.previousMoveDirection = null
+
+  // All of this leg's track-phase dates/raw positions, precomputed up
+  // front (deterministic, not a live/reactive per-frame re-query) so
+  // smoothTracking can average over a window that includes FUTURE
+  // samples, not just past ones — see smoothTrajectory's own comment.
+  // Index 0 is the track phase's own start (the arrival moment).
+  const trackDates: Date[] = []
+  for (let step = 0; step <= options.trackSteps; step++) trackDates.push(new Date(trace.simMs + step * options.trackStepMs))
+  trace.simMs += options.trackSteps * options.trackStepMs
+  const rawLivePositions = trackDates.map((d) => resolveWorldPosition(targetBody, system.bodies, d))
+  const trackedPositions = smoothTrajectory(rawLivePositions, trackSmoothingRadius(rawLivePositions, leg, options))
+
+  for (let step = 1; step <= options.trackSteps; step++) {
+    const trackDate = trackDates[step]!
+    const live = rawLivePositions[step]! // the body's REAL, unsmoothed position — trackingError's own ground truth
+    const delta = trackingDelta(trackedPositions[step - 1]!, trackedPositions[step]!)
+    if (delta) {
+      trace.cameraPos = addVec3(trace.cameraPos, delta)
+      trace.target = addVec3(trace.target, delta)
+    }
+    // Error is measured AFTER applying the rigid delta: a perfectly
+    // locked camera has its target land exactly on the body's live
+    // position, so any remaining gap is genuine tracking error, not
+    // just "the body moved" (which trackingDelta already accounts for).
+    // With smoothTracking on, this is EXPECTED to read a small but
+    // nonzero value — see SimulateCameraRouteOptions.smoothTracking.
+    const trackingError = lengthVec3(subtractVec3(trace.target, live))
+    const turnRateDeg = recordTurn(trace, trace.cameraPos, trace.target)
+    const { turn: flightPathTurnDeg, moved } = recordMove(trace, trace.cameraPos)
+
+    // Parent re-resolved every track step — it can genuinely keep moving
+    // over a long tracking phase (e.g. planetA drifting slowly while moonA
+    // is being tracked), however slightly.
+    const realParentPos = parentBody ? resolveWorldPosition(parentBody, system.bodies, trackDate) : null
+
+    frames.push({
+      leg: leg.legIndex,
+      bodyId: leg.waypointId,
+      parentBodyId: targetBody.parentId,
+      phase: 'track',
+      step,
+      simDate: trackDate.toISOString(),
+      cameraPos: trace.cameraPos,
+      target: trace.target,
+      turnRateDeg,
+      flightPathTurnDeg,
+      convergence: null,
+      positionConvergence: null,
+      trackingError,
+      targetFramingScore: framingScore(trace.cameraPos, trace.target, live),
+      parentFramingScore: realParentPos ? framingScore(trace.cameraPos, trace.target, realParentPos) : null,
+      moved,
+    })
+  }
+}
+
+/** smoothTrackingWindow is a CEILING, not the radius actually used —
+ *  adaptiveSmoothingRadius picks the largest radius (up to that ceiling)
+ *  that won't lag the target out of frame relative to `focus.distance`
+ *  (this leg's own settled viewing distance, ~constant through tracking
+ *  since a rigid translation preserves it). See that function's own
+ *  comment for the real, measured framing-loss bug a fixed-radius window
+ *  caused for a true-scale close orbiter. 0 (exact tracking) when
+ *  smoothTracking is off. */
+function trackSmoothingRadius(rawLivePositions: readonly WorldVec[], leg: RouteLeg, options: ResolvedRouteOptions): number {
+  if (!options.smoothTracking) return 0
+  return adaptiveSmoothingRadius(rawLivePositions, options.smoothTrackingWindow, leg.focus.distance)
 }
