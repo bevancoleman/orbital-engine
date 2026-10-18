@@ -1,10 +1,10 @@
+import { MS_PER_DAY } from './constants'
 import { toReferenceFrame } from './orientation'
 import type { OrbitalElements, Vec3Km } from './types'
 
 export type { Vec3Km } from './types'
 
 const DEG2RAD = Math.PI / 180
-const MS_PER_DAY = 86_400_000
 const TWO_PI = 2 * Math.PI
 
 /** Eccentricity above which Newton starts from E = π rather than E ≈ M —

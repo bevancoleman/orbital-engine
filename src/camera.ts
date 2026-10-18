@@ -11,6 +11,7 @@ import { resolveWorldPosition, type WorldVec } from './render'
 import { compressDistance, trueRadius } from './scale'
 import { ringOuterRadiusKm } from './rings'
 import { MS_PER_DAY } from './constants'
+import { lookupBody } from './hierarchy'
 import {
   addVec3,
   anyPerpendicularUnitVec3,
@@ -178,7 +179,7 @@ export function findContextBody(fromBody: CelestialBody, toBody: CelestialBody, 
       chain.push(current)
       seen.add(current.id)
       if (current.parentId) {
-        current = system.bodies.find((b) => b.id === current!.parentId)
+        current = lookupBody(system.bodies, current.parentId)
       } else if (star && current.id !== star.id) {
         current = star
       } else {
@@ -1156,7 +1157,7 @@ export function computeFocusForBody(
     maxExtent = Math.max(maxExtent, dist + trueRadius(child.radiusKm))
   }
 
-  const parent = body.parentId ? system.bodies.find((b) => b.id === body.parentId) : undefined
+  const parent = body.parentId ? lookupBody(system.bodies, body.parentId) : undefined
   const lookBias: WorldVec | null = parent ? subtractVec3(resolveWorldPosition(parent, system.bodies, simDate), bodyPos) : null
 
   const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
@@ -1348,7 +1349,7 @@ export function computeFocusForSystem(system: StarSystemData, simDate: Date): Fo
 /** Where to fly the camera for a selected belt: centred on its parent, at a
  *  distance that fits the belt's full outer radius. */
 export function computeFocusForBelt(belt: BeltRegion, system: StarSystemData, simDate: Date): FocusTarget {
-  const parent = system.bodies.find((b) => b.id === belt.parentId)
+  const parent = lookupBody(system.bodies, belt.parentId)
   const parentPos = parent ? resolveWorldPosition(parent, system.bodies, simDate) : ([0, 0, 0] as WorldVec)
   const outerWorldRadius = compressDistance(belt.outerRadiusKm)
   return { position: parentPos, distance: distanceToFit(outerWorldRadius, 1.6), lookBias: null, contextBody: null }

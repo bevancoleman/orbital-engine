@@ -1,7 +1,7 @@
+import { AU_KM } from './constants'
 import { equatorialNodeOffsetDeg, poleFromEquatorialJ2000 } from './orientation'
 import type { OrbitalElements, PoleDirection, StarSystemData } from './types'
 
-const AU_KM = 149_597_870.7
 const J2000 = '2000-01-01T12:00:00Z'
 
 // ── Spin poles ───────────────────────────────────────────────────────────

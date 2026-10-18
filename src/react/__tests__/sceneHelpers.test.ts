@@ -72,6 +72,29 @@ describe('describeDataWarning', () => {
     expect(described[3]!.detail).toContain('apart')
     expect(described.every((d) => d.detail.length > 0)).toBe(true)
   })
+
+  it('describes the hierarchy, orbit and radius warning kinds', () => {
+    const warnings: SystemDataWarning[] = [
+      { kind: 'unknown-parent', bodyId: 'x', bodyName: 'X', parentId: 'ghost' } as SystemDataWarning,
+      { kind: 'parent-cycle', bodyId: 'x', bodyName: 'X', message: 'cycle a → b → a' } as SystemDataWarning,
+      { kind: 'invalid-orbit', bodyId: 'x', bodyName: 'X', message: 'period must be > 0' } as SystemDataWarning,
+      { kind: 'invalid-radius', bodyId: 'x', bodyName: 'X', radiusKm: 0 } as SystemDataWarning,
+      {
+        kind: 'periapsis-inside-parent',
+        bodyId: 'x',
+        bodyName: 'X',
+        parentName: 'P',
+        distanceKm: 12,
+        parentRadiusKm: 6371,
+      } as SystemDataWarning,
+    ]
+    const details = warnings.map((w) => describeDataWarning(w).detail)
+    expect(details[0]).toContain('"ghost"')
+    expect(details[1]).toBe('cycle a → b → a')
+    expect(details[2]).toBe('period must be > 0')
+    expect(details[3]).toBe('radius 0 km is not positive')
+    expect(details[4]).toContain('inside P')
+  })
 })
 
 describe('simulationTime', () => {

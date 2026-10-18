@@ -2,13 +2,11 @@
  * Display strings for the info panel (see InfoPanel.tsx) — pure, so
  * they're unit-testable without rendering anything.
  */
+import { AU_KM } from '../constants'
 import { formatDistanceKm } from '../units'
 import type { BeltRegion, CelestialBody } from '../types'
 
-/** One astronomical unit, km (IAU 2012). The core's solarSystemData.ts
- *  has the same constant but doesn't export it, so it's restated here
- *  rather than hand-typed as a bare literal at each use. */
-export const AU_KM = 149_597_870.7
+export { AU_KM }
 
 export function formatAu(km: number, fractionDigits: number): string {
   return `${(km / AU_KM).toFixed(fractionDigits)} AU`

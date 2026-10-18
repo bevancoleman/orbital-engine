@@ -3,7 +3,9 @@
  * scene's fly-to targeting — unit-testable without React.
  */
 
-export const MS_PER_DAY = 86_400_000
+import { MS_PER_DAY } from '../constants'
+
+export { MS_PER_DAY }
 
 /** How often (real seconds) TimeDriver commits a simDate update — ~10x a
  *  second rather than every frame: plenty smooth for orbital motion, far
