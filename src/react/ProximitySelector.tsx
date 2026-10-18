@@ -1,31 +1,20 @@
-import { useRef, type MutableRefObject } from 'react'
+import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { findNearestCandidate, type ProximityCandidate } from '../proximitySelection'
-import { computeVisibleLabels, thinByScreenProximity, type LabelCandidate, type ScreenCandidate } from '../labelDeclutter'
 import type { WorldVec } from '../render'
-import { setsEqual } from './setUtils'
+import { computeProximityFrame, pointerPresenceAfter } from './proximityFrame'
+import { ndcToScreenPx, projectCandidatesToScreen } from './screenProjection'
+import type { SceneInteractionStore } from './sceneInteractionStore'
 
-// How close (in actual screen pixels, not normalized device coordinates —
-// see findNearestCandidate) the pointer has to be to a body's own
-// projected point before bubble-cursor selection snaps to it. Generous
-// enough to comfortably cover a trackpad/touch-imprecise click, small
-// enough that two genuinely distant bodies never both compete for the same
-// pointer position.
-const PROXIMITY_SNAP_PX = 28
+// How far past the viewport edge (px) a body still counts as on screen —
+// enough that a label for a body sitting just off the edge (whose text can
+// still poke into view) keeps competing in declutter, without letting
+// genuinely off-screen bodies take part in hover or thinning. The snap
+// radius and label separation constants live with the decision logic in
+// proximityFrame.ts.
+const OFFSCREEN_MARGIN_PX = 48
 
-// How close two labels can sit before the lower-priority one (see
-// computeOrbitalDepth) gets suppressed — wide enough to cover a typical
-// short label's own width/height (the exact case this exists for: the ISS
-// and Hubble's labels landing almost exactly on Earth's own, all three
-// real bodies genuinely that close together on screen at true scale).
-const LABEL_MIN_SEPARATION_PX = 32
-
-// Same idea as LABEL_MIN_SEPARATION_PX, but for whether a body's own dot
-// renders at all, not its text label — a much tighter threshold, since a
-// dot only needs to be visually distinguishable from its neighbour, not
-// leave room for a name to be read next to it.
-const BODY_MIN_SEPARATION_PX = 14
+const POINTER_EVENTS = ['pointerenter', 'pointermove', 'pointerdown', 'pointerleave'] as const
 
 /**
  * Bubble-cursor proximity selection AND label decluttering — both are the
@@ -35,10 +24,14 @@ const BODY_MIN_SEPARATION_PX = 14
  * body since both need exactly that. Every frame:
  *
  *  - finds whichever visible body's projected point is nearest the
- *    pointer, within PROXIMITY_SNAP_PX — that drives the hover highlight
- *    and, read from hoveredIdRef by OrbitalSystemScene's Canvas
+ *    pointer, within PROXIMITY_SNAP_PX — or the body whose label the
+ *    pointer is directly over — and that drives the hover highlight and,
+ *    read from the interaction store by OrbitalSystemScene's Canvas
  *    onPointerMissed, what a click selects (no mesh in this scene is
- *    itself raycastable any more — this replaces that entirely);
+ *    itself raycastable any more — this replaces that entirely). Bodies
+ *    behind the camera or well off screen are excluded first (see
+ *    screenProjection.ts), and nothing is hovered while the pointer isn't
+ *    over the canvas;
  *  - decides which bodies' TEXT labels actually draw, preferring
  *    structurally shallower bodies (the Sun over a planet, a planet over
  *    its own moon — see computeOrbitalDepth) when two labels would
@@ -53,85 +46,66 @@ const BODY_MIN_SEPARATION_PX = 14
  *    per-frame fact the rank/cap pass alone can't know about. Bodies in
  *    alwaysVisibleIds (primaries, the current selection, its children)
  *    skip this pass entirely — see SceneContent's own comment on that set.
+ *    Labels are then only chosen among bodies whose dot survived.
+ *
+ * The decisions themselves are pure (proximityFrame.ts); this component
+ * only projects, reads the pointer, and writes the results into the
+ * interaction store, which ignores writes that don't change anything.
  */
 export function ProximitySelector({
   candidates,
   alwaysVisibleIds,
   selectedId,
-  hoveredIdRef,
-  onHoverChange,
-  onVisibleLabelsChange,
-  onVisibleBodiesChange,
+  interaction,
 }: {
   candidates: { id: string; position: WorldVec; priority: number }[]
   alwaysVisibleIds: ReadonlySet<string>
   selectedId: string | null
-  hoveredIdRef: MutableRefObject<string | null>
-  onHoverChange: (id: string | null) => void
-  onVisibleLabelsChange: (ids: Set<string>) => void
-  onVisibleBodiesChange: (ids: Set<string>) => void
+  interaction: SceneInteractionStore
 }) {
-  const { camera, size } = useThree()
-  const lastReportedHover = useRef<string | null>(null)
-  const lastReportedLabels = useRef<Set<string>>(new Set())
-  const lastReportedBodies = useRef<Set<string>>(new Set())
+  const camera = useThree((s) => s.camera)
+  const size = useThree((s) => s.size)
+  const gl = useThree((s) => s.gl)
+  const connected = useThree((s) => s.events.connected) as unknown
+  const pointerInside = useRef(false)
   const projected = useRef(new THREE.Vector3())
 
+  // R3F's own state.pointer reads (0, 0) — dead centre — until the first
+  // pointer move, and keeps its last value after the mouse leaves, so on
+  // its own it can't tell "pointing at the middle" from "not pointing at
+  // all". Listened for on the same element R3F takes its events from (the
+  // canvas's wrapper, which also contains the HTML labels), so moving onto
+  // a label doesn't count as leaving.
+  useEffect(() => {
+    const target = connected instanceof window.EventTarget ? connected : gl.domElement
+    const handle = (event: InstanceType<typeof window.Event>): void => {
+      const pointerType = event instanceof window.PointerEvent ? event.pointerType : 'mouse'
+      pointerInside.current = pointerPresenceAfter({ type: event.type, pointerType }, pointerInside.current)
+    }
+    for (const type of POINTER_EVENTS) target.addEventListener(type, handle)
+    return () => {
+      for (const type of POINTER_EVENTS) target.removeEventListener(type, handle)
+    }
+  }, [connected, gl])
+
   useFrame((state) => {
-    const pointerPx = {
-      x: (state.pointer.x * 0.5 + 0.5) * size.width,
-      y: (-state.pointer.y * 0.5 + 0.5) * size.height,
-    }
-    const screenCandidates = candidates.map(({ id, position, priority }) => {
-      projected.current.set(position[0], position[1], position[2]).project(camera)
-      return {
-        id,
-        x: (projected.current.x * 0.5 + 0.5) * size.width,
-        y: (-projected.current.y * 0.5 + 0.5) * size.height,
-        priority,
-      }
+    const scratch = projected.current
+    const screen = projectCandidatesToScreen(
+      candidates,
+      (p) => scratch.set(p[0], p[1], p[2]).project(camera),
+      size,
+      OFFSCREEN_MARGIN_PX
+    )
+    const result = computeProximityFrame({
+      projected: screen,
+      pointerPx: pointerInside.current ? ndcToScreenPx(state.pointer, size) : null,
+      labelHoverId: interaction.getLabelHoverId(),
+      alwaysVisibleIds,
+      selectedId,
     })
-
-    const proximityInput: ProximityCandidate[] = screenCandidates
-    const nearest = findNearestCandidate(pointerPx.x, pointerPx.y, proximityInput, PROXIMITY_SNAP_PX)
-    const nextHoverId = nearest?.id ?? null
-    hoveredIdRef.current = nextHoverId
-    if (nextHoverId !== lastReportedHover.current) {
-      lastReportedHover.current = nextHoverId
-      onHoverChange(nextHoverId)
-    }
-
-    // Selected/hovered are forced ahead of every real structural priority
-    // (which starts at 0 for the star) so decluttering can never suppress
-    // the label of whatever's actually selected or about to be clicked.
-    const declutterInput: LabelCandidate[] = screenCandidates.map((c) => ({
-      ...c,
-      priority: c.id === selectedId ? -2 : c.id === nextHoverId ? -1 : c.priority,
-    }))
-    const visibleLabels = computeVisibleLabels(declutterInput, LABEL_MIN_SEPARATION_PX)
-    if (!setsEqual(visibleLabels, lastReportedLabels.current)) {
-      lastReportedLabels.current = visibleLabels
-      onVisibleLabelsChange(visibleLabels)
-    }
-
-    // Same greedy screen-space thinning, applied to whether a body's own
-    // dot renders at all — a tighter threshold than labels need (see
-    // BODY_MIN_SEPARATION_PX), and skipping anything already exempt so a
-    // planet can never be thinned out just because a moon's dot happens to
-    // sit right next to it on screen this frame.
-    const bodyThinInput: ScreenCandidate[] = screenCandidates
-      .filter((c) => !alwaysVisibleIds.has(c.id))
-      .map((c) => ({
-        ...c,
-        priority: c.id === selectedId ? -2 : c.id === nextHoverId ? -1 : c.priority,
-      }))
-    const thinnedSecondary = thinByScreenProximity(bodyThinInput, BODY_MIN_SEPARATION_PX)
-    const visibleBodies = new Set(alwaysVisibleIds)
-    for (const id of thinnedSecondary) visibleBodies.add(id)
-    if (!setsEqual(visibleBodies, lastReportedBodies.current)) {
-      lastReportedBodies.current = visibleBodies
-      onVisibleBodiesChange(visibleBodies)
-    }
+    interaction.setHoveredId(result.hoverId)
+    interaction.setVisibleLabelIds(result.visibleLabelIds)
+    interaction.setVisibleBodyIds(result.visibleBodyIds)
   })
 
   return null

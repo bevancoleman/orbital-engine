@@ -13,6 +13,7 @@ export const UI_COLORS = {
   text: '#f3f4f6', // gray-100
   textMuted: '#9ca3af', // gray-400
   accent: '#22d3ee', // cyan-400
+  warning: '#f59e0b', // amber-500
 } as const
 
 export const uiStyles = {
@@ -34,8 +35,14 @@ export const uiStyles = {
     border: 'none',
     cursor: 'pointer',
   } as const,
-  buttonDisabled: { opacity: 0.3, cursor: 'default' } as const,
+  // 0.5, not lower: at 0.3 the disabled buttons' text fell well under
+  // WCAG's contrast floor against the panel background.
+  buttonDisabled: { opacity: 0.5, cursor: 'default' } as const,
   zoomLabel: { display: 'flex', alignItems: 'center', gap: 8, color: UI_COLORS.textMuted, marginLeft: 'auto' } as const,
+  zoomSlider: { width: 160 } as const,
+  speedLabel: { display: 'flex', alignItems: 'center', gap: 8, color: UI_COLORS.textMuted } as const,
+  speedValue: { color: UI_COLORS.text, fontFamily: 'monospace', width: 96 } as const,
+  simDate: { color: UI_COLORS.textMuted, marginLeft: 'auto', fontFamily: 'monospace' } as const,
   canvasWrap: {
     position: 'relative',
     flex: 1,
@@ -97,6 +104,29 @@ export const uiStyles = {
     letterSpacing: '0.05em',
   } as const,
   devPanelRow: { display: 'flex', justifyContent: 'space-between', gap: 12 } as const,
+  devPanelSectionTitle: {
+    fontWeight: 600,
+    fontSize: 11,
+    marginBottom: 4,
+    marginTop: 8,
+    color: UI_COLORS.accent,
+    letterSpacing: '0.05em',
+  } as const,
+  devPanelWarningTitle: {
+    fontWeight: 600,
+    fontSize: 11,
+    marginBottom: 4,
+    marginTop: 8,
+    color: UI_COLORS.warning,
+    letterSpacing: '0.05em',
+  } as const,
+  devPanelWarningRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 12,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  } as const,
 } as const
 
 export function buttonStyle(disabled?: boolean) {
