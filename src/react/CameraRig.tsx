@@ -9,11 +9,14 @@ import {
   advanceSteadyTracking,
   beginFlight,
   createFlightLifecycleState,
+  describeCameraActivity,
   focusChanged,
   interruptFlight,
   releaseClearedColliders,
+  sameCameraActivity,
   sampleFlight,
   settleFlight,
+  type CameraActivity,
 } from './cameraFlightLifecycle'
 
 /** Smoothing for MANUAL orbit/drag/dolly only — camera-controls' own
@@ -209,6 +212,7 @@ export function CameraRig({
   onDistanceChange,
   minDistance,
   nearPlane,
+  onActivityChange,
 }: {
   focus: FocusTarget | null
   /** The currently-selected body's LIVE world position — recomputed by
@@ -247,6 +251,11 @@ export function CameraRig({
    *  nearPlaneForRadius) — applied imperatively to the live camera below,
    *  since the Canvas's own `camera` prop only sets this once at mount. */
   nearPlane: number
+  /** Called whenever the camera's observable activity (flying / tracking /
+   *  idle, plus the flight counter — see describeCameraActivity) changes,
+   *  and never on an unchanged frame. OrbitalSystemScene mirrors it onto
+   *  its root element as data attributes. */
+  onActivityChange?: (activity: CameraActivity) => void
 }) {
   const { camera } = useThree()
 
@@ -291,6 +300,7 @@ export function CameraRig({
   const scratch = useMemo(() => ({ position: new THREE.Vector3(), target: new THREE.Vector3() }), [])
 
   const lastReportedDistance = useRef(-1)
+  const lastReportedActivity = useRef<CameraActivity | null>(null)
   // Priority -2: BEFORE drei's own CameraControls, which calls
   // `controls.update(delta)` at priority -1 (R3F runs useFrame callbacks
   // in ascending priority order). A real, if subtle, lag this fixes:
@@ -430,6 +440,14 @@ export function CameraRig({
     if (Math.abs(liveDistance - lastReportedDistance.current) > liveDistance * 0.02) {
       lastReportedDistance.current = liveDistance
       onDistanceChange(liveDistance)
+    }
+
+    // Change-only, like the distance report above: the scene re-renders
+    // on each report, which here is only at a flight's start and end.
+    const activity = describeCameraActivity(lifecycle, tracked)
+    if (onActivityChange && !sameCameraActivity(lastReportedActivity.current, activity)) {
+      lastReportedActivity.current = activity
+      onActivityChange(activity)
     }
 
     syncColliderMeshes(controls, lifecycle.excludedColliderIds)

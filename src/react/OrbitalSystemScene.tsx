@@ -21,6 +21,7 @@ import type { CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
 import { StarLight } from './StarLight'
 import { CameraRig } from './CameraRig'
+import type { CameraActivity } from './cameraFlightLifecycle'
 import { PerfStats, type RendererStats } from './PerfStats'
 import { DevPerfPanel } from './DevPerfPanel'
 import { BeltInfoPanel, BodyInfoPanel } from './InfoPanel'
@@ -130,6 +131,15 @@ export interface OrbitalSystemSceneProps {
  * panels, DevPerfPanel) and the <Canvas> scene itself (SceneContent,
  * CameraRig). Per-frame hover/visibility state deliberately lives outside
  * React state — see sceneInteractionStore.ts.
+ *
+ * The root element carries a few read-only `data-*` attributes describing
+ * what the scene is doing, so a browser test (or a consumer) can wait on
+ * real state instead of fixed sleeps:
+ * - `data-camera-state` — `flying` | `tracking` | `idle` (see
+ *   cameraFlightLifecycle's describeCameraActivity)
+ * - `data-flight-count` — fly-tos started since mount; only increases
+ * - `data-focused-id` — the selected body or belt id; absent when none
+ * - `data-sim-playing` — `true` | `false`
  */
 export function OrbitalSystemScene({
   system,
@@ -188,6 +198,11 @@ export function OrbitalSystemScene({
   // whether the camera got there by flying to a selection, a mouse-wheel
   // scroll, or the slider itself.
   const manualZoomDistanceRef = useRef<number | null>(null)
+  // Mirrored onto the root element's data attributes (see this
+  // component's doc comment). CameraRig only reports a change, which is
+  // only ever at a flight's start or end, so this costs two renders per
+  // flight — not one per frame.
+  const [cameraActivity, setCameraActivity] = useState<CameraActivity>({ state: 'idle', flightCount: 0 })
   // Renderer stats only exist inside the Canvas's own render loop (see
   // PerfStats.tsx's own comment) — lifted up here via a callback so the
   // dev overlay below (outside the Canvas, alongside the other HTML
@@ -298,7 +313,13 @@ export function OrbitalSystemScene({
   })
 
   return (
-    <div style={uiStyles.root}>
+    <div
+      style={uiStyles.root}
+      data-camera-state={cameraActivity.state}
+      data-flight-count={cameraActivity.flightCount}
+      data-focused-id={selectedBody?.id ?? selectedBelt?.id}
+      data-sim-playing={clock.playing}
+    >
       <Toolbar
         system={system}
         selection={nav.selection}
@@ -357,6 +378,7 @@ export function OrbitalSystemScene({
             onDistanceChange={setCameraDistance}
             minDistance={zoomSliderMinDistance}
             nearPlane={dynamicNearPlane}
+            onActivityChange={setCameraActivity}
           />
           {devMode && <PerfStats onUpdate={setRendererStats} />}
         </Canvas>

@@ -4,9 +4,11 @@ import {
   advanceSteadyTracking,
   beginFlight,
   createFlightLifecycleState,
+  describeCameraActivity,
   focusChanged,
   interruptFlight,
   releaseClearedColliders,
+  sameCameraActivity,
   sampleFlight,
   settleFlight,
   type CameraFlightLifecycleState,
@@ -474,3 +476,46 @@ describe("a full flight-then-settle-then-track sequence, mirroring CameraRig.tsx
     expect(Math.hypot(...offset)).toBeCloseTo(1e-3, 9)
   })
 })
+
+describe('describeCameraActivity / sameCameraActivity (observable state)', () => {
+  const begin = (state: CameraFlightLifecycleState): CameraFlightLifecycleState =>
+    beginFlight(state, {
+      focus: focusAt([1, 0, 0]),
+      focusedId: 'a',
+      currentCameraPos: [0, 0, 10],
+      currentTargetPos: [0, 0, 0],
+      trackedPosition: null,
+      nowMs: 0,
+    })
+
+  it('is idle with no flights before anything has happened', () => {
+    const state = createFlightLifecycleState(INITIAL_DIRECTION)
+    expect(describeCameraActivity(state, null)).toEqual({ state: 'idle', flightCount: 0 })
+  })
+
+  it('is flying while a flight is in progress, even with a tracked body', () => {
+    const state = begin(createFlightLifecycleState(INITIAL_DIRECTION))
+    expect(describeCameraActivity(state, [1, 0, 0])).toEqual({ state: 'flying', flightCount: 1 })
+  })
+
+  it('is tracking once settled on a tracked body, idle once settled on nothing tracked', () => {
+    const settled = settleFlight(begin(createFlightLifecycleState(INITIAL_DIRECTION)))
+    expect(describeCameraActivity(settled, [1, 0, 0]).state).toBe('tracking')
+    expect(describeCameraActivity(settled, null).state).toBe('idle')
+  })
+
+  it('counts every flight start, including a retarget mid-flight, and an interrupted one stays counted', () => {
+    const twice = begin(begin(createFlightLifecycleState(INITIAL_DIRECTION)))
+    expect(twice.flightCount).toBe(2)
+    expect(interruptFlight(twice, null).state.flightCount).toBe(2)
+    expect(acknowledgeNullFocus(twice).flightCount).toBe(2)
+  })
+
+  it('compares field-wise, and treats "nothing reported yet" as different', () => {
+    expect(sameCameraActivity(null, { state: 'idle', flightCount: 0 })).toBe(false)
+    expect(sameCameraActivity({ state: 'idle', flightCount: 0 }, { state: 'idle', flightCount: 0 })).toBe(true)
+    expect(sameCameraActivity({ state: 'tracking', flightCount: 1 }, { state: 'tracking', flightCount: 2 })).toBe(false)
+    expect(sameCameraActivity({ state: 'flying', flightCount: 1 }, { state: 'tracking', flightCount: 1 })).toBe(false)
+  })
+})
+

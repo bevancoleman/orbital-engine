@@ -65,6 +65,13 @@ export interface CameraFlightLifecycleState {
    *  been framed yet), and by the caller to compute the manual zoom
    *  slider's dolly axis. */
   lastGoodDirection: WorldVec
+  /** How many flights have started since this state was created — only
+   *  ever incremented (by beginFlight). Exposed for observability (see
+   *  describeCameraActivity): a monotonic counter lets an outside observer
+   *  tell "a NEW flight started and has since settled" apart from "still
+   *  in the state it was in before", which the flying/tracking/idle state
+   *  alone can't (an ISS -> Hubble switch is tracking both before and after). */
+  flightCount: number
 }
 
 export function createFlightLifecycleState(initialDirection: WorldVec): CameraFlightLifecycleState {
@@ -84,6 +91,7 @@ export function createFlightLifecycleState(initialDirection: WorldVec): CameraFl
     previousFocusedId: null,
     lastSeenFocus: null,
     lastGoodDirection: initialDirection,
+    flightCount: 0,
   }
 }
 
@@ -165,6 +173,7 @@ export function beginFlight(
     excludedColliderIds: unionIds(state.isFlying ? state.excludedColliderIds : new Set(), focusedId, state.previousFocusedId),
     previousFocusedId: focusedId,
     lastSeenFocus: focus,
+    flightCount: state.flightCount + 1,
   }
 }
 
@@ -318,4 +327,35 @@ export function advanceSteadyTracking(
   }
   const anchor: WorldVec = [trackedPosition[0], trackedPosition[1], trackedPosition[2]]
   return { state: { ...state, lastTrackedPosition: anchor }, anchor }
+}
+
+/** What the camera is doing right now, as seen from outside — see
+ *  describeCameraActivity. */
+export type CameraActivityState = 'flying' | 'tracking' | 'idle'
+
+export interface CameraActivity {
+  /** `flying`: a fly-to is in progress. `tracking`: no flight, and the
+   *  target is anchored on a body (moving or fixed). `idle`: no flight and
+   *  nothing tracked (nothing selected, a belt, or the whole system). */
+  state: CameraActivityState
+  /** See CameraFlightLifecycleState.flightCount. */
+  flightCount: number
+}
+
+/**
+ * The externally-observable summary of the lifecycle (OrbitalSystemScene
+ * mirrors it onto its root element as `data-camera-state` /
+ * `data-flight-count`). Exists so browser tests — and any consumer that
+ * wants to — can wait on what the camera is actually doing instead of
+ * guessing at wall-clock timings around the ~900ms flight.
+ */
+export function describeCameraActivity(state: CameraFlightLifecycleState, trackedPosition: WorldVec | null): CameraActivity {
+  const activity: CameraActivityState = state.isFlying ? 'flying' : trackedPosition ? 'tracking' : 'idle'
+  return { state: activity, flightCount: state.flightCount }
+}
+
+/** Field-wise equality, so CameraRig only reports a change (and the scene
+ *  only re-renders) when the activity genuinely changed. */
+export function sameCameraActivity(a: CameraActivity | null, b: CameraActivity): boolean {
+  return a !== null && a.state === b.state && a.flightCount === b.flightCount
 }
