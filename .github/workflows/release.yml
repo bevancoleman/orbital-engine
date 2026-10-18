@@ -6,6 +6,10 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
+# Nothing by default; each job asks for exactly what it needs. Actions are
+# pinned to full commit SHAs, with the `# vX.Y.Z` comment Dependabot bumps.
+permissions: {}
+
 jobs:
   # Version-bump / changelog PR only — no publish command here. The npm
   # trusted-publisher configured for this repo is stage-only (see
@@ -24,18 +28,20 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # No lifecycle scripts while holding a write token; nothing here needs
+      # dist/ (the `prepare` build), only typecheck + tests.
+      - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm test
       - name: Create/update the "Version Packages" release PR
-        uses: changesets/action@v2
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -46,25 +52,42 @@ jobs:
       # OIDC token for npm trusted publishing — no NPM_TOKEN secret needed
       # or used anywhere in this job.
       id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
       # Staged publishing (npm stage publish) needs npm CLI >=11.15.0 —
-      # newer than what the runner image ships by default.
-      - run: npm install -g npm@latest
-      - run: npm ci
+      # newer than what the runner image ships by default. Exact version, so
+      # a bad npm release can't land in the one job holding id-token: write;
+      # 12.1.0 is the version that staged 1.4.0 successfully.
+      - run: npm install -g npm@12.1.0
+      # No dependency lifecycle scripts while the OIDC token is reachable;
+      # dist/ is built explicitly instead of via `prepare`.
+      - run: npm ci --ignore-scripts
       - run: npm run build
       - name: Stage publish if this version isn't on npm yet
         run: |
           LOCAL_VERSION=$(node -p "require('./package.json').version")
-          PUBLISHED_VERSION=$(npm view orbital-engine version 2>/dev/null || echo "none")
-          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
-            echo "orbital-engine@$LOCAL_VERSION is already published — nothing to do."
-          else
-            echo "Staging orbital-engine@$LOCAL_VERSION (needs maintainer 2FA approval — npmjs.com or 'npm stage list'/'npm stage approve <id>')."
-            npm stage publish
+          # Ask for this exact version — plain `npm view orbital-engine
+          # version` reports `latest`, which differs from LOCAL_VERSION
+          # whenever a dist-tag or older release is involved. Only a 404
+          # means "not published"; any other registry error fails the job
+          # rather than being mistaken for "go ahead and stage".
+          if VIEW_OUTPUT=$(npm view "orbital-engine@$LOCAL_VERSION" version 2>&1); then
+            if [ "$VIEW_OUTPUT" = "$LOCAL_VERSION" ]; then
+              echo "orbital-engine@$LOCAL_VERSION is already published — nothing to do."
+              exit 0
+            fi
+            echo "Unexpected npm view output: $VIEW_OUTPUT" >&2
+            exit 1
+          elif ! printf '%s' "$VIEW_OUTPUT" | grep -q 'E404'; then
+            echo "npm view failed (not a 404) — refusing to guess:" >&2
+            echo "$VIEW_OUTPUT" >&2
+            exit 1
           fi
+          echo "Staging orbital-engine@$LOCAL_VERSION (needs maintainer 2FA approval — npmjs.com or 'npm stage list'/'npm stage approve <id>')."
+          npm stage publish
