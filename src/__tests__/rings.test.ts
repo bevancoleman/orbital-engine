@@ -1,4 +1,4 @@
-import { findInvalidRings, ringOuterRadiusKm, ringTiltRadians, ringWorldRadius } from '../rings'
+import { findInvalidRings, ringOuterRadiusKm, ringPlaneQuaternion, ringTiltRadians, ringWorldRadius } from '../rings'
 import type { CelestialBody, StarSystemData } from '../types'
 
 function body(overrides: Partial<CelestialBody> & Pick<CelestialBody, 'id'>): CelestialBody {
@@ -50,7 +50,33 @@ describe('ringTiltRadians', () => {
   })
 })
 
+describe('ringPlaneQuaternion (from rings.ts)', () => {
+  it('is the identity for an untilted body', () => {
+    expect(ringPlaneQuaternion(body({ id: 'p' })).map((v) => Math.round(v * 1e12) / 1e12 + 0)).toEqual([0, 0, 0, 1])
+  })
+
+  it('tilts toward render +Z for an axial-tilt-only body — the opposite of the old rotation about +X, which mirrored the orbit convention', () => {
+    // Rotating +Y about X by +θ (the old ring rotation) lands on (0, cos θ, +sin θ);
+    // the orbit convention's equator normal for node 0 maps to (0, cos θ, −sin θ).
+    const [qx, , , qw] = ringPlaneQuaternion(body({ id: 'p', axialTiltDeg: 30 }))
+    expect(2 * Math.atan2(qx, qw)).toBeCloseTo(-Math.PI / 6, 9)
+  })
+})
+
+describe('ringWorldRadius — degenerate body radius', () => {
+  it.each([0, -1, Number.NaN])('draws nothing (0) rather than Infinity/NaN for radiusKm = %s', (radiusKm) => {
+    expect(ringWorldRadius(120_000, body({ id: 'p', radiusKm }), 2)).toBe(0)
+  })
+})
+
 describe('findInvalidRings', () => {
+  it('flags rings on a body with no positive radius to scale them by', () => {
+    const planet = body({ id: 'p', radiusKm: 0, rings: [{ innerRadiusKm: 70_000, outerRadiusKm: 90_000 }] })
+    expect(findInvalidRings(system([planet]))).toEqual([
+      expect.objectContaining({ bodyId: 'p', bandIndex: 0, problem: 'body-without-radius' }),
+    ])
+  })
+
   it('returns nothing for well-formed rings', () => {
     const planet = body({ id: 'p', radiusKm: 60_000, rings: [{ innerRadiusKm: 70_000, outerRadiusKm: 140_000 }] })
     expect(findInvalidRings(system([planet]))).toEqual([])

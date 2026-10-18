@@ -51,8 +51,13 @@ export const MAX_DAYS_PER_SECOND = MAX_HOURS_PER_SECOND / HOURS_PER_DAY
  * slider, a fixture, a saved/shared session) should route through this
  * rather than trusting its own input directly, so MAX_HOURS_PER_SECOND
  * stays the actual, enforced ceiling rather than just documentation.
+ * NaN becomes DEFAULT_DAYS_PER_SECOND; ±Infinity clamps to the range ends.
  */
 export function clampPlaybackSpeed(daysPerSecond: number): number {
+  // NaN (a corrupt saved session, a failed parse) has no sensible clamp —
+  // Math.min/max pass it straight through, and it then poisons the
+  // simulated date — so it falls back to the default speed instead.
+  if (Number.isNaN(daysPerSecond)) return DEFAULT_DAYS_PER_SECOND
   return Math.min(MAX_DAYS_PER_SECOND, Math.max(REAL_TIME_DAYS_PER_SECOND, daysPerSecond))
 }
 

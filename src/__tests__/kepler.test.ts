@@ -1,4 +1,4 @@
-import { positionAtTime, orbitPath } from '../kepler'
+import { positionAtTime, orbitPath, solveEccentricAnomaly, parseEpochMs, epochHasTimeZone } from '../kepler'
 import { SOLAR_SYSTEM } from '../solarSystemData'
 import type { OrbitalElements } from '../types'
 import { PLANETS_AT_J2000, PLANETS_AT_2010, MOON_AT_J2000, ASTEROIDS_AT_EPOCH } from '../fixtures/referenceVectors'
@@ -271,5 +271,85 @@ describe('orbitPath', () => {
     // half-a-segment is (4.5 * a / segments) / 2.
     const worstCaseGapKm = (4.5 * eris.semiMajorAxisKm) / segments / 2
     expect(nearestGapKm).toBeLessThan(worstCaseGapKm)
+  })
+})
+
+describe('solveEccentricAnomaly', () => {
+  // Real, observed bug: Newton seeded with E = M diverged for 1.3% of mean
+  // anomalies at e = 0.98 and 5.3% at e = 0.99 — e.g. e = 0.99, M = 5.9803
+  // returned E ≈ −3430 (residual −3436), still a point on the ellipse so
+  // nothing downstream noticed.
+  it.each([0, 0.1, 0.5, 0.9, 0.967, 0.98, 0.99, 0.999])("solves Kepler's equation to 1e-9 across a full sweep of M at e = %s", (e) => {
+    let worst = 0
+    for (let k = 0; k <= 20_000; k++) {
+      const M = (2 * Math.PI * k) / 20_000
+      const E = solveEccentricAnomaly(M, e)
+      worst = Math.max(worst, Math.abs(E - e * Math.sin(E) - M))
+    }
+    expect(worst).toBeLessThan(1e-9)
+  })
+
+  it('solves the exact case that used to diverge', () => {
+    const E = solveEccentricAnomaly(5.9803, 0.99)
+    expect(Math.abs(E - 0.99 * Math.sin(E) - 5.9803)).toBeLessThan(1e-9)
+    expect(E).toBeGreaterThan(0)
+    expect(E).toBeLessThan(2 * Math.PI)
+  })
+
+  it('returns the E for the M given, outside 0–2π too', () => {
+    for (const M of [-1, 7, 100]) {
+      const E = solveEccentricAnomaly(M, 0.5)
+      expect(E - 0.5 * Math.sin(E)).toBeCloseTo(M, 9)
+    }
+  })
+})
+
+describe('epoch parsing', () => {
+  const orbit: OrbitalElements = {
+    semiMajorAxisKm: 1e6, eccentricity: 0.1, inclinationDeg: 10, longitudeOfAscendingNodeDeg: 20,
+    argumentOfPeriapsisDeg: 30, meanAnomalyAtEpochDeg: 40, orbitalPeriodDays: 10, epoch: '2000-01-01T12:00:00Z',
+  }
+
+  it("reads an offset-less date-time as UTC, not the viewer's local time", () => {
+    const date = new Date('2000-01-03T00:00:00Z')
+    const utc = positionAtTime(orbit, date)
+    const offsetless = positionAtTime({ ...orbit, epoch: '2000-01-01T12:00:00' }, date)
+    expect(offsetless.x).toBeCloseTo(utc.x, 6)
+    expect(offsetless.y).toBeCloseTo(utc.y, 6)
+    expect(parseEpochMs('2000-01-01 12:00')).toBe(Date.UTC(2000, 0, 1, 12))
+  })
+
+  it('knows which epochs pin down an exact instant', () => {
+    expect(epochHasTimeZone('2000-01-01T12:00:00Z')).toBe(true)
+    expect(epochHasTimeZone('2000-01-01T12:00:00+10:00')).toBe(true)
+    expect(epochHasTimeZone('2000-01-01')).toBe(true)
+    expect(epochHasTimeZone('2000-01-01T12:00:00')).toBe(false)
+  })
+
+  it('is NaN for an unparseable epoch', () => {
+    expect(parseEpochMs('not a date')).toBeNaN()
+  })
+})
+
+describe('orbitPath — degenerate segment counts and caching', () => {
+  it.each([0, -5, Number.NaN, Number.POSITIVE_INFINITY])('never returns NaN points for segments = %s', (segments) => {
+    const path = orbitPath(bodyOrbit('mars'), segments)
+    expect(path.length).toBeGreaterThanOrEqual(2)
+    for (const p of path) expect(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)).toBe(true)
+  })
+
+  it('scales its shared, eccentricity-keyed arc-length table by each orbit\'s own size', () => {
+    const orbit = bodyOrbit('mars')
+    const first = orbitPath(orbit, 64)
+    const doubled = orbitPath({ ...orbit, semiMajorAxisKm: orbit.semiMajorAxisKm * 2 }, 64)
+    first.forEach((p, i) => expect(doubled[i]!.x / p.x).toBeCloseTo(2, 9))
+  })
+
+  it('picks up an orbit mutated in place rather than serving a stale orientation', () => {
+    const orbit = { ...bodyOrbit('mars') }
+    const before = positionAtTime(orbit, new Date('2001-01-01T00:00:00Z'))
+    orbit.inclinationDeg += 30
+    const after = positionAtTime(orbit, new Date('2001-01-01T00:00:00Z'))
+    expect(Math.abs(after.z - before.z)).toBeGreaterThan(1e6)
   })
 })

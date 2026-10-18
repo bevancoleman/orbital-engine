@@ -66,24 +66,42 @@ export type LabelCandidate = ScreenCandidate
  * screen, thin by priority, don't care what the things actually are. Ties
  * (equal priority, e.g. two sibling moons) resolve by whichever appears
  * first in the input.
+ *
+ * Kept candidates are bucketed into a grid of minSeparationPx-sized cells,
+ * so each candidate only checks the 3×3 cells around it rather than every
+ * kept candidate — O(n) per frame instead of O(n²) for a dense system,
+ * with exactly the same result (anything within minSeparationPx of a
+ * point is, by construction, in one of those nine cells).
  */
 export function thinByScreenProximity(
   candidates: readonly ScreenCandidate[],
   minSeparationPx: number
 ): Set<string> {
   const sorted = [...candidates].sort((a, b) => a.priority - b.priority)
-  const kept: ScreenCandidate[] = []
   const visible = new Set<string>()
   const minSepSq = minSeparationPx * minSeparationPx
+  const overlaps = (a: ScreenCandidate, b: ScreenCandidate) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2 <= minSepSq
+  // An infinite separation overlaps everything with the first kept
+  // candidate — one cell for the whole screen. 0 or NaN only ever matches
+  // exact duplicates (or nothing), which any positive cell size still finds.
+  const cellSize = Math.abs(minSeparationPx) || 1
+  const cellOf = (v: number) => (Number.isFinite(cellSize) ? Math.floor(v / cellSize) : 0)
+  const grid = new Map<string, ScreenCandidate[]>()
 
   for (const candidate of sorted) {
-    const overlapsKept = kept.some((s) => {
-      const dx = candidate.x - s.x
-      const dy = candidate.y - s.y
-      return dx * dx + dy * dy <= minSepSq
-    })
+    const cx = cellOf(candidate.x)
+    const cy = cellOf(candidate.y)
+    let overlapsKept = false
+    for (let dx = -1; dx <= 1 && !overlapsKept; dx++) {
+      for (let dy = -1; dy <= 1 && !overlapsKept; dy++) {
+        overlapsKept = grid.get(`${cx + dx},${cy + dy}`)?.some((kept) => overlaps(candidate, kept)) ?? false
+      }
+    }
     if (overlapsKept) continue
-    kept.push(candidate)
+    const key = `${cx},${cy}`
+    const cell = grid.get(key)
+    if (cell) cell.push(candidate)
+    else grid.set(key, [candidate])
     visible.add(candidate.id)
   }
 

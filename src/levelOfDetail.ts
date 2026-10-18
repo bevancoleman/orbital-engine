@@ -23,6 +23,16 @@ export function apparentSize(radius: number, cameraDistance: number): number {
   return radius / cameraDistance
 }
 
+/**
+ * The highest-detail level whose threshold `size` clears — or the lowest
+ * level when none does. Real, observed bug: a NaN or negative size (e.g. a
+ * body with a missing radiusKm) matched no level at all, and the `level!`
+ * every caller followed it with threw a TypeError mid-render.
+ */
+function pickLevel<T extends { minApparentSize: number }>(levels: readonly T[], size: number): T {
+  return levels.find((l) => size >= l.minApparentSize) ?? levels[levels.length - 1]!
+}
+
 export interface SphereDetail {
   widthSegments: number
   heightSegments: number
@@ -40,8 +50,8 @@ const SPHERE_LEVELS: { minApparentSize: number; detail: SphereDetail }[] = [
  *  clears, so a body zoomed in close enough to fill the screen gets a
  *  properly round silhouette instead of visible facets. */
 export function sphereDetailFor(size: number): SphereDetail {
-  const level = SPHERE_LEVELS.find((l) => size >= l.minApparentSize)
-  return level!.detail
+  const level = pickLevel(SPHERE_LEVELS, size)
+  return level.detail
 }
 
 const ICOSAHEDRON_LEVELS: { minApparentSize: number; subdivisions: number }[] = [
@@ -59,8 +69,8 @@ const ICOSAHEDRON_LEVELS: { minApparentSize: number; subdivisions: number }[] = 
  *  so it only needs to soften at the extreme close range true-scale makes
  *  reachable. */
 export function icosahedronDetailFor(size: number): number {
-  const level = ICOSAHEDRON_LEVELS.find((l) => size >= l.minApparentSize)
-  return level!.subdivisions
+  const level = pickLevel(ICOSAHEDRON_LEVELS, size)
+  return level.subdivisions
 }
 
 const TORUS_LEVELS: { minApparentSize: number; radialSegments: number; tubularSegments: number }[] = [
@@ -73,8 +83,8 @@ const TORUS_LEVELS: { minApparentSize: number; radialSegments: number; tubularSe
  *  sphereDetailFor, for the one other "should look smooth/round up close"
  *  shape this engine has. */
 export function torusDetailFor(size: number): { radialSegments: number; tubularSegments: number } {
-  const level = TORUS_LEVELS.find((l) => size >= l.minApparentSize)
-  return { radialSegments: level!.radialSegments, tubularSegments: level!.tubularSegments }
+  const level = pickLevel(TORUS_LEVELS, size)
+  return { radialSegments: level.radialSegments, tubularSegments: level.tubularSegments }
 }
 
 const ORBIT_LEVELS: { minApparentSize: number; segments: number }[] = [
@@ -98,6 +108,6 @@ const ORBIT_LEVELS: { minApparentSize: number; segments: number }[] = [
  * whatever scale the ring is actually being viewed at.
  */
 export function orbitDetailFor(size: number): number {
-  const level = ORBIT_LEVELS.find((l) => size >= l.minApparentSize)
-  return level!.segments
+  const level = pickLevel(ORBIT_LEVELS, size)
+  return level.segments
 }

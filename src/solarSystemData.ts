@@ -1,7 +1,76 @@
-import type { StarSystemData } from './types'
+import { equatorialNodeOffsetDeg, poleFromEquatorialJ2000 } from './orientation'
+import type { OrbitalElements, PoleDirection, StarSystemData } from './types'
 
 const AU_KM = 149_597_870.7
 const J2000 = '2000-01-01T12:00:00Z'
+
+// ── Spin poles ───────────────────────────────────────────────────────────
+// J2000 right ascension/declination of each body's spin axis, from the IAU
+// Working Group on Cartographic Coordinates and Rotational Elements
+// (Archinal et al. 2011, the 2009 report; Pluto from the 2015 report,
+// Archinal et al. 2018) — the constant terms, without the small periodic
+// nutation terms some bodies have. Each is the pole the body turns
+// ANTICLOCKWISE about (see CelestialBody.pole), which for a retrograde
+// rotator is the opposite end from the one the IAU calls "north".
+const EARTH_POLE = poleFromEquatorialJ2000(0, 90)
+const MARS_POLE = poleFromEquatorialJ2000(317.68143, 52.8865)
+const JUPITER_POLE = poleFromEquatorialJ2000(268.056595, 64.495303)
+const SATURN_POLE = poleFromEquatorialJ2000(40.589, 83.537)
+// IAU "north" for Uranus is RA 257.311°, Dec −15.175°, which it spins
+// clockwise about (W = 203.81° − 501.16°/day) — so its spin pole, and the
+// pole its moons orbit anticlockwise about, is the antipode.
+const URANUS_POLE = poleFromEquatorialJ2000(77.311, 15.175)
+const NEPTUNE_POLE = poleFromEquatorialJ2000(299.36, 43.46)
+// The 2015 report's dwarf-planet convention already quotes the positive
+// (anticlockwise) pole.
+const PLUTO_POLE = poleFromEquatorialJ2000(132.993, -6.163)
+
+/**
+ * A moon's orbit from JPL SSD's planetary-satellite mean elements
+ * (ssd.jpl.nasa.gov/sats/elem — epoch 2000-01-01.5 TDB), which are quoted
+ * against each moon's local Laplace plane (or, for Uranus's moons and
+ * Charon, the planet's equator) — given here by its pole's RA/Dec, the
+ * table's own "R.A./Dec." columns where it has them. JPL measures the node
+ * from where that plane crosses the ICRF equator; this engine measures it
+ * from where the plane crosses the ecliptic (see orientation.ts's
+ * planeBasis), so the node is shifted by equatorialNodeOffsetDeg. Verified
+ * against JPL Horizons J2000 vectors: every moon's real position lies
+ * within ~1° of the plane this gives (see src/fixtures/moonReferenceVectors.ts).
+ *
+ * Real, observed bug history: these numbers used to go in as if they were
+ * ecliptic-relative, which put Saturn's moons ~27° off its rings, and
+ * Uranus's moons were given inclinations with the planet's tilt "added"
+ * while keeping equator-relative nodes — planes up to 163° apart, with
+ * Umbriel orbiting backwards.
+ */
+function jplSatelliteOrbit(elements: {
+  semiMajorAxisKm: number
+  eccentricity: number
+  argumentOfPeriapsisDeg: number
+  meanAnomalyAtEpochDeg: number
+  inclinationDeg: number
+  /** As JPL publishes it — from the plane's node on the ICRF equator. */
+  nodeFromEquatorDeg: number
+  orbitalPeriodDays: number
+  plane: PoleDirection
+}): OrbitalElements {
+  const { nodeFromEquatorDeg, plane, ...rest } = elements
+  return {
+    ...rest,
+    longitudeOfAscendingNodeDeg: nodeFromEquatorDeg + equatorialNodeOffsetDeg(plane),
+    epoch: J2000,
+    referencePlanePole: plane,
+  }
+}
+
+/** Sidereal period, days, of a body of negligible mass orbiting the Sun at
+ *  semi-major axis `au` — Kepler's third law with the Gaussian gravitational
+ *  constant (k = 0.01720209895, so 2π/k = 365.2568983 days). Used where the
+ *  catalogue's own period was rounded separately from its semi-major axis,
+ *  so the two are at least consistent with each other. */
+function heliocentricPeriodDays(au: number): number {
+  return 365.2568983 * au ** 1.5
+}
 
 /**
  * Solar System reference data — mean orbital elements (J2000 epoch) and
@@ -10,11 +79,13 @@ const J2000 = '2000-01-01T12:00:00Z'
  * before anything else gets mapped into it.
  *
  * These are MEAN elements, not a precision ephemeris: real bodies perturb
- * each other and drift from these over time, and several moons here are
- * simplified to their inclination against the ecliptic rather than their
- * planet's true (and sometimes precessing) reference plane. Good enough to
- * check rendering/scale/LOD, not good enough for real astronomy — the
- * `note` field flags the less-precise entries.
+ * each other and drift from these over time. Moons are quoted against the
+ * plane their source publishes them in — the Moon against the ecliptic,
+ * the others against their planet's equator or local Laplace plane (see
+ * jplSatelliteOrbit) — and ringed planets carry their real spin pole, so
+ * moons and rings share one equator. Good enough to check rendering/scale/
+ * LOD, not good enough for real astronomy — the `note` field flags the
+ * less-precise entries.
  *
  * Every body's `color` is its documented apparent colour (Io's sulfur
  * yellow, Titan's hazy orange, Neptune's deep blue, etc.), not a picked UI
@@ -89,6 +160,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // The real, famous "Blue Marble" colour — ocean-dominant from orbit.
       color: '#3b82f6',
       atmosphereHeightKm: 100, // the Kármán line — conventional "edge of space"
+      pole: EARTH_POLE,
       fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 1.00000261 * AU_KM,
@@ -139,12 +211,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       orbit: {
         semiMajorAxisKm: 6371 + 418, // ~418km mean altitude
         eccentricity: 0.0003,
+        // Inclination is to Earth's EQUATOR, as every satellite catalogue
+        // quotes it; the node (a representative value, like the rest of
+        // this snapshot) is a right ascension, measured from the equinox.
         inclinationDeg: 51.64,
-        longitudeOfAscendingNodeDeg: 0,
+        longitudeOfAscendingNodeDeg: 0 + equatorialNodeOffsetDeg(EARTH_POLE),
         argumentOfPeriapsisDeg: 0,
         meanAnomalyAtEpochDeg: 0,
         orbitalPeriodDays: 92.68 / 1440,
         epoch: '2026-01-01T00:00:00Z',
+        referencePlanePole: EARTH_POLE,
       },
     },
     {
@@ -160,12 +236,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       orbit: {
         semiMajorAxisKm: 6371 + 535,
         eccentricity: 0.0003,
+        // Inclination is to Earth's EQUATOR, as every satellite catalogue
+        // quotes it; the node (a representative value, like the rest of
+        // this snapshot) is a right ascension, measured from the equinox.
         inclinationDeg: 28.47,
-        longitudeOfAscendingNodeDeg: 90,
+        longitudeOfAscendingNodeDeg: 90 + equatorialNodeOffsetDeg(EARTH_POLE),
         argumentOfPeriapsisDeg: 0,
         meanAnomalyAtEpochDeg: 0,
         orbitalPeriodDays: 95.42 / 1440,
         epoch: '2026-01-01T00:00:00Z',
+        referencePlanePole: EARTH_POLE,
       },
     },
 
@@ -179,6 +259,8 @@ export const SOLAR_SYSTEM: StarSystemData = {
       color: '#f87171',
       atmosphereHeightKm: 100,
       note: "Atmosphere reaches a comparable height to Earth's before thinning to nothing, but is only ~1% as dense at the surface — thin throughout, not just short.",
+      axialTiltDeg: 25.19,
+      pole: MARS_POLE,
       fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 1.52371034 * AU_KM,
@@ -199,16 +281,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 11.267,
       color: '#a8a29e',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 9376,
         eccentricity: 0.0151,
-        inclinationDeg: 1.093,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 0,
+        argumentOfPeriapsisDeg: 216.3,
+        meanAnomalyAtEpochDeg: 189.7,
+        inclinationDeg: 1.1,
+        nodeFromEquatorDeg: 169.2,
         orbitalPeriodDays: 0.31891,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(317.7, 52.9),
+      }),
     },
     {
       id: 'deimos',
@@ -218,16 +300,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 6.2,
       color: '#a8a29e',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 23_463.2,
         eccentricity: 0.00033,
-        inclinationDeg: 0.93,
-        longitudeOfAscendingNodeDeg: 0,
         argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 60,
+        meanAnomalyAtEpochDeg: 205.0,
+        inclinationDeg: 1.8,
+        nodeFromEquatorDeg: 54.3,
         orbitalPeriodDays: 1.26244,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(316.6, 53.5),
+      }),
     },
 
     // ── Jupiter + Galilean moons ─────────────────────────────────────────
@@ -238,10 +320,12 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 69_911,
       color: '#d97706',
+      // Spin pole: see JUPITER_POLE; the rings lie in the equator it defines.
       // Obliquity and ring radii: NASA NSSDCA Jupiter fact sheet and
       // Jupiter rings fact sheet. The rings are faint dust — halo, main
       // ring, and the two gossamer rings merged into one wide, faint band.
       axialTiltDeg: 3.13,
+      pole: JUPITER_POLE,
       rings: [
         { name: 'Halo', innerRadiusKm: 92_000, outerRadiusKm: 122_500, opacity: 0.05, color: '#b89a7a' },
         { name: 'Main', innerRadiusKm: 122_500, outerRadiusKm: 129_000, opacity: 0.14, color: '#b89a7a' },
@@ -267,16 +351,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 1821.6,
       color: '#fde047',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 421_800,
         eccentricity: 0.0041,
-        inclinationDeg: 0.05,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 0,
+        argumentOfPeriapsisDeg: 49.1,
+        meanAnomalyAtEpochDeg: 330.9,
+        inclinationDeg: 0.0,
+        nodeFromEquatorDeg: 0.0,
         orbitalPeriodDays: 1.769,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(268.1, 64.5),
+      }),
     },
     {
       id: 'europa',
@@ -286,16 +370,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 1560.8,
       color: '#e0e7ff',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 671_100,
         eccentricity: 0.009,
-        inclinationDeg: 0.471,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 90,
+        argumentOfPeriapsisDeg: 45.0,
+        meanAnomalyAtEpochDeg: 345.4,
+        inclinationDeg: 0.5,
+        nodeFromEquatorDeg: 184.0,
         orbitalPeriodDays: 3.551,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(268.1, 64.5),
+      }),
     },
     {
       id: 'ganymede',
@@ -305,16 +389,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 2634.1,
       color: '#a8a29e',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 1_070_400,
         eccentricity: 0.0013,
-        inclinationDeg: 0.204,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 180,
+        argumentOfPeriapsisDeg: 198.3,
+        meanAnomalyAtEpochDeg: 324.8,
+        inclinationDeg: 0.2,
+        nodeFromEquatorDeg: 58.5,
         orbitalPeriodDays: 7.1546,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(268.2, 64.6),
+      }),
     },
     {
       id: 'callisto',
@@ -324,16 +408,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 2410.3,
       color: '#78716c',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 1_882_700,
         eccentricity: 0.0074,
-        inclinationDeg: 0.205,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 270,
+        argumentOfPeriapsisDeg: 43.8,
+        meanAnomalyAtEpochDeg: 87.4,
+        inclinationDeg: 0.3,
+        nodeFromEquatorDeg: 309.1,
         orbitalPeriodDays: 16.689,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(268.7, 64.8),
+      }),
     },
 
     // ── Saturn + major moons ─────────────────────────────────────────────
@@ -349,6 +433,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // gap left between the B and A bands; the F ring's ~200 km width is a
       // representative figure (it varies from ~50 to ~500 km).
       axialTiltDeg: 26.73,
+      pole: SATURN_POLE,
       rings: [
         { name: 'D', innerRadiusKm: 66_900, outerRadiusKm: 74_510, opacity: 0.08, color: '#cbbd9e' },
         { name: 'C', innerRadiusKm: 74_658, outerRadiusKm: 92_000, opacity: 0.25, color: '#cbbd9e' },
@@ -376,16 +461,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 2574.7,
       color: '#fbbf24',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 1_221_870,
         eccentricity: 0.0288,
-        inclinationDeg: 0.348,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 0,
+        argumentOfPeriapsisDeg: 78.3,
+        meanAnomalyAtEpochDeg: 11.7,
+        inclinationDeg: 0.3,
+        nodeFromEquatorDeg: 78.6,
         orbitalPeriodDays: 15.945,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(36.4, 84.0),
+      }),
     },
     {
       id: 'rhea',
@@ -395,20 +480,23 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 763.8,
       color: '#d6d3d1',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 527_108,
         eccentricity: 0.001,
-        inclinationDeg: 0.345,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 150,
+        argumentOfPeriapsisDeg: 44.3,
+        meanAnomalyAtEpochDeg: 31.5,
+        inclinationDeg: 0.3,
+        nodeFromEquatorDeg: 133.7,
         orbitalPeriodDays: 4.518,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(40.6, 83.5),
+      }),
     },
-    // Saturn's mid-sized moons: mean elements from JPL SSD (ssd.jpl.nasa.gov/sats/elem),
-    // radii from the NASA planetary fact sheets. Inclinations are to Saturn's
-    // equatorial (Laplace) plane, same convention as Rhea above.
+    // Saturn's mid-sized moons: mean elements from JPL SSD (see
+    // jplSatelliteOrbit), radii from the NASA planetary fact sheets.
+    // Unlike Mars's, Jupiter's and Uranus's moons, Saturn's published mean
+    // anomalies don't reproduce Horizons' J2000 positions (the planes do,
+    // to within ~0.6°) — where each moon sits along its orbit is
+    // approximate; which plane it orbits in is not.
     {
       id: 'enceladus',
       name: 'Enceladus',
@@ -417,16 +505,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 252.1,
       color: '#f8fafc',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 238_400,
         eccentricity: 0.005,
-        inclinationDeg: 0.0,
-        longitudeOfAscendingNodeDeg: 0.0,
         argumentOfPeriapsisDeg: 119.5,
         meanAnomalyAtEpochDeg: 57.0,
+        inclinationDeg: 0.0,
+        nodeFromEquatorDeg: 0.0,
         orbitalPeriodDays: 1.370218,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(40.6, 83.5),
+      }),
     },
     {
       id: 'tethys',
@@ -436,16 +524,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 531.1,
       color: '#e7e5e4',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 295_000,
         eccentricity: 0.001,
-        inclinationDeg: 1.1,
-        longitudeOfAscendingNodeDeg: 273.0,
         argumentOfPeriapsisDeg: 335.3,
         meanAnomalyAtEpochDeg: 0.0,
+        inclinationDeg: 1.1,
+        nodeFromEquatorDeg: 273.0,
         orbitalPeriodDays: 1.887802,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(40.6, 83.5),
+      }),
     },
     {
       id: 'dione',
@@ -455,16 +543,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 561.4,
       color: '#d6d3d1',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 377_700,
         eccentricity: 0.002,
-        inclinationDeg: 0.0,
-        longitudeOfAscendingNodeDeg: 0.0,
         argumentOfPeriapsisDeg: 116.0,
         meanAnomalyAtEpochDeg: 212.0,
+        inclinationDeg: 0.0,
+        nodeFromEquatorDeg: 0.0,
         orbitalPeriodDays: 2.736916,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(40.6, 83.5),
+      }),
     },
     {
       id: 'iapetus',
@@ -474,18 +562,20 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 734.5,
       color: '#a8a29e',
       fixedPosition: null,
-      orbit: {
-      // Iapetus orbits far out, tilted ~15° to Saturn's equator — its orbit follows
-      // a Laplace plane between Saturn's equator and its orbital plane.
+      // Iapetus orbits far out, where the Sun's pull rivals Saturn's
+      // oblateness: its Laplace plane sits ~14.8° from Saturn's equator,
+      // and its orbit ~7.6° from that — the one major moon genuinely well
+      // off its planet's ring plane.
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 3_561_700,
         eccentricity: 0.028,
-        inclinationDeg: 7.6,
-        longitudeOfAscendingNodeDeg: 86.5,
         argumentOfPeriapsisDeg: 254.5,
         meanAnomalyAtEpochDeg: 74.8,
+        inclinationDeg: 7.6,
+        nodeFromEquatorDeg: 86.5,
         orbitalPeriodDays: 79.331002,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(288.7, 78.9),
+      }),
     },
 
     // ── Uranus + major moons ─────────────────────────────────────────────
@@ -500,6 +590,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // rings fact sheet. Thirteen narrow, dark rings, grouped here into the
       // inner set (6, 5, 4, α, β), the η–δ set, and the bright ε ring.
       axialTiltDeg: 97.77,
+      pole: URANUS_POLE,
       rings: [
         { name: '6–β', innerRadiusKm: 41_800, outerRadiusKm: 45_700, opacity: 0.12, color: '#8c8c8c' },
         { name: 'η–δ', innerRadiusKm: 47_150, outerRadiusKm: 48_320, opacity: 0.14, color: '#8c8c8c' },
@@ -525,22 +616,22 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 788.4,
       color: '#a8a29e',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
+        // Elements against Uranus's own equator — its ~98° tilt comes from
+        // URANUS_POLE, not from a large inclination here.
         semiMajorAxisKm: 436_300,
         eccentricity: 0.0011,
-        // Uranus's axial tilt (~98°) means its moons' orbits are near-polar
-        // relative to the ecliptic — a real, large value, not a data error.
-        inclinationDeg: 97.9,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 0,
+        argumentOfPeriapsisDeg: 184.0,
+        meanAnomalyAtEpochDeg: 68.1,
+        inclinationDeg: 0.1,
+        nodeFromEquatorDeg: 29.5,
         orbitalPeriodDays: 8.706,
-        epoch: J2000,
-      },
+        plane: URANUS_POLE,
+      }),
     },
-    // Uranus's other major moons: mean elements from JPL SSD, radii from the
-    // NASA fact sheets. Inclination adds Uranus's ~97.8° axial tilt, same
-    // convention as Titania above.
+    // Uranus's other major moons: mean elements from JPL SSD (see
+    // jplSatelliteOrbit), radii from the NASA fact sheets — against
+    // Uranus's equator, same as Titania above.
     {
       id: 'miranda',
       name: 'Miranda',
@@ -549,16 +640,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 235.8,
       color: '#a8a29e',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 129_846,
         eccentricity: 0.001,
-        inclinationDeg: 102.2,
-        longitudeOfAscendingNodeDeg: 100.9,
         argumentOfPeriapsisDeg: 154.8,
         meanAnomalyAtEpochDeg: 73.0,
+        inclinationDeg: 4.4,
+        nodeFromEquatorDeg: 100.9,
         orbitalPeriodDays: 1.413479,
-        epoch: J2000,
-      },
+        plane: URANUS_POLE,
+      }),
     },
     {
       id: 'ariel',
@@ -568,16 +659,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 578.9,
       color: '#c4c0bc',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 190_929,
         eccentricity: 0.001,
-        inclinationDeg: 97.8,
-        longitudeOfAscendingNodeDeg: 0.0,
         argumentOfPeriapsisDeg: 9.6,
         meanAnomalyAtEpochDeg: 193.5,
+        inclinationDeg: 0.0,
+        nodeFromEquatorDeg: 0.0,
         orbitalPeriodDays: 2.520379,
-        epoch: J2000,
-      },
+        plane: URANUS_POLE,
+      }),
     },
     {
       id: 'umbriel',
@@ -587,16 +678,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 584.7,
       color: '#78716c',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 265_986,
         eccentricity: 0.004,
-        inclinationDeg: 97.9,
-        longitudeOfAscendingNodeDeg: 174.8,
         argumentOfPeriapsisDeg: 183.4,
         meanAnomalyAtEpochDeg: 253.0,
+        inclinationDeg: 0.1,
+        nodeFromEquatorDeg: 174.8,
         orbitalPeriodDays: 4.144177,
-        epoch: J2000,
-      },
+        plane: URANUS_POLE,
+      }),
     },
     {
       id: 'oberon',
@@ -606,16 +697,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 761.4,
       color: '#8a8580',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 583_511,
         eccentricity: 0.002,
-        inclinationDeg: 97.9,
-        longitudeOfAscendingNodeDeg: 76.8,
         argumentOfPeriapsisDeg: 132.2,
         meanAnomalyAtEpochDeg: 143.6,
+        inclinationDeg: 0.1,
+        nodeFromEquatorDeg: 76.8,
         orbitalPeriodDays: 13.463237,
-        epoch: J2000,
-      },
+        plane: URANUS_POLE,
+      }),
     },
 
     // ── Neptune + Triton ─────────────────────────────────────────────────
@@ -630,6 +721,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // Neptunian rings fact sheet — faint dusty rings, with the narrow Le
       // Verrier and Adams rings the brightest.
       axialTiltDeg: 28.32,
+      pole: NEPTUNE_POLE,
       rings: [
         { name: 'Galle', innerRadiusKm: 40_900, outerRadiusKm: 42_900, opacity: 0.05, color: '#9a9a9a' },
         { name: 'Le Verrier', innerRadiusKm: 53_140, outerRadiusKm: 53_260, opacity: 0.25, color: '#9a9a9a' },
@@ -655,18 +747,18 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'neptune',
       radiusKm: 1353.4,
       color: '#bae6fd',
-      note: 'Retrograde orbit — inclination >90° is real, not a data error.',
+      note: 'Retrograde orbit, ~23° from Neptune\'s equator — inclination >90° is real, not a data error.',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 354_759,
         eccentricity: 0.000016,
-        inclinationDeg: 156.885,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 0,
+        argumentOfPeriapsisDeg: 0.0,
+        meanAnomalyAtEpochDeg: 63.0,
+        inclinationDeg: 157.3,
+        nodeFromEquatorDeg: 178.1,
         orbitalPeriodDays: 5.877,
-        epoch: J2000,
-      },
+        plane: poleFromEquatorialJ2000(299.8, 43.1),
+      }),
     },
 
     // ── Dwarf planets ────────────────────────────────────────────────────
@@ -696,7 +788,8 @@ export const SOLAR_SYSTEM: StarSystemData = {
     // orbit, distinct from the Asteroid Belt's scattered population below
     // (see belts). Elements from JPL SBDB (ssd-api.jpl.nasa.gov/sbdb.api),
     // epoch 2026-06-09 — verified against real Horizons position vectors at
-    // that same epoch, all within ~1%.
+    // that same epoch, all within ~1%. Periods follow from the (rounded)
+    // semi-major axes via heliocentricPeriodDays, so the two agree.
     {
       id: 'vesta',
       name: '4 Vesta',
@@ -713,7 +806,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
         longitudeOfAscendingNodeDeg: 104,
         argumentOfPeriapsisDeg: 151,
         meanAnomalyAtEpochDeg: 81.2,
-        orbitalPeriodDays: 1330,
+        orbitalPeriodDays: heliocentricPeriodDays(2.36),
         epoch: '2026-06-09T00:00:00Z',
       },
     },
@@ -734,7 +827,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
         longitudeOfAscendingNodeDeg: 173,
         argumentOfPeriapsisDeg: 311,
         meanAnomalyAtEpochDeg: 254,
-        orbitalPeriodDays: 1680,
+        orbitalPeriodDays: heliocentricPeriodDays(2.77),
         epoch: '2026-06-09T00:00:00Z',
       },
     },
@@ -754,7 +847,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
         longitudeOfAscendingNodeDeg: 283,
         argumentOfPeriapsisDeg: 312,
         meanAnomalyAtEpochDeg: 252,
-        orbitalPeriodDays: 2040,
+        orbitalPeriodDays: heliocentricPeriodDays(3.15),
         epoch: '2026-06-09T00:00:00Z',
       },
     },
@@ -831,6 +924,8 @@ export const SOLAR_SYSTEM: StarSystemData = {
       // Real colour: ruddy tan/brown from tholins, not pink — no real
       // source supported the previous pink.
       color: '#c99b7a',
+      axialTiltDeg: 122.53,
+      pole: PLUTO_POLE,
       fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 39.48211675 * AU_KM,
@@ -851,16 +946,16 @@ export const SOLAR_SYSTEM: StarSystemData = {
       radiusKm: 606,
       color: '#e7e5e4',
       fixedPosition: null,
-      orbit: {
+      orbit: jplSatelliteOrbit({
         semiMajorAxisKm: 19_591,
         eccentricity: 0.0002,
-        inclinationDeg: 0.08,
-        longitudeOfAscendingNodeDeg: 0,
-        argumentOfPeriapsisDeg: 0,
-        meanAnomalyAtEpochDeg: 0,
+        argumentOfPeriapsisDeg: 0.0,
+        meanAnomalyAtEpochDeg: 304.1,
+        inclinationDeg: 0.0,
+        nodeFromEquatorDeg: 0.0,
         orbitalPeriodDays: 6.387,
-        epoch: J2000,
-      },
+        plane: PLUTO_POLE,
+      }),
     },
     {
       id: 'eris',
@@ -906,7 +1001,9 @@ export const SOLAR_SYSTEM: StarSystemData = {
         // — essentially exactly this epoch, so mean anomaly here is ~0, not a
         // guessed value (an earlier version of this file had 38.4, which is wrong).
         meanAnomalyAtEpochDeg: 0.007,
-        orbitalPeriodDays: 27_740,
+        // From the semi-major axis above (~27,510 d, 75.3 yr) — the 27,740 d
+        // previously here didn't match it.
+        orbitalPeriodDays: heliocentricPeriodDays(17.834),
         epoch: '1986-02-09T00:00:00Z',
       },
     },
@@ -952,7 +1049,9 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       innerRadiusKm: 2_000 * AU_KM,
       outerRadiusKm: 100_000 * AU_KM,
-      inclinationSpreadDeg: 90,
+      // A full sphere — see BeltRegion.inclinationSpreadDeg (the 90 this
+      // used to have drew only a ±45° band round the ecliptic).
+      inclinationSpreadDeg: 180,
       particleCount: 3000,
       color: '#e0f2fe',
       note: 'Scale is illustrative — the Oort Cloud\'s real outer edge is roughly a light-year out, far beyond where this engine\'s distance compression stays legible.',

@@ -1,4 +1,4 @@
-import { findBodiesInsideParent, findBodiesInsideSiblings } from '../embeddedBodyWarnings'
+import { findBodiesInsideParent, findBodiesInsideSiblings, findOrbitsInsideParent } from '../embeddedBodyWarnings'
 import type { CelestialBody, StarSystemData } from '../types'
 
 function body(overrides: Partial<CelestialBody> & Pick<CelestialBody, 'id' | 'parentId' | 'type'>): CelestialBody {
@@ -121,5 +121,31 @@ describe('findBodiesInsideParent / findBodiesInsideSiblings — surface_installa
     const yela = body({ id: 'yela', parentId: 'crusader', type: 'moon', radiusKm: 313, fixedPosition: { xKm: 1_000_000, yKm: 0, zKm: 0 } })
     const someStation = body({ id: 'station', parentId: 'yela', type: 'station', radiusKm: 5, fixedPosition: { xKm: 200, yKm: 0, zKm: 0 } })
     expect(findBodiesInsideParent(system([yela, someStation]))).toHaveLength(1)
+  })
+})
+
+describe('findOrbitsInsideParent', () => {
+  const planet = body({ id: 'planet', name: 'Planet', parentId: null, type: 'planet', radiusKm: 6_000 })
+  const orbiting = (semiMajorAxisKm: number, eccentricity: number) =>
+    body({
+      id: 'sat', name: 'Sat', parentId: 'planet', type: 'station', radiusKm: 1,
+      orbit: { semiMajorAxisKm, eccentricity, inclinationDeg: 0, longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 0, orbitalPeriodDays: 1, epoch: '2000-01-01T12:00:00Z' },
+    })
+
+  it('flags an orbit whose periapsis dips inside the parent', () => {
+    // a(1 − e) = 10,000 × 0.5 = 5,000 km < 6,000 km radius.
+    expect(findOrbitsInsideParent(system([planet, orbiting(10_000, 0.5)]))).toEqual([
+      { bodyId: 'sat', bodyName: 'Sat', parentId: 'planet', parentName: 'Planet', distanceKm: 5_000, parentRadiusKm: 6_000 },
+    ])
+  })
+
+  it('does not flag an orbit that stays clear of the parent', () => {
+    expect(findOrbitsInsideParent(system([planet, orbiting(10_000, 0.1)]))).toEqual([])
+  })
+
+  it('skips surface installations, unknown parents and fixed bodies', () => {
+    const installation = { ...orbiting(1_000, 0), type: 'surface_installation' as const }
+    const orphan = { ...orbiting(1_000, 0), id: 'orphan', parentId: 'nowhere' }
+    expect(findOrbitsInsideParent(system([planet, installation, orphan]))).toEqual([])
   })
 })

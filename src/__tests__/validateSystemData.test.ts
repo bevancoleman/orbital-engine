@@ -53,4 +53,23 @@ describe('validateSystemData', () => {
       expect.objectContaining({ kind: 'invalid-belt', beltId: 'orphan', problem: 'unknown-parent' }),
     ])
   })
+
+  it('reports hierarchy, orbit, radius and periapsis problems, each tagged', () => {
+    const star = body({ id: 'star', parentId: null, type: 'star', radiusKm: 700_000 })
+    const loop = body({ id: 'loop', parentId: 'loop', type: 'moon', fixedPosition: { xKm: 1_000, yKm: 0, zKm: 0 } })
+    const orphan = body({ id: 'orphan', parentId: 'nowhere', type: 'station', fixedPosition: { xKm: 1, yKm: 0, zKm: 0 } })
+    const flat = body({ id: 'flat', parentId: 'star', type: 'asteroid', radiusKm: 0, fixedPosition: { xKm: 1e9, yKm: 0, zKm: 0 } })
+    const grazer = body({
+      id: 'grazer', parentId: 'star', type: 'comet',
+      orbit: { semiMajorAxisKm: 1e6, eccentricity: 0.5, inclinationDeg: 0, longitudeOfAscendingNodeDeg: 0, argumentOfPeriapsisDeg: 0, meanAnomalyAtEpochDeg: 0, orbitalPeriodDays: 0, epoch: '2000-01-01T00:00:00Z' },
+    })
+    const kinds = new Set(validateSystemData(system([star, loop, orphan, flat, grazer])).map((w) => w.kind))
+    expect(kinds).toEqual(new Set(['parent-cycle', 'unknown-parent', 'invalid-radius', 'invalid-orbit', 'periapsis-inside-parent']))
+  })
+
+  it("doesn't overflow the stack on a parent cycle", () => {
+    const a = body({ id: 'a', parentId: 'b', type: 'moon', fixedPosition: { xKm: 1_000, yKm: 0, zKm: 0 } })
+    const b = body({ id: 'b', parentId: 'a', type: 'moon', fixedPosition: { xKm: 1_000, yKm: 0, zKm: 0 } })
+    expect(validateSystemData(system([a, b]))).toEqual([expect.objectContaining({ kind: 'parent-cycle' })])
+  })
 })
