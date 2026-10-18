@@ -16,7 +16,8 @@ npm install
 npm run typecheck
 npm run lint
 npm test          # the unit suite
-npm run build     # tsup — emits ESM + CJS + .d.ts to dist/
+npm run test:coverage  # the unit suite plus the core coverage gate CI enforces
+npm run build     # tsup — emits ESM + CJS + .d.ts/.d.cts to dist/
 ```
 
 ## Working on the examples
@@ -43,11 +44,13 @@ npx playwright install chromium
 npx playwright test
 ```
 
+A test that fails and is retried records a Playwright trace into `test-results/` (`npx playwright show-trace <trace.zip>`); on CI, the HTML report and traces are uploaded as the `playwright-report` artifact when the e2e job fails.
+
 If you're adding a feature that touches rendering behavior (not just pure math in `src/*.ts`), add or extend an e2e test — the unit tests can't exercise the actual React Three Fiber render path (no real WebGL context in Jest), so that's the only layer that catches a real regression there.
 
 ## Before opening a PR
 
-- `npm run typecheck && npm run lint && npm test && npm run build` all pass.
+- `npm run typecheck && npm run lint && npm run test:coverage && npm run build` all pass.
 - If you changed rendering behavior, `npx playwright test` passes too.
 - Add a changeset describing the change: `npx changeset` — pick patch/minor/major and write a one-line summary. This drives the version bump and changelog entry on release; PRs without one are assumed to need no release note (docs/CI-only changes, etc).
 

@@ -6,7 +6,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: 'html',
+  // On CI: inline annotations on the PR plus an HTML report the workflow
+  // uploads as an artifact on failure. Locally: just the HTML report.
+  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'html',
+  use: {
+    // A retried test records a trace (DOM snapshots, console, network) into
+    // test-results/ — the only way to see what a CI-only failure looked like.
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+  },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
