@@ -9,11 +9,25 @@ export type {
   BeltShape,
   BeltSite,
   StarSystemData,
+  PoleDirection,
 } from './types'
+export { BODY_TYPES } from './types'
 
 // Real astronomy: Keplerian propagation
 export type { Vec3Km } from './kepler'
-export { positionAtTime, orbitPath } from './kepler'
+export { positionAtTime, orbitPath, solveEccentricAnomaly, parseEpochMs, epochHasTimeZone } from './kepler'
+
+// Pole and plane orientation — spin axes, the planes orbital elements are
+// quoted against, and IAU right ascension/declination conversion
+export {
+  J2000_OBLIQUITY_DEG,
+  poleFromEquatorialJ2000,
+  poleVector,
+  planeBasis,
+  equatorialNodeOffsetDeg,
+  bodyPoleVector,
+  orbitNormal,
+} from './orientation'
 
 // Reference Solar System data (validation set / demo data)
 export { SOLAR_SYSTEM } from './solarSystemData'
@@ -32,7 +46,8 @@ export { resolveAbsolutePosition, resolveAllPositions, coOrbitalReferenceAngle }
 
 // A body's own ring system, and belt populations
 export type { InvalidRingWarning } from './rings'
-export { ringOuterRadiusKm, ringWorldRadius, ringTiltRadians, findInvalidRings } from './rings'
+// ringTiltRadians is deprecated (use ringPlaneQuaternion) — removed next major.
+export { ringOuterRadiusKm, ringWorldRadius, ringPlaneQuaternion, ringTiltRadians, findInvalidRings } from './rings'
 export type { InvalidBeltWarning } from './belts'
 export { beltShape, sampleBeltParticles, beltGlowInnerRatio, findInvalidBelts } from './belts'
 
@@ -68,10 +83,24 @@ export type { SphereDetail } from './levelOfDetail'
 // surface (e.g. in a dev-mode overlay) or assert on in its own tests.
 // validateSystemData runs all of them at once; each is also exported
 // individually for a caller that only wants one.
-export { findBodiesInsideParent, findBodiesInsideSiblings } from './embeddedBodyWarnings'
+export { findBodiesInsideParent, findBodiesInsideSiblings, findOrbitsInsideParent } from './embeddedBodyWarnings'
 export type { EmbeddedBodyWarning, SiblingContainmentWarning } from './embeddedBodyWarnings'
-export { findBodiesWithoutExplicitPosition, findBodiesWithUnrecognizedType } from './dataContractWarnings'
-export type { MissingPositionWarning, UnrecognizedTypeWarning } from './dataContractWarnings'
+export {
+  findBodiesWithoutExplicitPosition,
+  findBodiesWithUnrecognizedType,
+  findBodiesWithUnknownParent,
+  findParentCycles,
+  findInvalidOrbits,
+  findBodiesWithInvalidRadius,
+} from './dataContractWarnings'
+export type {
+  MissingPositionWarning,
+  UnrecognizedTypeWarning,
+  UnknownParentWarning,
+  ParentCycleWarning,
+  InvalidOrbitWarning,
+  InvalidRadiusWarning,
+} from './dataContractWarnings'
 export { validateSystemData } from './validateSystemData'
 export type { SystemDataWarning } from './validateSystemData'
 
@@ -79,6 +108,7 @@ export type { SystemDataWarning } from './validateSystemData'
 export { findNearestCandidate } from './proximitySelection'
 export type { ProximityCandidate } from './proximitySelection'
 export { computeOrbitalDepth, computeVisibleLabels, thinByScreenProximity } from './labelDeclutter'
+// LabelCandidate is a deprecated alias of ScreenCandidate — removed next major.
 export type { LabelCandidate, ScreenCandidate } from './labelDeclutter'
 
 // Misc utilities
