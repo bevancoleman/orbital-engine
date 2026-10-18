@@ -85,6 +85,32 @@ export function findBodiesInsideParent(system: StarSystemData): EmbeddedBodyWarn
   return warnings
 }
 
+/**
+ * The orbiting counterpart of findBodiesInsideParent: every body whose
+ * ORBIT carries it inside its parent's own radius at periapsis (a(1 − e) <
+ * parent radius), so for part of every orbit it renders inside the
+ * parent's sphere — or, for real data, has elements that can't be right
+ * (it would have hit the surface). findBodiesInsideParent can only check
+ * fixed positions, which have one distance; an orbit's closest approach is
+ * the static, date-independent equivalent. `distanceKm` is that periapsis
+ * distance. Same exclusions as findBodiesInsideParent (surface
+ * installations, unknown parents).
+ */
+export function findOrbitsInsideParent(system: StarSystemData): EmbeddedBodyWarning[] {
+  const byId = new Map(system.bodies.map((b) => [b.id, b]))
+  const warnings: EmbeddedBodyWarning[] = []
+  for (const body of system.bodies) {
+    if (!body.orbit || !body.parentId || body.type === 'surface_installation') continue
+    const parent = byId.get(body.parentId)
+    if (!parent) continue
+    const periapsisKm = body.orbit.semiMajorAxisKm * (1 - body.orbit.eccentricity)
+    if (periapsisKm < parent.radiusKm) {
+      warnings.push({ bodyId: body.id, bodyName: body.name, parentId: parent.id, parentName: parent.name, distanceKm: periapsisKm, parentRadiusKm: parent.radiusKm })
+    }
+  }
+  return warnings
+}
+
 export interface SiblingContainmentWarning {
   bodyId: string
   bodyName: string

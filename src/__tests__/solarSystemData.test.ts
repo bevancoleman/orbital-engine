@@ -135,6 +135,11 @@ describe('SOLAR_SYSTEM — ring systems belong to their planets', () => {
     const problems = validateSystemData(SOLAR_SYSTEM).filter((w) => w.kind === 'invalid-ring' || w.kind === 'invalid-belt')
     expect(problems).toEqual([])
   })
+
+  it('passes every hierarchy, orbit, radius and periapsis check', () => {
+    const kinds = new Set(['unknown-parent', 'parent-cycle', 'invalid-orbit', 'invalid-radius', 'periapsis-inside-parent'])
+    expect(validateSystemData(SOLAR_SYSTEM).filter((w) => kinds.has(w.kind))).toEqual([])
+  })
 })
 
 describe("SOLAR_SYSTEM — moons share their planet's equator with its rings", () => {

@@ -98,6 +98,18 @@ function describeDataWarning(w: SystemDataWarning): { title: string; detail: str
       return { title: `ring on ${w.bodyId}`, detail: w.message }
     case 'invalid-belt':
       return { title: `belt ${w.beltId}`, detail: w.message }
+    case 'unknown-parent':
+      return { title: w.bodyName, detail: `parent "${w.parentId}" is not in this system — placed at the origin` }
+    case 'parent-cycle':
+    case 'invalid-orbit':
+      return { title: w.bodyName, detail: w.message }
+    case 'invalid-radius':
+      return { title: w.bodyName, detail: `radius ${w.radiusKm} km is not positive` }
+    case 'periapsis-inside-parent':
+      return {
+        title: w.bodyName,
+        detail: `periapsis ${w.distanceKm.toFixed(0)} km is inside ${w.parentName} (${w.parentRadiusKm.toLocaleString()} km radius)`,
+      }
   }
 }
 
