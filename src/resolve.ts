@@ -1,3 +1,4 @@
+import { lookupBody, resolveHierarchical } from './hierarchy'
 import { positionAtTime, type Vec3Km } from './kepler'
 import type { BeltRegion, CelestialBody, StarSystemData } from './types'
 
@@ -16,38 +17,20 @@ export function resolveAbsolutePosition(
   date: Date,
   cache: Map<string, Vec3Km> = new Map()
 ): Vec3Km {
-  const cached = cache.get(body.id)
-  if (cached) return cached
-
-  if (!body.orbit && !body.fixedPosition) {
-    // No position data at all (e.g. the star). A body with `parentId: null`
-    // but a real `fixedPosition` — a deep-space body not anchored to any
-    // specific parent, still positioned relative to the system's own
-    // origin — falls through below instead; `parent` resolves to undefined
-    // there and `parentPos` correctly defaults to the origin on its own,
-    // without discarding the body's real relative offset from it.
-    const origin = { x: 0, y: 0, z: 0 }
-    cache.set(body.id, origin)
-    return origin
-  }
-
-  const parent = allBodies.find((b) => b.id === body.parentId)
-  const parentPos = parent
-    ? resolveAbsolutePosition(parent, allBodies, date, cache)
-    : { x: 0, y: 0, z: 0 }
-
-  // A fixed body (see CelestialBody.fixedPosition) has no time-varying
-  // motion to compute — its relative offset is the same on every date.
-  const relative = body.orbit
-    ? positionAtTime(body.orbit, date)
-    : { x: body.fixedPosition!.xKm, y: body.fixedPosition!.yKm, z: body.fixedPosition!.zKm }
-  const absolute = {
-    x: parentPos.x + relative.x,
-    y: parentPos.y + relative.y,
-    z: parentPos.z + relative.z,
-  }
-  cache.set(body.id, absolute)
-  return absolute
+  // The walk itself — including the base cases: no position data at all
+  // (e.g. the star) sits at the origin; a body with `parentId: null` but a
+  // real `fixedPosition` (a deep-space body not anchored to any specific
+  // parent, still positioned relative to the system's own origin) keeps
+  // its real relative offset from it — lives in hierarchy.ts, shared with
+  // render.ts's resolveWorldPosition.
+  return resolveHierarchical(body, allBodies, cache, () => ({ x: 0, y: 0, z: 0 }), (link, parentPos) => {
+    // A fixed body (see CelestialBody.fixedPosition) has no time-varying
+    // motion to compute — its relative offset is the same on every date.
+    const relative = link.orbit
+      ? positionAtTime(link.orbit, date)
+      : { x: link.fixedPosition!.xKm, y: link.fixedPosition!.yKm, z: link.fixedPosition!.zKm }
+    return { x: parentPos.x + relative.x, y: parentPos.y + relative.y, z: parentPos.z + relative.z }
+  })
 }
 
 /** Absolute positions for every body in a system at a given time, computed
@@ -69,15 +52,26 @@ export function resolveAllPositions(system: StarSystemData, date: Date): Map<str
  * for a belt with no `coOrbital` set, or if the reference body can't be
  * found (falls back to spreading around the whole circle rather than
  * silently collapsing to a single point).
+ *
+ * Pass `positions` — this frame's resolveAllPositions result — when one is
+ * already to hand, to read both bodies' positions from it instead of
+ * re-walking their parent chains.
  */
-export function coOrbitalReferenceAngle(belt: BeltRegion, system: StarSystemData, date: Date): number {
+export function coOrbitalReferenceAngle(
+  belt: BeltRegion,
+  system: StarSystemData,
+  date: Date,
+  positions?: ReadonlyMap<string, Vec3Km>
+): number {
   if (!belt.coOrbital) return 0
-  const parent = system.bodies.find((b) => b.id === belt.parentId)
-  const refBody = system.bodies.find((b) => b.id === belt.coOrbital!.bodyId)
+  const parent = lookupBody(system.bodies, belt.parentId)
+  const refBody = lookupBody(system.bodies, belt.coOrbital.bodyId)
   if (!refBody) return 0
 
-  const parentPos = parent ? resolveAbsolutePosition(parent, system.bodies, date) : { x: 0, y: 0, z: 0 }
-  const refPos = resolveAbsolutePosition(refBody, system.bodies, date)
+  const cache = new Map<string, Vec3Km>()
+  const positionOf = (b: CelestialBody) => positions?.get(b.id) ?? resolveAbsolutePosition(b, system.bodies, date, cache)
+  const parentPos = parent ? positionOf(parent) : { x: 0, y: 0, z: 0 }
+  const refPos = positionOf(refBody)
   const angleToRefBody = Math.atan2(refPos.y - parentPos.y, refPos.x - parentPos.x)
   return angleToRefBody + (belt.coOrbital.leadAngleDeg * Math.PI) / 180
 }

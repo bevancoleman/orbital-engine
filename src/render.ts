@@ -1,3 +1,4 @@
+import { resolveHierarchical } from './hierarchy'
 import { positionAtTime, type Vec3Km } from './kepler'
 import { compressDistance } from './scale'
 import type { CelestialBody, OrbitalElements, StarSystemData } from './types'
@@ -86,42 +87,31 @@ export function resolveWorldPosition(
   date: Date,
   cache: Map<string, WorldVec> = new Map()
 ): WorldVec {
-  const cached = cache.get(body.id)
-  if (cached) return cached
-
-  if (!body.orbit && !body.fixedPosition) {
-    // No position data at all — the system's own star, or any other body
-    // with genuinely nothing known about where it sits. NOT the same case
-    // as `parentId: null` with a real fixedPosition set (a deep-space body
-    // not anchored to any specific parent, but still positioned relative
-    // to the system's own origin, e.g. a jump point) — that case falls
-    // through below, where `parent` resolves to undefined and
-    // `parentWorld` correctly defaults to the origin on its own, without
-    // discarding the body's real relativeKm offset from it.
-    const origin: WorldVec = [0, 0, 0]
-    cache.set(body.id, origin)
-    return origin
-  }
-
-  const parent = allBodies.find((b) => b.id === body.parentId)
-  const parentWorld = parent ? resolveWorldPosition(parent, allBodies, date, cache) : ([0, 0, 0] as WorldVec)
-
-  // A fixed body (see CelestialBody.fixedPosition) has no time-varying
-  // motion to compute — its relative offset compresses the same way on
-  // every date, since it's the same real km vector regardless of `date`.
-  //
-  // An orbiting body compresses via the orbit's OWN fixed ratio (see
-  // orbitCompressionRatio/compressVecByRatio), not its instantaneous
-  // distance the way compressVec alone would — otherwise this position
-  // wouldn't land on the same rendered ellipse OrbitPathLine draws for it,
-  // since that also has to use one ratio for the whole shape rather than
-  // one per sampled point (see compressVecByRatio's own comment).
-  const [rx, ry, rz] = body.orbit
-    ? compressVecByRatio(positionAtTime(body.orbit, date), orbitCompressionRatio(body.orbit))
-    : compressVec({ x: body.fixedPosition!.xKm, y: body.fixedPosition!.yKm, z: body.fixedPosition!.zKm })
-  const world: WorldVec = [parentWorld[0] + rx, parentWorld[1] + ry, parentWorld[2] + rz]
-  cache.set(body.id, world)
-  return world
+  // The parent-chain walk (hierarchy.ts) handles the base cases: a body
+  // with no position data at all — the system's own star, or any other
+  // body with genuinely nothing known about where it sits — sits at the
+  // origin. NOT the same case as `parentId: null` with a real
+  // fixedPosition set (a deep-space body not anchored to any specific
+  // parent, but still positioned relative to the system's own origin, e.g.
+  // a jump point): that one keeps its real relativeKm offset from the
+  // origin. An unknown parent or a parent cycle also anchors at the origin
+  // (flagged by validateSystemData) rather than overflowing the stack.
+  return resolveHierarchical(body, allBodies, cache, (): WorldVec => [0, 0, 0], (link, parentWorld) => {
+    // A fixed body (see CelestialBody.fixedPosition) has no time-varying
+    // motion to compute — its relative offset compresses the same way on
+    // every date, since it's the same real km vector regardless of `date`.
+    //
+    // An orbiting body compresses via the orbit's OWN fixed ratio (see
+    // orbitCompressionRatio/compressVecByRatio), not its instantaneous
+    // distance the way compressVec alone would — otherwise this position
+    // wouldn't land on the same rendered ellipse OrbitPathLine draws for it,
+    // since that also has to use one ratio for the whole shape rather than
+    // one per sampled point (see compressVecByRatio's own comment).
+    const [rx, ry, rz] = link.orbit
+      ? compressVecByRatio(positionAtTime(link.orbit, date), orbitCompressionRatio(link.orbit))
+      : compressVec({ x: link.fixedPosition!.xKm, y: link.fixedPosition!.yKm, z: link.fixedPosition!.zKm })
+    return [parentWorld[0] + rx, parentWorld[1] + ry, parentWorld[2] + rz]
+  })
 }
 
 /** World-render positions for every body in a system, computed once and
