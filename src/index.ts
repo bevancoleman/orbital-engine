@@ -10,11 +10,11 @@ export type {
   BeltSite,
   StarSystemData,
   PoleDirection,
+  Vec3Km,
 } from './types'
 export { BODY_TYPES } from './types'
 
 // Real astronomy: Keplerian propagation
-export type { Vec3Km } from './kepler'
 export { positionAtTime, orbitPath, solveEccentricAnomaly, parseEpochMs, epochHasTimeZone } from './kepler'
 
 // Pole and plane orientation — spin axes, the planes orbital elements are

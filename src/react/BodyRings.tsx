@@ -18,8 +18,9 @@ const RING_PARTICLE_SPREAD_DEG = 1.5
  * body's scene group — so it moves, fades in and out, and is selected with
  * the body rather than being a separate object at the same spot. Radii
  * scale off the body's rendered radius (see rings.ts's ringWorldRadius),
- * and the whole system is tilted into the body's equatorial plane by its
- * axial tilt.
+ * and the whole system is oriented into the body's equatorial plane by its
+ * spin pole (see rings.ts's ringPlaneQuaternion — falling back to
+ * axialTiltDeg when a body has no pole).
  */
 export function BodyRings({ body, radius, color }: { body: CelestialBody; radius: number; color: string }) {
   if (!body.rings?.length) return null

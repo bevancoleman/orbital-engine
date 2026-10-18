@@ -126,7 +126,8 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  same React render, but on that render's first subsequent frame, if the
  *  effect hadn't flushed yet, `isFlying` was still `false` (left over from
  *  the PREVIOUS body's now-settled flight) while `trackedPosition` already
- *  reflected the NEW body — so the steady-state rigid-translate branch
+ *  reflected the NEW body — so the steady-state branch (then a rigid
+ *  translate; now an absolute moveTo anchor, see the later notes)
  *  ran instead, instantly translating the camera+target by the ENTIRE
  *  old-body-to-new-body distance (that branch is unconditionally
  *  transition:false — instant by design, meant only for a body's own tiny
