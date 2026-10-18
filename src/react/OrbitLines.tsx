@@ -6,6 +6,7 @@ import { compressDistance } from '../scale'
 import { apparentSize, orbitDetailFor } from '../levelOfDetail'
 import { routeSegments } from '../routeSegments'
 import type { CelestialBody } from '../types'
+import { polylineLength, referenceRingPoints, routeDashPattern, toLocalPoints } from './lineGeometry'
 
 export function OrbitPathLine({
   body,
@@ -19,8 +20,22 @@ export function OrbitPathLine({
   /** Drives how many points the path samples — see orbitDetailFor. */
   cameraDistance: number
 }) {
+  const orbit = body.orbit
+  // The ring's own world-space scale (its semi-major axis, compressed) is
+  // what apparentSize needs here — this is a large loop the camera views
+  // from outside, not a solid body the camera zooms into, so "large
+  // apparent size" means the ring's curve spans a lot of the view, exactly
+  // when a fixed segment count starts showing as visible straight facets
+  // rather than a smooth curve (see orbitDetailFor).
+  //
+  // Computed OUTSIDE the memo below, and the memo keyed on the resulting
+  // tier rather than on cameraDistance itself: cameraDistance changes on
+  // every zoom frame, and keying on it rebuilt every orbit line in the
+  // system on each of those frames even though the segment count only
+  // changes at a handful of tier boundaries.
+  const segments = orbit ? orbitDetailFor(apparentSize(compressDistance(orbit.semiMajorAxisKm), cameraDistance)) : 0
   const points = useMemo(() => {
-    if (!body.orbit) return null
+    if (!orbit) return null
     // Every sampled point compresses by the SAME ratio (the orbit's own,
     // fixed by its semi-major axis — see orbitCompressionRatio), not each
     // one independently by its own instantaneous radius (compressVec) —
@@ -47,17 +62,9 @@ export function OrbitPathLine({
     // in full precision — so moving the large offset onto the group
     // instead of the vertices fixes it without needing any custom
     // floating-origin machinery.
-    const ratio = orbitCompressionRatio(body.orbit)
-    // The ring's own world-space scale (its semi-major axis, compressed)
-    // is what apparentSize needs here — this is a large loop the camera
-    // views from outside, not a solid body the camera zooms into, so
-    // "large apparent size" means the ring's curve spans a lot of the
-    // view, exactly when a fixed segment count starts showing as visible
-    // straight facets rather than a smooth curve (see orbitDetailFor).
-    const ringWorldRadius = compressDistance(body.orbit.semiMajorAxisKm)
-    const segments = orbitDetailFor(apparentSize(ringWorldRadius, cameraDistance))
-    return orbitPath(body.orbit, segments).map((p) => compressVecByRatio(p, ratio))
-  }, [body.orbit, cameraDistance])
+    const ratio = orbitCompressionRatio(orbit)
+    return orbitPath(orbit, segments).map((p) => compressVecByRatio(p, ratio))
+  }, [orbit, segments])
   if (!points) return null
   return (
     <group position={parentWorldPos}>
@@ -88,24 +95,17 @@ export function ReferenceOrbitRing({
   /** Drives how many points the ring samples — see orbitDetailFor. */
   cameraDistance: number
 }) {
-  const points = useMemo(() => {
-    const dx = position[0] - parentWorldPos[0]
-    const dz = position[2] - parentWorldPos[2]
-    const radius = Math.hypot(dx, dz)
-    if (radius < 1e-4) return null
-    // Parent-relative, not absolute — see OrbitPathLine's own comment on
-    // why baking a large absolute offset into these vertices (rather than
-    // the wrapping <group> below) causes visible float32 precision loss
-    // up close.
-    const y = position[1] - parentWorldPos[1]
-    const segments = orbitDetailFor(apparentSize(radius, cameraDistance))
-    const pts: WorldVec[] = []
-    for (let i = 0; i <= segments; i++) {
-      const a = (2 * Math.PI * i) / segments
-      pts.push([radius * Math.cos(a), y, radius * Math.sin(a)])
-    }
-    return pts
-  }, [position, parentWorldPos, cameraDistance])
+  // Parent-relative, not absolute — see OrbitPathLine's own comment on
+  // why baking a large absolute offset into these vertices (rather than
+  // the wrapping <group> below) causes visible float32 precision loss up
+  // close. Reduced to scalars before the memo: `position`/`parentWorldPos`
+  // are fresh arrays on every SceneContent render, and cameraDistance
+  // changes every zoom frame — only the radius, height and LOD tier
+  // actually change the ring.
+  const radius = Math.hypot(position[0] - parentWorldPos[0], position[2] - parentWorldPos[2])
+  const y = position[1] - parentWorldPos[1]
+  const segments = radius < 1e-4 ? 0 : orbitDetailFor(apparentSize(radius, cameraDistance))
+  const points = useMemo(() => (segments === 0 ? null : referenceRingPoints(radius, y, segments)), [radius, y, segments])
   if (!points) return null
   return (
     <group position={parentWorldPos}>
@@ -151,8 +151,12 @@ export function RoutePreviewLine({
         // way an orbit has one — anchor each segment at its own first
         // point instead, via a wrapping <group>, and keep the vertices
         // themselves as small offsets from that anchor.
-        const anchor = points[0]!
-        const localPoints = points.map(([x, y, z]) => [x - anchor[0], y - anchor[1], z - anchor[2]] as WorldVec)
+        //
+        // Dash sizes are derived from the segment's own length (see
+        // routeDashPattern) — fixed world-unit sizes made a short route
+        // (moon to moon) fit inside a single dash and render solid.
+        const { anchor, localPoints } = toLocalPoints(points)
+        const dash = dashed ? routeDashPattern(polylineLength(localPoints)) : null
         return (
           <group key={i} position={anchor}>
             <Line
@@ -162,8 +166,8 @@ export function RoutePreviewLine({
               opacity={dashed ? 0.55 : 0.9}
               lineWidth={dashed ? 1.5 : 2.5}
               dashed={dashed}
-              dashScale={dashed ? 6 : undefined}
-              gapSize={dashed ? 3 : undefined}
+              dashSize={dash?.dashSize}
+              gapSize={dash?.gapSize}
             />
           </group>
         )

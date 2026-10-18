@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
-import { Points, PointMaterial } from '@react-three/drei'
+import { PointMaterial } from '@react-three/drei'
 import * as THREE from 'three'
 import { sampleBeltParticles } from '../belts'
 import { ringTiltRadians, ringWorldRadius } from '../rings'
 import type { CelestialBody, RingBand } from '../types'
 import { glowSprite, ringStreakTexture } from './textures'
+import { PointCloud } from './PointCloud'
 
 const DEFAULT_DISC_OPACITY = 0.35
 const DEFAULT_RING_PARTICLES = 600
@@ -87,8 +88,8 @@ function RingParticles({ body, band, index, radius, color }: { body: CelestialBo
   }, [body, band, index, radius])
 
   return (
-    <Points positions={positions}>
+    <PointCloud positions={positions}>
       <PointMaterial map={glowSprite()} color={color} size={3} sizeAttenuation={false} transparent opacity={0.6} depthWrite={false} blending={THREE.AdditiveBlending} />
-    </Points>
+    </PointCloud>
   )
 }

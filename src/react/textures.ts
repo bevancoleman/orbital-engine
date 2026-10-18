@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { createDisposingLru } from './resourceCache'
 
 // True volumetric (raymarched-density) fog is a lot of machinery for what's
 // actually needed here: belts reading as a soft haze instead of vanishing
@@ -33,8 +34,18 @@ export function glowSprite(): THREE.CanvasTexture {
  *  (see BeltGlowRing) so a belt still reads as a visible, soft-edged band
  *  even when zoomed out far enough that individual particles fall below a
  *  pixel — a flat, filled shape doesn't disappear between pixel samples
- *  the way sparse points can. */
+ *  the way sparse points can.
+ *
+ *  Cached by ratio (to 3 decimals — finer differences aren't visible in a
+ *  256 px gradient) in a small disposing LRU: this used to build a brand
+ *  new CanvasTexture per BeltGlowRing mount and never dispose it, leaking
+ *  one GPU texture per belt every time a system was switched in. */
+const ringGlowCache = createDisposingLru<THREE.CanvasTexture>(32)
 export function ringGlowTexture(innerRatio: number): THREE.CanvasTexture {
+  return ringGlowCache.getOrCreate(innerRatio.toFixed(3), () => drawRingGlowTexture(innerRatio))
+}
+
+function drawRingGlowTexture(innerRatio: number): THREE.CanvasTexture {
   const size = 256
   const canvas = document.createElement('canvas')
   canvas.width = size
@@ -61,12 +72,17 @@ export function ringGlowTexture(innerRatio: number): THREE.CanvasTexture {
  * here line up with the ring's own radius. White, varying only in alpha, so
  * the material's colour tints it. Seeded from `key`, so a band keeps the
  * same streak pattern on every load.
+ *
+ * Bounded (a disposing LRU, not a plain module-level Map) — keyed by body
+ * and band, so an unbounded cache grew by one 512 px GPU texture for every
+ * ringed body in every system ever loaded during the page's lifetime.
  */
-const ringStreakCache = new Map<string, THREE.CanvasTexture>()
+const ringStreakCache = createDisposingLru<THREE.CanvasTexture>(64)
 export function ringStreakTexture(key: string, innerRatio: number): THREE.CanvasTexture {
-  const cacheKey = `${key}:${innerRatio.toFixed(4)}`
-  const cached = ringStreakCache.get(cacheKey)
-  if (cached) return cached
+  return ringStreakCache.getOrCreate(`${key}:${innerRatio.toFixed(4)}`, () => drawRingStreakTexture(key, innerRatio))
+}
+
+function drawRingStreakTexture(key: string, innerRatio: number): THREE.CanvasTexture {
   const size = 512
   const canvas = document.createElement('canvas')
   canvas.width = size
@@ -95,6 +111,5 @@ export function ringStreakTexture(key: string, innerRatio: number): THREE.Canvas
   }
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
-  ringStreakCache.set(cacheKey, texture)
   return texture
 }
