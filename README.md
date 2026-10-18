@@ -30,7 +30,7 @@ This library solves the same true-scale problem spacekit.js didn't attempt, and 
 npm install orbital-engine three @react-three/fiber @react-three/drei react react-dom
 ```
 
-`three`, `@react-three/fiber`, `@react-three/drei`, `react`, and `react-dom` are peer dependencies.
+`three` (r152+), `@react-three/fiber` (8.13+ or 9), `@react-three/drei` (9.54+ or 10), `react` and `react-dom` (18 or 19) are peer dependencies — see `peerDependencies` in [`package.json`](./package.json) for the exact ranges. Pair fiber 8 / drei 9 with React 18, fiber 9 / drei 10 with React 19.
 
 ## Quickstart
 
@@ -70,6 +70,7 @@ const MY_SYSTEM: StarSystemData = {
       parentId: null,       // null only for the system's star
       radiusKm: 700_000,
       orbit: null,          // the star itself sets neither orbit nor fixedPosition
+      fixedPosition: null,
       color: '#fde68a',
     },
     {
@@ -88,6 +89,7 @@ const MY_SYSTEM: StarSystemData = {
         orbitalPeriodDays: 365,
         epoch: '2000-01-01T00:00:00Z',
       },
+      fixedPosition: null,  // both keys are required — set the unused one to null
       color: '#3b82f6',
     },
     {
@@ -123,14 +125,16 @@ interface CelestialBody {
   type: BodyType
   parentId: string | null         // null only for the system's star
   radiusKm: number
-  orbit: OrbitalElements | null   // Kepler elements — animates over time
-  fixedPosition?: FixedPosition   // or a single known snapshot — stays put
+  orbit: OrbitalElements | null          // Kepler elements — animates over time
+  fixedPosition: FixedPosition | null    // or a single known snapshot — stays put
   coOrbitalWithParent?: boolean   // see below
   rotationPeriodHours?: number    // spin only, independent of orbital motion; negative = retrograde
   color?: string
   modelUrl?: string                // optional 3D model; falls back to a placeholder shape
   textureUrl?: string              // optional real surface texture on the placeholder sphere
   note?: string                    // free-text provenance/precision note
+  wikiSummary?: string             // optional descriptive blurb shown in the info panel
+  wikiUrl?: string                 // optional further-reading link shown with it
   beltId?: string                  // see below — links to a BeltRegion.id this body is a member of
   atmosphereHeightKm?: number      // draws a translucent atmosphere rim at this height
   axialTiltDeg?: number            // obliquity — tilts the ring plane
@@ -145,9 +149,9 @@ interface StarSystemData {
 }
 ```
 
-A body sets exactly one of `orbit` or `fixedPosition` (the system's star sets neither). Rendering, selection, camera framing, and label decluttering all work the same regardless of which one it has.
+Both keys are required. A body sets exactly one of `orbit` or `fixedPosition` and the other to `null` (the system's star sets both to `null`). Rendering, selection, camera framing, and label decluttering all work the same regardless of which one it has.
 
-**`BodyType`**: `'star' | 'planet' | 'dwarf_planet' | 'moon' | 'station' | 'jump_point' | 'nav_point' | 'asteroid' | 'comet'`. Each has its own placeholder shape/color and default rendering behavior — `jump_point` renders as a hole between systems rather than a structure, `nav_point` as a bare labelled point with no physical shape, `station` as a hab-torus, and the rest as spheres/facted rocks. See [`src/types.ts`](./src/types.ts) for the full reasoning behind each.
+**`BodyType`**: `'star' | 'planet' | 'dwarf_planet' | 'moon' | 'station' | 'surface_installation' | 'jump_point' | 'nav_point' | 'asteroid' | 'comet'`. Each has its own placeholder shape/color and default rendering behavior — `jump_point` renders as a hole between systems rather than a structure, `nav_point` as a bare labelled point with no physical shape, `station` as a hab-torus, `surface_installation` as a small platform-and-beacon structure on its parent, and the rest as spheres/faceted rocks. See [`src/types.ts`](./src/types.ts) for the full reasoning behind each.
 
 **`OrbitalElements`** — the 6 standard classical (Keplerian) elements any astronomy source (NASA JPL, IAU, Wikipedia infoboxes) publishes for a real orbit, all relative to the parent's own reference plane:
 
@@ -194,7 +198,7 @@ Types, math, and reference data are exported from the package root (`orbital-eng
 
 | Export | Entry point | What it's for |
 | --- | --- | --- |
-| `OrbitalSystemScene` | `orbital-engine/react` | The R3F component — drop it in a `<Canvas>`-capable tree. |
+| `OrbitalSystemScene` | `orbital-engine/react` | The whole scene, UI overlays included — it renders its own R3F `<Canvas>`, so place it in a sized container, not inside another `<Canvas>`. |
 | `ExternalFocusRequest` | `orbital-engine/react` | Type for the `externalFocus` prop — flies the camera to a body id from outside the component (see [`examples/basic`](./examples/basic)'s "Fly to" buttons). |
 | `RoutePreview` | `orbital-engine/react` | Type for the `routePreview` prop — draws a line through an ordered chain of body ids. |
 | `positionAtTime`, `orbitPath` | `orbital-engine` | Kepler propagation, given `OrbitalElements` and a `Date`. |
@@ -215,7 +219,9 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for how these pieces fit together — t
 ```bash
 npm install
 npm test        # the unit suite, including the reference data checked against ephemeris positions
+npm run test:coverage  # same, with the coverage gate CI enforces on the core (src/*.ts)
 npm run typecheck
+npm run lint
 npm run build    # tsup — emits ESM + CJS + .d.ts to dist/
 npm run docs     # typedoc — generates the API reference site into docs-site/
 ```

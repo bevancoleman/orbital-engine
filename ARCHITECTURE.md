@@ -17,7 +17,7 @@ A body's journey from data to pixel goes through roughly this sequence every fra
 9. **Rings and belts** — `rings.ts` (`ringWorldRadius`/`ringTiltRadians`/`ringOuterRadiusKm`) sizes and tilts a body's own ring system relative to the body as rendered; `belts.ts` (`beltShape`/`sampleBeltParticles`/`beltGlowInnerRatio`) resolves a belt's shape and produces its seeded, area-uniform, gap-aware scatter. Both also carry the validation checks `validateSystemData` runs (`findInvalidRings`/`findInvalidBelts`).
 10. **The zoom slider's mapping** — `zoomSlider.ts` (`sliderPositionToDistance`/`distanceToSliderPosition`) is a small, isolated log-scale conversion, kept separate because getting the direction/curve wrong here is exactly the kind of thing worth unit-testing in isolation from the rest of the camera rig.
 
-Steps 1–10 are all pure functions in `src/*.ts` — no React, no three.js scene graph, 100% unit-tested. Nothing here needs a real renderer to verify.
+Steps 1–10 are all pure functions in `src/*.ts` — no React, no three.js scene graph, and fully line-covered by the unit suite (branch coverage is high but not total; `npm run test:coverage` enforces the floor). Nothing here needs a real renderer to verify.
 
 ## The rendering layer (`src/react/`)
 
@@ -40,8 +40,12 @@ Steps 1–10 are all pure functions in `src/*.ts` — no React, no three.js scen
 
 ## Two-tier testing, deliberately
 
-`src/*.ts` (steps 1–9 above) is 100% unit-tested — plain functions, no rendering, fast and precise. `src/react/*` cannot be meaningfully unit-tested the same way: Jest's jsdom environment has no real WebGL context, so nothing about actual rendering, camera behavior, or visual output can be verified there. Its correctness is instead covered by the Playwright e2e suite (`e2e/*.spec.ts`), which drives both example apps in a real browser — see `CONTRIBUTING.md`'s "End-to-end tests" section before adding a feature that touches rendering behavior.
+`src/*.ts` (steps 1–10 above) is unit-tested to full line coverage and a CI-enforced coverage threshold (see `coverageThreshold` in `jest.config.ts`; `src/fixtures/` is test data and excluded) — plain functions, no rendering, fast and precise. `src/react/*` cannot be meaningfully unit-tested the same way: Jest's jsdom environment has no real WebGL context, so nothing about actual rendering, camera behavior, or visual output can be verified there — only its pure helpers (`src/react/__tests__/`) are. Its rendering correctness is instead covered by the Playwright e2e suite (`e2e/*.spec.ts`), which drives both example apps in a real browser — see `CONTRIBUTING.md`'s "End-to-end tests" section before adding a feature that touches rendering behavior.
 
 ## Reference data (`solarSystemData.ts`)
 
-The one data file of meaningful size (~700 lines) — deliberately not code-golfed shorter, since every body's entry is meant to be independently checkable against its cited real source (NASA JPL, IAU, USGS). Size here reflects the size of the real solar system, not a code-organization problem.
+The one data file of meaningful size (~1,000 lines) — deliberately not code-golfed shorter, since every body's entry is meant to be independently checkable against its cited real source (NASA JPL, IAU, USGS). Size here reflects the size of the real solar system, not a code-organization problem.
+
+## Build output
+
+`tsup` builds both entry points (`orbital-engine` → `src/index.ts`, `orbital-engine/react` → `src/react/index.ts`) as ESM and CJS with code splitting, so the core lives in one shared `dist/chunk-*` file both entries import — an app using both ships the core once. The react entry keeps `"use client"` as its first directive in both formats (`tsup.config.ts` re-hoists it in the CJS output). `package.json` `exports` give each condition its own declarations (`.d.ts` for `import`, `.d.cts` for `require`); CI checks the packed tarball with `publint` and `@arethetypeswrong/cli`.
