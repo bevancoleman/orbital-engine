@@ -18,7 +18,7 @@ This library solves the same true-scale problem spacekit.js didn't attempt, and 
 - **True physical scale.** Radius and orbital distance are both the real figures, log-compressed for distance and floored at a minimum pixel size for radius (`compressDistance`/`trueRadius`, `minVisibleWorldRadius`/`renderRadius`) — a body like the ISS stays visible next to Earth even though its actual size is a fraction of a pixel at that distance.
 - **Two position models, one contract.** A body carries either [`OrbitalElements`](./src/types.ts) (animates over time via Kepler propagation) or a single [`FixedPosition`](./src/types.ts) snapshot (for data with no known orbit — a game world, a one-time survey). Both render through the same `<OrbitalSystemScene>`.
 - **Proximity selection and label decluttering.** Clicking snaps to the nearest body within a screen-space radius rather than raycasting, which fails once a body's on-screen size drops below a pixel. Labels that would overlap hide the structurally deeper one (a moon yields to its planet, a planet to its star).
-- **Rings and belts.** A planet's own rings are part of the planet — drawn in its equatorial plane at its axial tilt, moving and selected with it. Belts (round a star, or local clusters) are objects of their own: either plotted from real per-object positions or scattered synthetically within a radius range, with gaps, named sites inside them, and co-orbital clusters that track a reference body's current angle.
+- **Rings and belts.** A planet's own rings are part of the planet — drawn in its equatorial plane (from its spin pole), moving and selected with it. Belts (round a star, or local clusters) are objects of their own: either plotted from real per-object positions or scattered synthetically within a radius range, with gaps, named sites inside them, and co-orbital clusters that track a reference body's current angle.
 - **Camera fly-to.** Animates to a selected body and keeps tracking it afterward if it's still moving.
 - **Distance-adjusted level of detail.** Polygon count follows how much of the view a body actually fills, not raw camera distance.
 - **Real 3D models and textures, opt-in per body.** `CelestialBody.modelUrl` loads a real glTF model; `textureUrl` wraps a real surface photo around the built-in sphere instead. Both fall back to the placeholder shape if unset or if loading fails. See [`examples/with-models`](./examples/with-models), built entirely from NASA's public-domain 3D Resources collection.
@@ -137,7 +137,8 @@ interface CelestialBody {
   wikiUrl?: string                 // optional further-reading link shown with it
   beltId?: string                  // see below — links to a BeltRegion.id this body is a member of
   atmosphereHeightKm?: number      // draws a translucent atmosphere rim at this height
-  axialTiltDeg?: number            // obliquity — tilts the ring plane
+  pole?: PoleDirection             // spin axis — defines the equator rings are drawn in
+  axialTiltDeg?: number            // obliquity — ring-plane fallback when `pole` is unset
   rings?: RingBand[]               // see below — the body's own ring system
 }
 
@@ -153,7 +154,7 @@ Both keys are required. A body sets exactly one of `orbit` or `fixedPosition` an
 
 **`BodyType`**: `'star' | 'planet' | 'dwarf_planet' | 'moon' | 'station' | 'surface_installation' | 'jump_point' | 'nav_point' | 'asteroid' | 'comet'`. Each has its own placeholder shape/color and default rendering behavior — `jump_point` renders as a hole between systems rather than a structure, `nav_point` as a bare labelled point with no physical shape, `station` as a hab-torus, `surface_installation` as a small platform-and-beacon structure on its parent, and the rest as spheres/faceted rocks. See [`src/types.ts`](./src/types.ts) for the full reasoning behind each.
 
-**`OrbitalElements`** — the 6 standard classical (Keplerian) elements any astronomy source (NASA JPL, IAU, Wikipedia infoboxes) publishes for a real orbit, all relative to the parent's own reference plane:
+**`OrbitalElements`** — the 6 standard classical (Keplerian) elements any astronomy source (NASA JPL, IAU, Wikipedia infoboxes) publishes for a real orbit, relative to the parent and measured against the system's reference plane unless `referencePlanePole` says otherwise:
 
 ```ts
 interface OrbitalElements {
@@ -164,8 +165,19 @@ interface OrbitalElements {
   argumentOfPeriapsisDeg: number
   meanAnomalyAtEpochDeg: number           // position along the orbit at `epoch`, 0 = periapsis
   orbitalPeriodDays: number
-  epoch: string                           // ISO date meanAnomalyAtEpochDeg is measured from
+  epoch: string                           // ISO 8601 date meanAnomalyAtEpochDeg is measured from
+  referencePlanePole?: PoleDirection      // pole of the plane the angles are quoted against
 }
+```
+
+`epoch` should carry a `Z` or an explicit offset (`2000-01-01T12:00:00Z`), or be a bare date (`2000-01-01`, UTC by ISO's definition). A date-time with no offset is read as UTC — not the viewer's local time, as `Date` would — and also flagged by `validateSystemData` (an `invalid-orbit` warning, `epoch-without-offset`).
+
+**`PoleDirection`** — `{ longitudeDeg, latitudeDeg }`, a direction in the system's reference frame (for `SOLAR_SYSTEM`, the J2000 ecliptic). A body's `pole` is its spin axis (right-hand rule, so a retrograde rotator's is the opposite end from the IAU's "north" pole); it sets the plane its rings are drawn in and takes precedence over `axialTiltDeg`. An orbit's `referencePlanePole` is the pole of the plane its inclination/node/periapsis are quoted against — typically the parent's `pole`, for moon elements published against the planet's equator; a ringed planet's moons only line up with its rings when the two match. The IAU publishes poles as right ascension/declination; convert them with `poleFromEquatorialJ2000`:
+
+```ts
+import { poleFromEquatorialJ2000 } from 'orbital-engine'
+
+const saturnPole = poleFromEquatorialJ2000(40.589, 83.537) // IAU RA/Dec, degrees
 ```
 
 **`FixedPosition`** — a single km-space snapshot relative to the parent, for a body with no known orbit (game-extracted data, a one-time survey) rather than inventing elements to force it into the Keplerian shape:
@@ -180,9 +192,9 @@ interface FixedPosition {
 
 **`coOrbitalWithParent`**: true only for the rare case of a body grouped under a parent for labelling (e.g. a Lagrange-point station listed under its reference planet) that doesn't actually orbit that parent locally — it independently orbits the star at a different point along the parent's own orbit. Doesn't affect position math, only camera framing (so selecting the planet doesn't also try to fit an interplanetary-distance companion into view). Leave unset for every ordinary child (a real moon, a station that really does orbit its planet).
 
-**`rings`**: a body's own ring system, as a list of bands — part of the body, not a separate object. Each `RingBand` has `innerRadiusKm`/`outerRadiusKm` (real km from the body's centre), an optional `name`, `color`, `opacity`, and a `style`: `'disc'` (the default — a smooth translucent band, for dust and ice rings like Saturn's) or `'particles'` (a scatter of individual rocks, for a ring of asteroids round a moon). Gaps between rings (Saturn's Cassini Division) are simply the space between bands. The rings lie in the body's equatorial plane, tilted by `axialTiltDeg`, and scale with the body as it's rendered, so they stay in proportion even while the pixel floor inflates a small body. Camera framing takes in the whole ring system.
+**`rings`**: a body's own ring system, as a list of bands — part of the body, not a separate object. Each `RingBand` has `innerRadiusKm`/`outerRadiusKm` (real km from the body's centre), an optional `name`, `color`, `opacity`, and a `style`: `'disc'` (the default — a smooth translucent band, for dust and ice rings like Saturn's) or `'particles'` (a scatter of individual rocks, for a ring of asteroids round a moon). Gaps between rings (Saturn's Cassini Division) are simply the space between bands. The rings lie in the body's equatorial plane (from `pole`, or `axialTiltDeg` if no pole is set), and scale with the body as it's rendered, so they stay in proportion even while the pixel floor inflates a small body. Camera framing takes in the whole ring system.
 
-**`BeltRegion`** (asteroid belts, Oort-cloud-style clouds, local asteroid clusters) is a separate top-level array on `StarSystemData`, not a `CelestialBody` — a population in its own right, selectable as a belt. Its `shape` is `'ring'` (full circle between the two radii, drawn with a soft glow disc — the default for `type: 'belt'`), `'shell'` (all directions — the default for `type: 'cloud'`) or `'cluster'` (local patches only, drawn from real positions or sites, with no glow disc). Other fields: `innerRadiusKm`/`outerRadiusKm`, `particleCount`, optional real `realPositions`, `gaps` the scatter keeps clear of (the asteroid belt's Kirkwood gaps), `sites` (named sets of positions inside the belt, drawn as distinct markers — e.g. mining stations scattered through it), and `coOrbital` for Trojan-style leading/trailing clusters. The synthetic scatter is seeded from the belt's id, so it's identical on every load. See [`src/types.ts`](./src/types.ts).
+**`BeltRegion`** (asteroid belts, Oort-cloud-style clouds, local asteroid clusters) is a separate top-level array on `StarSystemData`, not a `CelestialBody` — a population in its own right, selectable as a belt. Its `shape` is `'ring'` (full circle between the two radii, drawn with a soft glow disc — the default for `type: 'belt'`), `'shell'` (all directions — the default for `type: 'cloud'`) or `'cluster'` (local patches only, drawn from real positions or sites, with no glow disc). Other fields: `innerRadiusKm`/`outerRadiusKm`, `inclinationSpreadDeg` (the full angular thickness, centred on the reference plane — the band spans ±half of it; 180 makes a `'shell'` a complete sphere), `particleCount`, optional real `realPositions`, `gaps` the scatter keeps clear of (the asteroid belt's Kirkwood gaps), `sites` (named sets of positions inside the belt, drawn as distinct markers — e.g. mining stations scattered through it), and `coOrbital` for Trojan-style leading/trailing clusters. The synthetic scatter is seeded from the belt's id, so it's identical on every load. See [`src/types.ts`](./src/types.ts).
 
 **`beltId`**: links a body to a `BeltRegion.id` it's physically a member of — e.g. a named main-belt asteroid (Ceres, Vesta) that's also plotted as its own tracked body, on top of the belt's own scattered population. Purely a visibility-system hint (see `computeVisibleBodyIds`, below): every body sharing the same `beltId` shares a single secondary-object visibility slot instead of each competing individually, since the belt itself already reads as "there's a population here."
 
@@ -191,6 +203,10 @@ interface FixedPosition {
 At any zoom, primary bodies (star, planet) always render. Everything else (moons, stations, asteroids, ...) is ranked by how much of the view it actually fills right now (`apparentSize` — the same metric the geometry-detail system uses) and capped at `MAX_VISIBLE_SECONDARY` (20 by default). Bodies sharing a `beltId` rank and reveal as one group rather than competing individually. On top of that, a per-frame screen-space pass (`thinByScreenProximity`, the same algorithm label decluttering uses) drops anything still landing too close to a higher-priority body actually on screen right now. The currently-selected body and its direct children are always exempt from both passes. A body's dot smoothly grows/shrinks in as it crosses the visible boundary rather than popping.
 
 This replaces an earlier fixed distance-ratio cutoff that could hide a body entirely on a trivial zoom change regardless of how much empty screen space was actually available — see [`src/visibility.ts`](./src/visibility.ts).
+
+## Validation
+
+`validateSystemData(system)` returns every data-contract and legibility warning for a system as a `SystemDataWarning[]`, each tagged with a `kind`: `missing-position`, `unrecognized-type`, `unknown-parent`, `parent-cycle`, `invalid-orbit` (non-positive axis or period, eccentricity out of range, non-finite angle, unparseable or offset-less epoch), `invalid-radius`, `periapsis-inside-parent`, `embedded-in-parent`, `embedded-in-sibling`, `invalid-ring`, `invalid-belt`. Malformed data still renders — an unknown parent or a cycle anchors at the system origin — so these are signals, not errors. `<OrbitalSystemScene devMode>` lists them in its dev overlay. `unknown-parent`, `parent-cycle`, `invalid-orbit`, `invalid-radius` and `periapsis-inside-parent` were added in 1.5.0 — a consumer with an exhaustive `switch` over `kind` must add cases for them.
 
 ## API
 
@@ -203,6 +219,8 @@ Types, math, and reference data are exported from the package root (`orbital-eng
 | `RoutePreview` | `orbital-engine/react` | Type for the `routePreview` prop — draws a line through an ordered chain of body ids. |
 | `positionAtTime`, `orbitPath` | `orbital-engine` | Kepler propagation, given `OrbitalElements` and a `Date`. |
 | `resolveAllWorldPositions` | `orbital-engine` | Every body's current world position (orbit or fixed), respecting parent hierarchy. |
+| `poleFromEquatorialJ2000` | `orbital-engine` | IAU pole right ascension/declination → a `PoleDirection` in the J2000 ecliptic frame. |
+| `validateSystemData` | `orbital-engine` | Every data warning for a system — see Validation, above. |
 | `compressDistance`, `trueRadius` | `orbital-engine` | The scale math — km in, render-space units out. |
 | `computeFocusForBody`, `computeFocusForSystem` | `orbital-engine` | Camera framing targets for a fly-to. |
 | `findNearestCandidate` | `orbital-engine` | Proximity selection, given screen-space candidates. |
