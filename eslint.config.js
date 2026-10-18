@@ -25,6 +25,9 @@ export default [
         cancelAnimationFrame: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
+        // DOM element types, for in-page code in e2e/ (page.evaluate).
+        HTMLElement: 'readonly',
+        HTMLInputElement: 'readonly',
       },
     },
     plugins: {

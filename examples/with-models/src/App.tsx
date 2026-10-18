@@ -23,8 +23,16 @@ const FLY_TARGETS = [
   { id: 'sun', label: 'Sun (no real asset)' },
 ]
 
+/** `?mode=placeholders` starts in placeholder-only mode — lets a fresh
+ *  page load (e.g. an e2e test checking that this mode never requests an
+ *  asset) start there directly, with nothing fetched or cached by the
+ *  other mode first. */
+function initialMode(): Mode {
+  return new URLSearchParams(window.location.search).get('mode') === 'placeholders' ? 'placeholders' : 'real-assets'
+}
+
 export function App() {
-  const [mode, setMode] = useState<Mode>('real-assets')
+  const [mode, setMode] = useState<Mode>(initialMode)
   const [selected, setSelected] = useState<CelestialBody | null>(null)
   const [externalFocus, setExternalFocus] = useState<ExternalFocusRequest | null>(null)
   const [lightFromStar, setLightFromStar] = useState(false)
