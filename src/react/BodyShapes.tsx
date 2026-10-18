@@ -1,4 +1,4 @@
-import { Component, Suspense, useMemo, type ReactNode } from 'react'
+import { Component, Suspense, useEffect, useMemo, type ReactNode } from 'react'
 import { useGLTF, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import {
@@ -10,6 +10,7 @@ import {
 import type { CelestialBody } from '../types'
 import { glowSprite } from './textures'
 import { hashSeed, TEXTURABLE_BODY_TYPES } from './bodyTypeStyles'
+import { createRefCounter } from './resourceCache'
 
 /**
  * A soft additive rim just outside the surface, sized from the body's real
@@ -23,22 +24,12 @@ import { hashSeed, TEXTURABLE_BODY_TYPES } from './bodyTypeStyles'
  * lose its atmosphere just because a real surface photo is available for
  * it.
  */
-export function AtmosphereRim({
-  body,
-  radius,
-  color,
-  sphere,
-}: {
-  body: CelestialBody
-  radius: number
-  color: string
-  sphere: SphereDetail
-}) {
+export function AtmosphereRim({ body, color, sphere }: { body: CelestialBody; color: string; sphere: SphereDetail }) {
   if (!body.atmosphereHeightKm) return null
   const ratio = 1 + body.atmosphereHeightKm / body.radiusKm
   return (
     <mesh>
-      <sphereGeometry args={[radius * ratio, sphere.widthSegments, sphere.heightSegments]} />
+      <sphereGeometry args={[ratio, sphere.widthSegments, sphere.heightSegments]} />
       <meshBasicMaterial
         color={color}
         transparent
@@ -67,15 +58,21 @@ export function AtmosphereRim({
  * This is what every body renders as by default, and what a specific body
  * with a real `modelUrl` (see BodyShape) falls back to if that model fails
  * to load.
+ *
+ * Built at UNIT radius — BodyShape applies the body's real rendered radius
+ * as a `scale` on the wrapping group. The rendered radius is pixel-floored
+ * (see pixelFloor.ts), so it changes on practically every zoom frame; when
+ * it was baked into the geometry args instead, every sphere, torus, ring
+ * and atmosphere in the scene was thrown away and rebuilt on every one of
+ * those frames. Now a geometry is only rebuilt when its LOD segment counts
+ * actually change tier.
  */
 export function PlaceholderBodyShape({
   body,
-  radius,
   color,
   detailSize,
 }: {
   body: CelestialBody
-  radius: number
   color: string
   /** How much of the view this body fills right now — see
    *  levelOfDetail.ts's apparentSize. Drives polygon count so a body only
@@ -97,10 +94,10 @@ export function PlaceholderBodyShape({
       return (
         <>
           <mesh>
-            <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
+            <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
             <meshBasicMaterial color={color} />
           </mesh>
-          <sprite scale={[radius * 6, radius * 6, 1]}>
+          <sprite scale={[6, 6, 1]}>
             <spriteMaterial
               map={glowSprite()}
               color={color}
@@ -118,17 +115,17 @@ export function PlaceholderBodyShape({
       return (
         <>
           <mesh>
-            <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
+            <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
             <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
           </mesh>
-          <AtmosphereRim body={body} radius={radius} color={color} sphere={sphere} />
+          <AtmosphereRim body={body} color={color} sphere={sphere} />
         </>
       )
 
     case 'moon':
       return (
         <mesh>
-          <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
+          <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
           <meshStandardMaterial color={color} roughness={0.95} />
         </mesh>
       )
@@ -144,7 +141,7 @@ export function PlaceholderBodyShape({
       // levelOfDetail.ts).
       return (
         <mesh rotation={rotation}>
-          <icosahedronGeometry args={[radius, icosahedronSubdivisions]} />
+          <icosahedronGeometry args={[1, icosahedronSubdivisions]} />
           <meshStandardMaterial color={color} roughness={1} flatShading />
         </mesh>
       )
@@ -153,7 +150,7 @@ export function PlaceholderBodyShape({
       return (
         <>
           <mesh rotation={rotation}>
-            <icosahedronGeometry args={[radius, Math.max(icosahedronSubdivisions, 1)]} />
+            <icosahedronGeometry args={[1, Math.max(icosahedronSubdivisions, 1)]} />
             <meshStandardMaterial color={color} roughness={0.6} />
           </mesh>
           {/* A faint trailing streak — comets are the one body type whose
@@ -161,7 +158,7 @@ export function PlaceholderBodyShape({
               away from the parent star (this engine has no per-frame "sun
               direction" concept for a fixed body), just a fixed, recognisable
               tail rather than omitting the feature entirely. */}
-          <sprite scale={[radius * 9, radius * 2.4, 1]} position={[radius * 3.5, 0, 0]}>
+          <sprite scale={[9, 2.4, 1]} position={[3.5, 0, 0]}>
             <spriteMaterial
               map={glowSprite()}
               color={color}
@@ -178,7 +175,8 @@ export function PlaceholderBodyShape({
       // A ring/hab-torus is a recognisable "built structure" silhouette —
       // clearly artificial against every natural sphere/rock shape nearby.
       // The tube radius is deliberately purely proportional to the main
-      // radius (radius * 0.35), with no absolute floor — an absolute floor
+      // radius (0.35 of the unit radius, i.e. radius * 0.35 once scaled),
+      // with no absolute floor — an absolute floor
       // was the actual bug behind a real, observed one: at true scale (see
       // scale.ts's trueRadius), the ISS's/Hubble's own radius is ~5×10⁻⁸
       // world units, vanishingly smaller than a fixed 0.02 floor this used
@@ -191,7 +189,7 @@ export function PlaceholderBodyShape({
       // freely is what a real, honest scale requires.
       return (
         <mesh rotation={rotation}>
-          <torusGeometry args={[radius, radius * 0.35, torus.radialSegments, torus.tubularSegments]} />
+          <torusGeometry args={[1, 0.35, torus.radialSegments, torus.tubularSegments]} />
           <meshStandardMaterial color={color} roughness={0.4} metalness={0.6} />
         </mesh>
       )
@@ -202,7 +200,7 @@ export function PlaceholderBodyShape({
       return (
         <>
           <mesh rotation={[Math.PI / 2, 0, 0]}>
-            <ringGeometry args={[radius * 0.65, radius * 1.15, torus.tubularSegments]} />
+            <ringGeometry args={[0.65, 1.15, torus.tubularSegments]} />
             <meshBasicMaterial
               color={color}
               transparent
@@ -212,7 +210,7 @@ export function PlaceholderBodyShape({
               depthWrite={false}
             />
           </mesh>
-          <sprite scale={[radius * 5, radius * 5, 1]}>
+          <sprite scale={[5, 5, 1]}>
             <spriteMaterial
               map={glowSprite()}
               color={color}
@@ -232,7 +230,7 @@ export function PlaceholderBodyShape({
       // something meant to read as smooth/rounded even up close.
       return (
         <mesh rotation={rotation}>
-          <octahedronGeometry args={[radius, 0]} />
+          <octahedronGeometry args={[1, 0]} />
           <meshBasicMaterial color={color} wireframe transparent opacity={0.9} />
         </mesh>
       )
@@ -251,11 +249,11 @@ export function PlaceholderBodyShape({
       return (
         <group rotation={rotation}>
           <mesh>
-            <cylinderGeometry args={[radius, radius * 1.1, radius * 0.3, 8]} />
+            <cylinderGeometry args={[1, 1.1, 0.3, 8]} />
             <meshStandardMaterial color={color} roughness={0.6} metalness={0.5} />
           </mesh>
-          <mesh position={[0, radius * 0.75, 0]}>
-            <coneGeometry args={[radius * 0.35, radius * 1.2, 8]} />
+          <mesh position={[0, 0.75, 0]}>
+            <coneGeometry args={[0.35, 1.2, 8]} />
             <meshStandardMaterial color={color} roughness={0.5} metalness={0.4} />
           </mesh>
         </group>
@@ -264,7 +262,7 @@ export function PlaceholderBodyShape({
     default:
       return (
         <mesh>
-          <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
+          <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
           <meshBasicMaterial color={color} />
         </mesh>
       )
@@ -275,11 +273,21 @@ export function PlaceholderBodyShape({
  *  unsupported format) and renders the ordinary placeholder shape instead —
  *  a class component because React error boundaries can't be written as
  *  hooks. Without this, one body with a bad `modelUrl` would take down the
- *  whole scene rather than just falling back for that one body. */
-class ModelErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+ *  whole scene rather than just falling back for that one body.
+ *
+ *  Always mounted with `key={url}` (see BodyShape), so pointing a body at a
+ *  different asset gets a fresh boundary and a fresh attempt instead of
+ *  staying stuck on a previous URL's failure. The failure is reported via
+ *  console.warn — falling back is the right behaviour, but doing it
+ *  silently made a broken asset URL indistinguishable from a body that
+ *  simply had none. */
+class ModelErrorBoundary extends Component<{ url: string; fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
   static getDerivedStateFromError() {
     return { failed: true }
+  }
+  componentDidCatch(error: unknown) {
+    console.warn(`orbital-engine: failed to load "${this.props.url}" — falling back to the placeholder shape.`, error)
   }
   render() {
     return this.state.failed ? this.props.fallback : this.props.children
@@ -287,22 +295,37 @@ class ModelErrorBoundary extends Component<{ fallback: ReactNode; children: Reac
 }
 
 /** Loads a real model (see CelestialBody.modelUrl) and uniformly scales it
- *  so its own bounding sphere matches this body's rendered `radius` —
- *  models come in whatever arbitrary real-world units/scale their source
- *  used, not this engine's compressed world units, so a fixed scale
- *  wouldn't work consistently across different models. */
-function LoadedBodyModel({ url, radius }: { url: string; radius: number }) {
+ *  so its own bounding sphere is the unit sphere — BodyShape's wrapping
+ *  group then scales that to the body's rendered radius, the same as every
+ *  placeholder shape. Models come in whatever arbitrary real-world
+ *  units/scale their source used, not this engine's compressed world
+ *  units, so a fixed scale wouldn't work consistently across different
+ *  models. Normalizing here (rather than to the rendered radius directly)
+ *  means the deep clone and bounding-box walk happen once per loaded
+ *  model, not on every zoom frame the pixel-floored radius changes. */
+function LoadedBodyModel({ url }: { url: string }) {
   const { scene } = useGLTF(url)
   const prepared = useMemo(() => {
     const clone = scene.clone(true)
     const box = new THREE.Box3().setFromObject(clone)
     const sphere = box.getBoundingSphere(new THREE.Sphere())
-    const scale = sphere.radius > 1e-6 ? radius / sphere.radius : 1
+    const scale = sphere.radius > 1e-6 ? 1 / sphere.radius : 1
     clone.scale.setScalar(scale)
     clone.position.sub(sphere.center.multiplyScalar(scale))
     return clone
-  }, [scene, radius])
+  }, [scene])
   return <primitive object={prepared} />
+}
+
+// Which texture URLs are currently mounted on a TexturedSphereBody — drei's
+// useTexture caches every texture it ever loads for the page's lifetime,
+// so switching between systems (or asset modes) kept every previously-seen
+// surface texture resident on the GPU. When the last user of a URL
+// unmounts, its cache entry is cleared and its GPU copy disposed.
+const textureUsers = createRefCounter()
+
+function markAsSrgb(texture: THREE.Texture): void {
+  texture.colorSpace = THREE.SRGBColorSpace
 }
 
 /** Loads a real surface texture (see CelestialBody.textureUrl) and wraps it
@@ -310,34 +333,68 @@ function LoadedBodyModel({ url, radius }: { url: string; radius: number }) {
  *  body doesn't have, rather than a flat colour. Still gets the same real,
  *  height-based AtmosphereRim as the placeholder sphere (see that
  *  component) — a real photo of Earth or Venus shouldn't lose its
- *  atmosphere just because a texture was available for it. */
+ *  atmosphere just because a texture was available for it. Unit radius,
+ *  like every shape here (see PlaceholderBodyShape). */
 function TexturedSphereBody({
   body,
-  radius,
   color,
   textureUrl,
   detailSize,
 }: {
   body: CelestialBody
-  radius: number
   color: string
   textureUrl: string
   detailSize: number
 }) {
-  const texture = useTexture(textureUrl)
-  useMemo(() => {
-    texture.colorSpace = THREE.SRGBColorSpace
-  }, [texture])
+  // colorSpace is set in useTexture's onLoad (a layout effect that runs
+  // before drei uploads the texture), not as a side effect inside useMemo
+  // during render.
+  const texture = useTexture(textureUrl, markAsSrgb)
+  useEffect(() => {
+    textureUsers.acquire(textureUrl)
+    return () => {
+      if (textureUsers.release(textureUrl)) {
+        useTexture.clear(textureUrl)
+        texture.dispose()
+      }
+    }
+  }, [textureUrl, texture])
   const sphere = sphereDetailFor(detailSize)
   return (
     <>
       <mesh>
-        <sphereGeometry args={[radius, sphere.widthSegments, sphere.heightSegments]} />
+        <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
         <meshStandardMaterial map={texture} roughness={0.9} metalness={0.05} />
       </mesh>
-      <AtmosphereRim body={body} radius={radius} color={color} sphere={sphere} />
+      <AtmosphereRim body={body} color={color} sphere={sphere} />
     </>
   )
+}
+
+function BodyShapeAtUnitRadius({ body, color, detailSize }: { body: CelestialBody; color: string; detailSize: number }) {
+  const placeholder = <PlaceholderBodyShape body={body} color={color} detailSize={detailSize} />
+
+  if (body.modelUrl) {
+    return (
+      <ModelErrorBoundary key={body.modelUrl} url={body.modelUrl} fallback={placeholder}>
+        <Suspense fallback={placeholder}>
+          <LoadedBodyModel url={body.modelUrl} />
+        </Suspense>
+      </ModelErrorBoundary>
+    )
+  }
+
+  if (body.textureUrl && TEXTURABLE_BODY_TYPES.has(body.type)) {
+    return (
+      <ModelErrorBoundary key={body.textureUrl} url={body.textureUrl} fallback={placeholder}>
+        <Suspense fallback={placeholder}>
+          <TexturedSphereBody body={body} color={color} textureUrl={body.textureUrl} detailSize={detailSize} />
+        </Suspense>
+      </ModelErrorBoundary>
+    )
+  }
+
+  return placeholder
 }
 
 /**
@@ -350,6 +407,9 @@ function TexturedSphereBody({
  * 3. The generic per-type placeholder (PlaceholderBodyShape) — the
  *    default for every body, and the fallback if 1 or 2 were set but
  *    failed to load.
+ *
+ * Every one of those is built at unit radius; `radius` is applied here as
+ * a scale (see PlaceholderBodyShape for why).
  */
 export function BodyShape({
   body,
@@ -362,27 +422,9 @@ export function BodyShape({
   color: string
   detailSize: number
 }) {
-  const placeholder = <PlaceholderBodyShape body={body} radius={radius} color={color} detailSize={detailSize} />
-
-  if (body.modelUrl) {
-    return (
-      <ModelErrorBoundary fallback={placeholder}>
-        <Suspense fallback={placeholder}>
-          <LoadedBodyModel url={body.modelUrl} radius={radius} />
-        </Suspense>
-      </ModelErrorBoundary>
-    )
-  }
-
-  if (body.textureUrl && TEXTURABLE_BODY_TYPES.has(body.type)) {
-    return (
-      <ModelErrorBoundary fallback={placeholder}>
-        <Suspense fallback={placeholder}>
-          <TexturedSphereBody body={body} radius={radius} color={color} textureUrl={body.textureUrl} detailSize={detailSize} />
-        </Suspense>
-      </ModelErrorBoundary>
-    )
-  }
-
-  return placeholder
+  return (
+    <group scale={radius}>
+      <BodyShapeAtUnitRadius body={body} color={color} detailSize={detailSize} />
+    </group>
+  )
 }
