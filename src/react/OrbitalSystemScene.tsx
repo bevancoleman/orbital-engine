@@ -21,7 +21,7 @@ import type { CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
 import { StarLight } from './StarLight'
 import { CameraRig } from './CameraRig'
-import type { CameraActivity } from './cameraFlightLifecycle'
+import { trackingViewingDistance, type CameraActivity } from './cameraFlightLifecycle'
 import { PerfStats, type RendererStats } from './PerfStats'
 import { DevPerfPanel } from './DevPerfPanel'
 import { BeltInfoPanel, BodyInfoPanel } from './InfoPanel'
@@ -244,11 +244,18 @@ export function OrbitalSystemScene({
   // exact, unsmoothed tracking on its own whenever smoothing would risk
   // lagging the target out of frame (a true-scale close orbiter) — the
   // same adaptive-fallback pattern safePredictFlightTarget uses for the
-  // flight side (see useSelectionNavigation). cameraDistance (the LIVE
-  // camera-to-target distance reported by CameraRig, not a stale
-  // flight-start snapshot) is what that fallback check is measured against.
+  // flight side (see useSelectionNavigation). That fallback check is
+  // measured against trackingViewingDistance — the live camera distance
+  // CameraRig reports, capped by the focus's own framing distance, since
+  // the reported value lags behind a landing flight (see that function).
   const trackedPosition = selectedBody
-    ? computeSmoothedTrackedPosition(selectedBody, system, clock.simDate, clock.daysPerSecond, cameraDistance)
+    ? computeSmoothedTrackedPosition(
+        selectedBody,
+        system,
+        clock.simDate,
+        clock.daysPerSecond,
+        trackingViewingDistance(cameraDistance, nav.focus)
+      )
     : null
   // Every body, fed to CameraRig as invisible collision proxies (see
   // camera.ts's computeColliderBodies) — unfiltered; CameraRig itself

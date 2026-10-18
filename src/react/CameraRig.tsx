@@ -6,7 +6,7 @@ import { DEFAULT_VIEW_DIRECTION, MAX_CAMERA_DISTANCE, type CameraObstacle, type 
 import type { WorldVec } from '../render'
 import {
   acknowledgeNullFocus,
-  advanceSteadyTracking,
+  advanceCameraFrame,
   beginFlight,
   createFlightLifecycleState,
   describeCameraActivity,
@@ -14,8 +14,6 @@ import {
   interruptFlight,
   releaseClearedColliders,
   sameCameraActivity,
-  sampleFlight,
-  settleFlight,
   type CameraActivity,
 } from './cameraFlightLifecycle'
 
@@ -190,8 +188,9 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  smoothed vs. raw position — was then permanent: for the ISS at 2 d/s,
  *  a 1ms mismatch is ~330x its framing distance, the body left off-screen
  *  for good. Tracking now ANCHORS the target on the live position every
- *  frame it moves (see advanceSteadyTracking), so any such gap heals on
- *  the very next frame.
+ *  frame it moves (see advanceSteadyTracking) — including the frame a
+ *  flight lands on (see advanceCameraFrame), which used to wait one more
+ *  frame and so flashed a fast orbiter off-screen at every landing.
  *
  *  Eighth real bug (review finding A5): that delta was applied with
  *  `setLookAt(..., false)`, which overwrites camera-controls' end state
@@ -383,38 +382,35 @@ export function CameraRig({
       manualDistance.current = null
     }
 
-    if (lifecycle.isFlying) {
-      // Driven entirely by OUR OWN eased tween (see camera.ts's
-      // sampleFlightPath and this file's header comment, fourth bug) —
-      // camera-controls' own transition system is never invoked for this;
-      // `setLookAt(..., false)` below just copies our already-eased values
-      // straight in. Both endpoints are FIXED for the flight's whole
-      // duration (see cameraFlightLifecycle's own FlightState comment,
-      // sixth bug) — no re-aiming at a live position here at all, which is
-      // what used to alias a fast orbiter's own motion into visible jitter.
-      const { position, target, progress } = sampleFlight(lifecycle, performance.now())
+    // Driven entirely by OUR OWN eased tween while flying (see camera.ts's
+    // sampleFlightPath and this file's header comment, fourth bug) —
+    // camera-controls' own transition system is never invoked for this;
+    // `setLookAt(..., false)` just copies our already-eased values straight
+    // in. Both endpoints are FIXED for the flight's whole duration (see
+    // cameraFlightLifecycle's own FlightState comment, sixth bug) — no
+    // re-aiming at a live position mid-flight, which is what used to alias
+    // a fast orbiter's own motion into visible jitter.
+    //
+    // Outside a flight — and on the very frame one lands, see
+    // advanceCameraFrame for the one-frame flash that used to cause — the
+    // target is anchored on the body's live position (see
+    // advanceSteadyTracking, and this file's header comment, seventh and
+    // eighth bugs). `moveTo(..., false)` moves ONLY the target — camera-
+    // controls' live AND end target together — and never touches its
+    // spherical (orbit angle + dolly distance) state, live or end. So the
+    // camera ends up at `tracked + offset`, with the offset still entirely
+    // the user's: an in-progress orbit/dolly keeps damping smoothly, and a
+    // collision clamp on the live radius persists across frames (the
+    // second bug above) since nothing here rewrites the radius at all.
+    const step = advanceCameraFrame(lifecycle, performance.now(), tracked)
+    lifecycle = step.state
+    if (step.lookAt) {
+      const { position, target } = step.lookAt
       void controls.setLookAt(position[0], position[1], position[2], target[0], target[1], target[2], false)
-      // Settling clears the tracking anchor, so the very next frame's
-      // steady branch re-anchors ABSOLUTELY on the live body — whatever
-      // small gap exists between the predicted endTarget this flight
-      // landed on and where the body really is (see this file's header,
-      // seventh bug) is healed there rather than carried forward.
-      if (progress >= 1) lifecycle = settleFlight(lifecycle)
-    } else {
-      // No flight in progress: keep the camera's target anchored on the
-      // body's live position (see advanceSteadyTracking, and this file's
-      // header comment, seventh and eighth bugs). `moveTo(..., false)`
-      // moves ONLY the target — camera-controls' live AND end target
-      // together — and never touches its spherical (orbit angle + dolly
-      // distance) state, live or end. So the camera ends up at
-      // `tracked + offset`, with the offset still entirely the user's:
-      // an in-progress orbit/dolly keeps damping smoothly, and a
-      // collision clamp on the live radius persists across frames (the
-      // second bug above) since nothing here rewrites the radius at all.
-      const step = advanceSteadyTracking(lifecycle, tracked)
-      lifecycle = step.state
-      if (step.anchor) void controls.moveTo(step.anchor[0], step.anchor[1], step.anchor[2], false)
+    }
+    if (step.anchor) void controls.moveTo(step.anchor[0], step.anchor[1], step.anchor[2], false)
 
+    if (!lifecycle.isFlying) {
       // Narrow the collider exclusions to the current selection plus any
       // previously-excluded body that's still in the camera's way — see
       // releaseClearedColliders. Covers the normal post-flight narrowing,

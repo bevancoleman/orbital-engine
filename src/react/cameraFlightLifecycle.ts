@@ -329,6 +329,71 @@ export function advanceSteadyTracking(
   return { state: { ...state, lastTrackedPosition: anchor }, anchor }
 }
 
+export interface CameraFrameStep {
+  state: CameraFlightLifecycleState
+  /** Camera position + target for this frame (setLookAt) while a flight
+   *  is in progress, including the frame it lands on; null otherwise. */
+  lookAt: { position: WorldVec; target: WorldVec } | null
+  /** Where to anchor the target (moveTo), applied AFTER `lookAt` when both
+   *  are set — see advanceSteadyTracking. */
+  anchor: WorldVec | null
+}
+
+/**
+ * One frame of the flight-or-track decision CameraRig's useFrame makes
+ * after any new flight has been started and any slider input applied:
+ * sample the in-progress flight, or anchor steady tracking on the live
+ * body — and on the frame a flight LANDS, both.
+ *
+ * That landing-frame case is a real bug this fixes (found by the e2e
+ * frame sampler): settling used to leave anchoring to the NEXT frame, so
+ * the landing frame itself was rendered aimed at the flight's PREDICTED
+ * end target. For a fast orbiter that prediction is never exact — the
+ * simulated clock only commits every TICK_INTERVAL_SECONDS (100ms) and
+ * real frames don't land on FLY_DURATION_MS exactly — and at speed the
+ * ISS moves many framing distances in that gap, so every fly-to while
+ * playing flashed the body off-screen for one frame (several hundred ms
+ * at a low frame rate) before snapping back. Anchoring on the live body
+ * in the same frame the flight lands removes that frame.
+ */
+export function advanceCameraFrame(
+  state: CameraFlightLifecycleState,
+  nowMs: number,
+  trackedPosition: WorldVec | null
+): CameraFrameStep {
+  let next = state
+  let lookAt: CameraFrameStep['lookAt'] = null
+  if (next.isFlying) {
+    const { position, target, progress } = sampleFlight(next, nowMs)
+    lookAt = { position, target }
+    if (progress < 1) return { state: next, lookAt, anchor: null }
+    next = settleFlight(next)
+  }
+  const step = advanceSteadyTracking(next, trackedPosition)
+  return { state: step.state, lookAt, anchor: step.anchor }
+}
+
+/**
+ * The viewing distance tracking smoothing should assume (see camera.ts's
+ * computeSmoothedTrackedPosition, which shrinks its window — down to exact
+ * tracking — as this gets smaller): the smaller of the camera distance
+ * CameraRig last reported and the current focus's own framing distance.
+ *
+ * Why not the reported distance alone (a real bug, found by the e2e frame
+ * sampler): that's React state, committed a frame or more after CameraRig
+ * measures it, and only on a >2% change. On the frame a flight lands it
+ * still holds a mid-flight distance many times the framing distance, so
+ * the smoothing window stayed wide open for a true-scale close orbiter
+ * and the tracked point landed off the body — the ISS flashed off-centre
+ * right after arriving, until the distance caught up. The focus distance
+ * is exactly where the flight is taking the camera, so it's never stale
+ * at landing. Erring small is the safe direction: at worst a user who has
+ * zoomed out past the framing distance gets slightly less smoothing.
+ */
+export function trackingViewingDistance(reportedDistance: number, focus: Pick<FocusTarget, 'distance'> | null): number {
+  return focus ? Math.min(reportedDistance, focus.distance) : reportedDistance
+}
+
 /** What the camera is doing right now, as seen from outside — see
  *  describeCameraActivity. */
 export type CameraActivityState = 'flying' | 'tracking' | 'idle'

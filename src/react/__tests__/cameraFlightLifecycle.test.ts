@@ -1,6 +1,7 @@
 import { DEFAULT_VIEW_DIRECTION, FLY_DURATION_MS, type CameraObstacle, type FocusTarget } from '../../camera'
 import {
   acknowledgeNullFocus,
+  advanceCameraFrame,
   advanceSteadyTracking,
   beginFlight,
   createFlightLifecycleState,
@@ -11,6 +12,7 @@ import {
   sameCameraActivity,
   sampleFlight,
   settleFlight,
+  trackingViewingDistance,
   type CameraFlightLifecycleState,
 } from '../cameraFlightLifecycle'
 import type { WorldVec } from '../../render'
@@ -519,3 +521,65 @@ describe('describeCameraActivity / sameCameraActivity (observable state)', () =>
   })
 })
 
+describe('advanceCameraFrame', () => {
+  const started = (): CameraFlightLifecycleState =>
+    beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), {
+      focus: focusAt([100, 0, 0]),
+      focusedId: 'iss',
+      currentCameraPos: [0, 0, 10],
+      currentTargetPos: [0, 0, 0],
+      trackedPosition: null,
+      nowMs: 0,
+    })
+
+  it('mid-flight: samples the tween only — no anchoring on the live body', () => {
+    const step = advanceCameraFrame(started(), FLY_DURATION_MS / 2, [101, 0, 0])
+    expect(step.state.isFlying).toBe(true)
+    expect(step.lookAt).not.toBeNull()
+    expect(step.anchor).toBeNull()
+  })
+
+  it('landing frame: settles AND anchors on the live body in the same frame, not the predicted end', () => {
+    // The body is NOT where the flight predicted (simDate ticks at 100ms;
+    // the landing frame is never exactly FLY_DURATION_MS) — the anchor has
+    // to be the live position on this very frame, or it renders one frame
+    // aimed at the prediction.
+    const live: WorldVec = [103, 2, 0]
+    const step = advanceCameraFrame(started(), FLY_DURATION_MS + 7, live)
+    expect(step.state.isFlying).toBe(false)
+    expect(step.lookAt!.target).toEqual([100, 0, 0])
+    expect(step.anchor).toEqual(live)
+    expect(step.state.lastTrackedPosition).toEqual(live)
+  })
+
+  it('landing frame with nothing tracked (a belt or the whole system): settles on the flight end, no anchor', () => {
+    const step = advanceCameraFrame(started(), FLY_DURATION_MS, null)
+    expect(step.state.isFlying).toBe(false)
+    expect(step.lookAt).not.toBeNull()
+    expect(step.anchor).toBeNull()
+  })
+
+  it('steady frames: no tween, anchors only when the body has moved', () => {
+    const landed = advanceCameraFrame(started(), FLY_DURATION_MS, [100, 0, 0]).state
+    const still = advanceCameraFrame(landed, FLY_DURATION_MS + 16, [100, 0, 0])
+    expect(still.lookAt).toBeNull()
+    expect(still.anchor).toBeNull()
+    const moved = advanceCameraFrame(still.state, FLY_DURATION_MS + 32, [100, 1, 0])
+    expect(moved.lookAt).toBeNull()
+    expect(moved.anchor).toEqual([100, 1, 0])
+  })
+})
+
+describe('trackingViewingDistance', () => {
+  it('uses the reported distance with nothing focused', () => {
+    expect(trackingViewingDistance(250, null)).toBe(250)
+  })
+
+  it('caps a stale, larger reported distance (a flight just landed) at the focus framing distance', () => {
+    expect(trackingViewingDistance(250, focusAt([0, 0, 0], { distance: 4 }))).toBe(4)
+  })
+
+  it('keeps a smaller reported distance (the user zoomed in past the framing)', () => {
+    expect(trackingViewingDistance(2, focusAt([0, 0, 0], { distance: 4 }))).toBe(2)
+  })
+})
