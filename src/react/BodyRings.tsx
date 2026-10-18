@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Points, PointMaterial } from '@react-three/drei'
 import * as THREE from 'three'
 import { sampleBeltParticles } from '../belts'
-import { ringTiltRadians, ringWorldRadius } from '../rings'
+import { ringPlaneQuaternion, ringWorldRadius } from '../rings'
 import type { CelestialBody, RingBand } from '../types'
 import { glowSprite, ringStreakTexture } from './textures'
 
@@ -23,7 +23,7 @@ const RING_PARTICLE_SPREAD_DEG = 1.5
 export function BodyRings({ body, radius, color }: { body: CelestialBody; radius: number; color: string }) {
   if (!body.rings?.length) return null
   return (
-    <group rotation={[ringTiltRadians(body), 0, 0]}>
+    <group quaternion={ringPlaneQuaternion(body)}>
       {body.rings.map((band, index) =>
         band.style === 'particles' ? (
           <RingParticles key={index} body={body} band={band} index={index} radius={radius} color={band.color ?? color} />
