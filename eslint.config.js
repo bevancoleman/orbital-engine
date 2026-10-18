@@ -8,7 +8,7 @@ export default [
     ignores: ['dist/**', 'node_modules/**', 'examples/**', '*.config.js', '*.config.ts'],
   },
   {
-    files: ['src/**/*.{ts,tsx}', 'e2e/**/*.ts'],
+    files: ['src/**/*.{ts,tsx}', 'e2e/**/*.ts', 'scripts/**/*.ts'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -51,6 +51,14 @@ export default [
         beforeEach: 'readonly',
         afterAll: 'readonly',
         afterEach: 'readonly',
+      },
+    },
+  },
+  {
+    files: ['scripts/**/*.ts'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
       },
     },
   },

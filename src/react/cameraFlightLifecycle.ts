@@ -1,6 +1,6 @@
 /**
  * Pure flight-lifecycle state machine extracted from CameraRig.tsx's own
- * useFrame loop — see that file's header comment for the six real, shipped
+ * useFrame loop — see that file's header comment for the real, shipped
  * bugs this exists to make pin-downable by a plain, fast unit test instead
  * of only an e2e run or a manual repro. Every one of those bugs was a
  * SEQUENCING mistake (a stale ref read one frame early, a state flip that
@@ -12,14 +12,14 @@
  * Plain data in, plain data out, no react/three.js/camera-controls
  * dependency at all — CameraRig.tsx is left owning only the genuinely
  * stateful, framework-bound parts (reading camera-controls' own live
- * position, calling setLookAt/dollyTo, wiring up useFrame) and calls into
+ * position, calling setLookAt/moveTo/dollyTo, wiring up useFrame) and calls into
  * this module for every decision about what to fly to, when a flight has
  * finished, and which bodies should currently be excluded from collision.
  */
 
-import { computeFlightEndpoint, type FocusTarget } from '../camera'
-import { FLY_DURATION_MS, applyContextBulge, keepClearOfContextBody, sampleFlightPath, trackingDelta } from '../camera'
+import { FLY_DURATION_MS, computeFlightEndpoint, sampleFlightFrame, type CameraObstacle, type FocusTarget } from '../camera'
 import type { WorldVec } from '../render'
+import { dotVec3, lengthVec3, subtractVec3 } from '../vec3'
 
 export interface FlightState {
   startPosition: WorldVec
@@ -42,9 +42,10 @@ export interface FlightState {
 export interface CameraFlightLifecycleState {
   isFlying: boolean
   flight: FlightState
-  /** The tracked body's world position as of the last frame — compared
-   *  against the current live position each frame to derive how far it
-   *  moved (see camera.ts's trackingDelta). */
+  /** The position steady tracking last ANCHORED the camera's target to
+   *  (see advanceSteadyTracking) — null when nothing is anchored yet (a
+   *  flight just settled or started, or nothing is tracked), which forces
+   *  the next steady frame to re-anchor absolutely on the live body. */
   lastTrackedPosition: WorldVec | null
   /** Which body ids are currently excluded from collision — see
    *  CameraRig.tsx's header comment (first bug) for why this has to widen
@@ -102,6 +103,13 @@ export function focusChanged(state: CameraFlightLifecycleState, focus: FocusTarg
   return focus !== state.lastSeenFocus
 }
 
+/** Ids in `previous` plus the given ids, skipping nulls. */
+function unionIds(previous: ReadonlySet<string>, ...ids: (string | null)[]): Set<string> {
+  const out = new Set(previous)
+  for (const id of ids) if (id !== null) out.add(id)
+  return out
+}
+
 /**
  * Starts a new flight toward `focus` — mirrors CameraRig.tsx's own
  * flight-start block, as a pure function: given where the camera
@@ -115,9 +123,13 @@ export function focusChanged(state: CameraFlightLifecycleState, focus: FocusTarg
  * avoids (never re-aiming at a fast orbiter's live position mid-flight).
  *
  * Also widens `excludedColliderIds` to cover both the outgoing and
- * incoming body (see CameraRig's header, first bug) and records
- * `trackedPosition` as the new baseline for steady-state tracking once
- * this flight later settles.
+ * incoming body (see CameraRig's header, first bug). Retargeting while a
+ * flight is STILL in progress (A -> B -> C before A -> B settles) keeps
+ * every body already excluded too — a real bug: replacing the set with
+ * just {C, B} made A solid again while the camera could still be inside
+ * it, and camera-controls' collision test yanked the live distance in
+ * instantly. Bodies only leave the set via releaseClearedColliders, once
+ * the camera is genuinely clear of them.
  */
 export function beginFlight(
   state: CameraFlightLifecycleState,
@@ -130,7 +142,7 @@ export function beginFlight(
     nowMs: number
   }
 ): CameraFlightLifecycleState {
-  const { focus, focusedId, currentCameraPos, currentTargetPos, trackedPosition, nowMs } = params
+  const { focus, focusedId, currentCameraPos, currentTargetPos, nowMs } = params
   const {
     position: endPosition,
     target: endTarget,
@@ -148,9 +160,9 @@ export function beginFlight(
       contextBody: focus.contextBody,
       predictedTargetAt: focus.predictedTargetAt ?? null,
     },
-    lastTrackedPosition: trackedPosition ? [...trackedPosition] : null,
+    lastTrackedPosition: null,
     lastGoodDirection: direction,
-    excludedColliderIds: new Set([focusedId, state.previousFocusedId].filter((id): id is string => id !== null)),
+    excludedColliderIds: unionIds(state.isFlying ? state.excludedColliderIds : new Set(), focusedId, state.previousFocusedId),
     previousFocusedId: focusedId,
     lastSeenFocus: focus,
   }
@@ -164,18 +176,85 @@ export function acknowledgeNullFocus(state: CameraFlightLifecycleState): CameraF
 }
 
 /**
- * Ends a flight — used both once it's actually run its course and when a
- * manual slider drag interrupts one early (see CameraRig.tsx). The
- * outgoing body becomes a legitimate collider again only here, matching
- * CameraRig's own header comment (first bug) on why BOTH bodies stay
- * excluded until this exact point, not before.
+ * Ends a flight once it's run its course (see interruptFlight for the
+ * zoom-slider case that ends one early). Clears the tracking anchor so the
+ * very next steady frame re-anchors ABSOLUTELY on the body's live position
+ * (see advanceSteadyTracking) rather than continuing from wherever the
+ * flight's predicted end target happened to land. Collider exclusions are
+ * deliberately left alone here: releaseClearedColliders narrows them once
+ * the camera is actually clear of each body (see CameraRig's header, first
+ * bug, for why narrowing blindly at settle time isn't safe).
  */
-export function settleFlight(state: CameraFlightLifecycleState, focusedId: string | null): CameraFlightLifecycleState {
-  return {
-    ...state,
-    isFlying: false,
-    excludedColliderIds: new Set(focusedId ? [focusedId] : []),
+export function settleFlight(state: CameraFlightLifecycleState): CameraFlightLifecycleState {
+  return { ...state, isFlying: false, lastTrackedPosition: null }
+}
+
+/**
+ * Ends an in-progress flight EARLY — the zoom slider (see CameraRig) —
+ * and says where the target should be anchored before dollying: on the
+ * live tracked body, or the flight's own destination when nothing is
+ * tracked (a belt or whole-system focus). A real bug this fixes: the slider
+ * used to settle the flight wherever its tween happened to be (e.g. 38% of
+ * the way from Earth to the Moon) and then track empty space from that
+ * frozen mid-flight look-at point.
+ */
+export function interruptFlight(
+  state: CameraFlightLifecycleState,
+  trackedPosition: WorldVec | null
+): { state: CameraFlightLifecycleState; anchor: WorldVec } {
+  const anchor: WorldVec = trackedPosition ? [...trackedPosition] : [...state.flight.endTarget]
+  return { state: { ...settleFlight(state), lastTrackedPosition: trackedPosition ? anchor : null }, anchor }
+}
+
+/** How much larger than a body's own true radius its "is it still in the
+ *  way" test is — a small margin so a camera skimming the surface still
+ *  counts as not clear yet. */
+const COLLIDER_CLEARANCE_FACTOR = 1.05
+
+/** True when `body` is in the way of camera-controls' collision raycast
+ *  — i.e. the segment from the target to the camera passes through (or
+ *  starts/ends inside) the body's padded sphere. That's exactly when making
+ *  it a live collider would pull the camera in. */
+function blocksView(body: CameraObstacle, cameraPos: WorldVec, targetPos: WorldVec): boolean {
+  const radius = body.radius * COLLIDER_CLEARANCE_FACTOR
+  const segment = subtractVec3(cameraPos, targetPos)
+  const lengthSquared = dotVec3(segment, segment)
+  const toCentre = subtractVec3(body.position, targetPos)
+  const along = lengthSquared > 0 ? Math.min(1, Math.max(0, dotVec3(toCentre, segment) / lengthSquared)) : 0
+  const closest: WorldVec = [
+    targetPos[0] + segment[0] * along,
+    targetPos[1] + segment[1] * along,
+    targetPos[2] + segment[2] * along,
+  ]
+  return lengthVec3(subtractVec3(body.position, closest)) < radius
+}
+
+/**
+ * Narrows `excludedColliderIds` (outside a flight only) down to the
+ * current selection plus any previously-excluded body that's STILL in the
+ * camera's way (see blocksView) — called every non-flying frame. Replaces
+ * the old narrow-to-the-selection-at-settle rule, which had two real gaps:
+ * a slider-interrupted flight could settle with the camera still inside
+ * the outgoing body, and deselecting (focusedId null) never narrowed at
+ * all, so the camera could fly straight through the last-selected body by
+ * hand forever after. Returns `state` itself when nothing changes, so the
+ * caller can cheaply detect "same set" by identity.
+ */
+export function releaseClearedColliders(
+  state: CameraFlightLifecycleState,
+  params: { focusedId: string | null; cameraPos: WorldVec; targetPos: WorldVec; colliderBodies: readonly CameraObstacle[] }
+): CameraFlightLifecycleState {
+  if (state.isFlying) return state
+  const { focusedId, cameraPos, targetPos, colliderBodies } = params
+  const next = new Set<string>()
+  if (focusedId !== null) next.add(focusedId)
+  for (const id of state.excludedColliderIds) {
+    if (next.has(id)) continue
+    const body = colliderBodies.find((b) => b.id === id)
+    if (body && blocksView(body, cameraPos, targetPos)) next.add(id)
   }
+  const unchanged = next.size === state.excludedColliderIds.size && [...next].every((id) => state.excludedColliderIds.has(id))
+  return unchanged ? state : { ...state, excludedColliderIds: next }
 }
 
 export interface FlightSample {
@@ -200,59 +279,43 @@ export interface FlightSample {
 export function sampleFlight(state: CameraFlightLifecycleState, nowMs: number): FlightSample {
   const { flight } = state
   const progress = Math.min(1, Math.max(0, (nowMs - flight.startTimeMs) / FLY_DURATION_MS))
-  const { position: pathPosition, target: pathTarget } = sampleFlightPath(
-    flight.startPosition,
-    flight.startTarget,
-    flight.endPosition,
-    flight.endTarget,
-    progress,
-    flight.predictedTargetAt ?? undefined
-  )
-  // pathTarget is sampleFlightPath's own independently-lerped target — a
-  // straight line between two points that can each be on very different
-  // sides of a shared nearby parent, so pushed back outside the context
-  // body's own volume (a no-op whenever it's already clear) before it's
-  // used as the look-at anchor for anything below.
-  const target = keepClearOfContextBody(pathTarget, flight.contextBody)
-  const position = applyContextBulge(
-    pathPosition,
-    flight.startPosition,
-    flight.startTarget,
-    flight.endPosition,
-    flight.endTarget,
-    target,
-    flight.contextBody,
-    progress
-  )
+  // The full tween + keep-clear target + context bulge composition lives
+  // in camera.ts (sampleFlightFrame), shared with routeCameraSimulator so
+  // the regression fixture exercises exactly what's rendered here.
+  const { position, target } = sampleFlightFrame(flight, progress)
   return { position, target, progress }
 }
 
-/** Updates the live-tracked-position baseline without changing anything
- *  else — used during an in-progress flight (see CameraRig.tsx), which
- *  doesn't need this value for its own math, but keeps it fresh so the
- *  steady-state branch's very first post-flight delta (see
- *  advanceSteadyTracking) is an ordinary, tiny one-frame motion instead of
- *  a big correction. */
-export function recordLiveTrackedPosition(
-  state: CameraFlightLifecycleState,
-  trackedPosition: WorldVec | null
-): CameraFlightLifecycleState {
-  return { ...state, lastTrackedPosition: trackedPosition ? [...trackedPosition] : null }
-}
-
 /**
- * Steady-state (not flying) tracking update: how far `trackedPosition` has
- * moved since the last frame (see trackingDelta), plus the new state to
- * carry forward. `delta` is null whenever there's nothing to apply — no
- * previous position, the body hasn't moved, or nothing's tracked at all
- * (`trackedPosition` null, e.g. nothing selected) — the caller should
- * leave the live camera/target untouched in that case.
+ * Steady-state (not flying) tracking update: the position the camera's
+ * target should be ANCHORED to this frame — the body's live position —
+ * or null when there's nothing new to apply (nothing tracked, or the body
+ * hasn't moved since it was last anchored). The caller moves only the
+ * TARGET there (camera-controls' moveTo), leaving the camera's offset from
+ * it — the part the user orbits and dollies — untouched, so the camera is
+ * always `tracked + offset`.
+ *
+ * Absolute, not incremental: this used to return only the frame-to-frame
+ * DELTA of the tracked position, applied on top of wherever the target
+ * already was. A real bug (review finding A1): any gap between the
+ * flight's PREDICTED end target and the body's real position at the
+ * moment of settling (render-to-frame lag, the settle frame landing a few
+ * ms past FLY_DURATION_MS, a smoothed vs. raw position) was then carried
+ * forward forever. For the ISS at 2 d/s, a 1ms mismatch is ~330x its
+ * framing distance — the body left permanently off-screen. Anchoring on
+ * the live position heals any such gap on the very next frame.
  */
 export function advanceSteadyTracking(
   state: CameraFlightLifecycleState,
   trackedPosition: WorldVec | null
-): { state: CameraFlightLifecycleState; delta: WorldVec | null } {
-  if (!trackedPosition) return { state: recordLiveTrackedPosition(state, null), delta: null }
-  const delta = trackingDelta(state.lastTrackedPosition, trackedPosition)
-  return { state: recordLiveTrackedPosition(state, trackedPosition), delta }
+): { state: CameraFlightLifecycleState; anchor: WorldVec | null } {
+  if (!trackedPosition) {
+    return { state: state.lastTrackedPosition ? { ...state, lastTrackedPosition: null } : state, anchor: null }
+  }
+  const last = state.lastTrackedPosition
+  if (last && last[0] === trackedPosition[0] && last[1] === trackedPosition[1] && last[2] === trackedPosition[2]) {
+    return { state, anchor: null }
+  }
+  const anchor: WorldVec = [trackedPosition[0], trackedPosition[1], trackedPosition[2]]
+  return { state: { ...state, lastTrackedPosition: anchor }, anchor }
 }

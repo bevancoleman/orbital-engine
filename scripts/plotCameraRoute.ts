@@ -186,6 +186,8 @@ function renderPhaseSvg(
   speedLabel: string
 ): string {
   const first = legFrames[0]
+  if (!first) throw new Error(`renderPhaseSvg: leg ${legIndex} has no frames`)
+  const targetBodyId = first.bodyId
   const parentLabel = first.parentBodyId ? `parent: ${first.parentBodyId}` : 'parent: none (root body)'
   const title = `Phase ${legIndex + 1}: framing ${first.bodyId} (${parentLabel}) — ${speedLabel}`
 
@@ -219,7 +221,7 @@ function renderPhaseSvg(
   {
     let runStart: number | null = null
     for (let i = 0; i < legFrames.length; i++) {
-      const stopped = !legFrames[i].moved
+      const stopped = !legFrames[i]!.moved
       if (stopped && runStart === null) runStart = i
       if (!stopped && runStart !== null) {
         stoppedRuns.push({ start: runStart, end: i })
@@ -247,7 +249,7 @@ function renderPhaseSvg(
     const parts: string[] = []
     let runStart = 0
     for (let i = 1; i <= fs.length; i++) {
-      const prev = fs[i - 1]
+      const prev = fs[i - 1]!
       const cur = fs[i]
       if (!cur || cur.phase !== prev.phase) {
         parts.push(polyline(fs.slice(runStart, i), phaseColor(prev.phase), dash))
@@ -260,7 +262,7 @@ function renderPhaseSvg(
   function directionArrows(fs: CameraRouteFrame[]): string {
     const arrows: string[] = []
     for (let i = 0; i < fs.length; i += Math.max(1, Math.round(fs.length / 24))) {
-      const f = fs[i]
+      const f = fs[i]!
       const [x1, y1] = projectTop([f.cameraPos[0], f.cameraPos[2]])
       const [x2, y2] = projectTop([f.target[0], f.target[2]])
       const dx = x2 - x1
@@ -292,7 +294,7 @@ function renderPhaseSvg(
     const markers: string[] = []
     for (const [bodyId, pos] of system.positions) {
       const [x, y] = projectTop([pos[0], pos[2]])
-      const isTarget = bodyId === first.bodyId
+      const isTarget = bodyId === targetBodyId
       const r = isTarget ? 5 : 3
       const fill = isTarget ? '#1a1a1a' : '#888'
       const fontWeight = isTarget ? ' font-weight="bold"' : ''
@@ -310,7 +312,7 @@ function renderPhaseSvg(
   function stoppedMarkers(): string {
     return stoppedRuns
       .map(({ start }) => {
-        const [x, y] = projectTop([legFrames[start].cameraPos[0], legFrames[start].cameraPos[2]])
+        const [x, y] = projectTop([legFrames[start]!.cameraPos[0], legFrames[start]!.cameraPos[2]])
         // A small ring around the existing path point, distinct from both
         // the phase-colour line and the system's own body markers.
         return `<circle cx="${x}" cy="${y}" r="8" fill="none" stroke="#1a1a1a" stroke-width="1.5" stroke-dasharray="2,2" />`
