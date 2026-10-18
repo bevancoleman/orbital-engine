@@ -1,17 +1,19 @@
-import { FLY_DURATION_MS, type FocusTarget } from '../../camera'
+import { DEFAULT_VIEW_DIRECTION, FLY_DURATION_MS, type CameraObstacle, type FocusTarget } from '../../camera'
 import {
   acknowledgeNullFocus,
   advanceSteadyTracking,
   beginFlight,
   createFlightLifecycleState,
   focusChanged,
-  recordLiveTrackedPosition,
+  interruptFlight,
+  releaseClearedColliders,
   sampleFlight,
   settleFlight,
+  type CameraFlightLifecycleState,
 } from '../cameraFlightLifecycle'
 import type { WorldVec } from '../../render'
 
-const INITIAL_DIRECTION: WorldVec = [0, 0.447, 0.894]
+const INITIAL_DIRECTION: WorldVec = DEFAULT_VIEW_DIRECTION
 
 function focusAt(position: WorldVec, overrides: Partial<FocusTarget> = {}): FocusTarget {
   return { position, distance: 10, lookBias: null, contextBody: null, ...overrides }
@@ -165,26 +167,51 @@ describe('beginFlight', () => {
     })
     expect([...next.excludedColliderIds]).toEqual(['moon'])
   })
+
+  // Real bug: retargeting A -> B -> C before the first flight settled
+  // replaced the exclusions with just {C, B}, so A became solid again while
+  // the camera could still be inside it — an instant distance yank.
+  it('keeps every body from an interrupted flight excluded when retargeting mid-flight', () => {
+    const toB = beginFlight(
+      { ...createFlightLifecycleState(INITIAL_DIRECTION), previousFocusedId: 'a' },
+      {
+        focus: focusAt([10, 0, 0]),
+        focusedId: 'b',
+        currentCameraPos: [0, 0, 20],
+        currentTargetPos: [0, 0, 0],
+        trackedPosition: null,
+        nowMs: 0,
+      }
+    )
+    const toC = beginFlight(toB, {
+      focus: focusAt([20, 0, 0]),
+      focusedId: 'c',
+      currentCameraPos: [5, 0, 10],
+      currentTargetPos: [5, 0, 0],
+      trackedPosition: null,
+      nowMs: 100,
+    })
+    expect([...toC.excludedColliderIds].sort()).toEqual(['a', 'b', 'c'])
+  })
 })
 
 describe('settleFlight', () => {
-  it('narrows the collider exclusion down to just the current selection', () => {
-    const state = createFlightLifecycleState(INITIAL_DIRECTION)
-    const flying = beginFlight(state, {
+  it('ends the flight and drops the tracking anchor so the next steady frame re-anchors absolutely', () => {
+    const flying = beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), {
       focus: focusAt([10, 0, 0]),
       focusedId: 'moon',
       currentCameraPos: [10, 0, 20],
       currentTargetPos: [10, 0, 0],
-      trackedPosition: null,
+      trackedPosition: [10, 0, 0],
       nowMs: 0,
     })
-    const settled = settleFlight(flying, 'moon')
+    const settled = settleFlight(flying)
     expect(settled.isFlying).toBe(false)
-    expect([...settled.excludedColliderIds]).toEqual(['moon'])
+    expect(settled.lastTrackedPosition).toBeNull()
   })
 
-  it('excludes nothing once settled if nothing is selected', () => {
-    const state = createFlightLifecycleState(INITIAL_DIRECTION)
+  it('leaves collider exclusions for releaseClearedColliders to narrow once the camera is actually clear', () => {
+    const state = { ...createFlightLifecycleState(INITIAL_DIRECTION), previousFocusedId: 'earth' }
     const flying = beginFlight(state, {
       focus: focusAt([10, 0, 0]),
       focusedId: 'moon',
@@ -193,8 +220,95 @@ describe('settleFlight', () => {
       trackedPosition: null,
       nowMs: 0,
     })
-    const settled = settleFlight(flying, null)
-    expect(settled.excludedColliderIds.size).toBe(0)
+    expect([...settleFlight(flying).excludedColliderIds].sort()).toEqual(['earth', 'moon'])
+  })
+})
+
+describe('interruptFlight (zoom slider mid-flight)', () => {
+  // Real bug: the slider used to settle a flight wherever its tween
+  // happened to be — e.g. 38% of the way from Earth to the Moon — and then
+  // track empty space from that frozen mid-flight look-at point.
+  function midFlight(): CameraFlightLifecycleState {
+    return beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), {
+      focus: focusAt([100, 0, 0]),
+      focusedId: 'moon',
+      currentCameraPos: [0, 0, 20],
+      currentTargetPos: [0, 0, 0],
+      trackedPosition: [0, 0, 0],
+      nowMs: 0,
+    })
+  }
+
+  it('re-anchors on the live tracked body when there is one', () => {
+    const { state, anchor } = interruptFlight(midFlight(), [101, 0, 0])
+    expect(state.isFlying).toBe(false)
+    expect(anchor).toEqual([101, 0, 0])
+    expect(state.lastTrackedPosition).toEqual([101, 0, 0])
+  })
+
+  it("falls back to the flight's own destination when nothing is tracked (a belt or system focus)", () => {
+    expect(interruptFlight(midFlight(), null).anchor).toEqual([100, 0, 0])
+  })
+})
+
+describe('releaseClearedColliders', () => {
+  const earth: CameraObstacle = { id: 'earth', position: [0, 0, 0], radius: 1 }
+  const moon: CameraObstacle = { id: 'moon', position: [10, 0, 0], radius: 0.25 }
+  function settledWith(excluded: string[]): CameraFlightLifecycleState {
+    return { ...createFlightLifecycleState(INITIAL_DIRECTION), excludedColliderIds: new Set(excluded) }
+  }
+
+  it('narrows to just the current selection once the camera is clear of the outgoing body', () => {
+    const next = releaseClearedColliders(settledWith(['earth', 'moon']), {
+      focusedId: 'moon',
+      cameraPos: [10, 0, 2],
+      targetPos: [10, 0, 0],
+      colliderBodies: [earth, moon],
+    })
+    expect([...next.excludedColliderIds]).toEqual(['moon'])
+  })
+
+  it('keeps the outgoing body excluded while it still sits between the camera and its target', () => {
+    // Camera on the far side of Earth from the Moon — re-enabling Earth's
+    // collider here is exactly the instant distance yank the exclusion
+    // window exists to prevent.
+    const next = releaseClearedColliders(settledWith(['earth', 'moon']), {
+      focusedId: 'moon',
+      cameraPos: [-5, 0, 0],
+      targetPos: [10, 0, 0],
+      colliderBodies: [earth, moon],
+    })
+    expect([...next.excludedColliderIds].sort()).toEqual(['earth', 'moon'])
+  })
+
+  it('releases the last selection after a deselect once the camera clears it (it used to stay excluded forever)', () => {
+    const inside = releaseClearedColliders(settledWith(['moon']), {
+      focusedId: null,
+      cameraPos: [10, 0, 0.1],
+      targetPos: [10, 0, 0],
+      colliderBodies: [earth, moon],
+    })
+    expect([...inside.excludedColliderIds]).toEqual(['moon'])
+    const clear = releaseClearedColliders(inside, {
+      focusedId: null,
+      cameraPos: [10, 0, 5],
+      targetPos: [10, 0, 4],
+      colliderBodies: [earth, moon],
+    })
+    expect(clear.excludedColliderIds.size).toBe(0)
+  })
+
+  it('never narrows during a flight, and returns the same state object when nothing changes', () => {
+    const params = {
+      focusedId: 'moon',
+      cameraPos: [10, 0, 2] as WorldVec,
+      targetPos: [10, 0, 0] as WorldVec,
+      colliderBodies: [earth, moon],
+    }
+    const flying = { ...settledWith(['earth', 'moon']), isFlying: true }
+    expect(releaseClearedColliders(flying, params)).toBe(flying)
+    const settled = settledWith(['moon'])
+    expect(releaseClearedColliders(settled, params)).toBe(settled)
   })
 })
 
@@ -227,92 +341,136 @@ describe('sampleFlight', () => {
     })
     expect(sampleFlight(state, 500).progress).toBe(0)
   })
-})
 
-describe('advanceSteadyTracking', () => {
-  it('reports no delta with nothing tracked', () => {
-    const state = createFlightLifecycleState(INITIAL_DIRECTION)
-    const { delta, state: next } = advanceSteadyTracking(state, null)
-    expect(delta).toBeNull()
-    expect(next.lastTrackedPosition).toBeNull()
-  })
-
-  it('reports no delta on the first frame a body is tracked (nothing to compare against yet)', () => {
-    const state = createFlightLifecycleState(INITIAL_DIRECTION)
-    const { delta, state: next } = advanceSteadyTracking(state, [1, 2, 3])
-    expect(delta).toBeNull()
-    expect(next.lastTrackedPosition).toEqual([1, 2, 3])
-  })
-
-  it('reports exactly how far the body moved since the last frame', () => {
-    let state = createFlightLifecycleState(INITIAL_DIRECTION)
-    state = advanceSteadyTracking(state, [1, 2, 3]).state
-    const { delta } = advanceSteadyTracking(state, [4, 2, 5])
-    expect(delta).toEqual([3, 0, 2])
-  })
-
-  it('reports no delta once the body genuinely stops moving', () => {
-    let state = createFlightLifecycleState(INITIAL_DIRECTION)
-    state = advanceSteadyTracking(state, [1, 2, 3]).state
-    const { delta } = advanceSteadyTracking(state, [1, 2, 3])
-    expect(delta).toBeNull()
-  })
-})
-
-describe('recordLiveTrackedPosition', () => {
-  // Keeps the steady-state baseline fresh DURING a flight (see
-  // CameraRig.tsx's own comment) so the very first post-flight tracking
-  // delta is an ordinary one-frame motion, not a big correction.
-  it('updates lastTrackedPosition without touching anything else about the flight', () => {
-    const flying = beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), {
-      focus: focusAt([10, 0, 0]),
-      focusedId: 'a',
-      currentCameraPos: [10, 0, 20],
-      currentTargetPos: [10, 0, 0],
+  // Review finding A2's own scenario: a flight past Earth (radius 0.0055 at
+  // the origin) from a wide shot down to a true-scale close-up on the far
+  // side. The context bulge used to snap the view ~29° in a single frame at
+  // the moment the context body stopped fitting the natural framing.
+  it('never turns the view by more than a fraction of a degree between finely-spaced samples across the bulge crossover', () => {
+    const state = beginFlight(createFlightLifecycleState([0, 1, 0]), {
+      focus: focusAt([-0.006, 1e-4, 0], { distance: 1e-6, contextBody: { position: [0, 0, 0], radius: 0.0055 } }),
+      focusedId: 'hubble',
+      currentCameraPos: [0.0059, 5, 0],
+      currentTargetPos: [0.0059, 0, 0],
       trackedPosition: null,
       nowMs: 0,
     })
-    const updated = recordLiveTrackedPosition(flying, [7, 8, 9])
-    expect(updated.lastTrackedPosition).toEqual([7, 8, 9])
-    expect(updated.isFlying).toBe(true)
-    expect(updated.flight).toBe(flying.flight)
+    const samples = 5400 // 100x the real 60fps frame density
+    const viewAt = (i: number): WorldVec => {
+      const { position, target } = sampleFlight(state, (i / samples) * FLY_DURATION_MS)
+      return [target[0] - position[0], target[1] - position[1], target[2] - position[2]]
+    }
+    let worst = 0
+    let previous = viewAt(0)
+    for (let i = 1; i <= samples; i++) {
+      const current = viewAt(i)
+      const cos =
+        (previous[0] * current[0] + previous[1] * current[1] + previous[2] * current[2]) /
+        (Math.hypot(...previous) * Math.hypot(...current))
+      worst = Math.max(worst, (Math.acos(Math.min(1, Math.max(-1, cos))) * 180) / Math.PI)
+      previous = current
+    }
+    expect(worst).toBeLessThan(1)
   })
 })
 
-describe('a full flight-then-settle-then-track sequence, mirroring CameraRig.tsx\'s own useFrame loop', () => {
-  it('flies, settles at FLY_DURATION_MS, then tracks steadily with no discontinuity', () => {
+describe('advanceSteadyTracking', () => {
+  it('reports no anchor with nothing tracked', () => {
+    const state = createFlightLifecycleState(INITIAL_DIRECTION)
+    const { anchor, state: next } = advanceSteadyTracking(state, null)
+    expect(anchor).toBeNull()
+    expect(next.lastTrackedPosition).toBeNull()
+  })
+
+  it('anchors absolutely on the very first tracked frame (nothing anchored yet)', () => {
+    const state = createFlightLifecycleState(INITIAL_DIRECTION)
+    const { anchor, state: next } = advanceSteadyTracking(state, [1, 2, 3])
+    expect(anchor).toEqual([1, 2, 3])
+    expect(next.lastTrackedPosition).toEqual([1, 2, 3])
+  })
+
+  it("anchors on the body's live position whenever it moves", () => {
     let state = createFlightLifecycleState(INITIAL_DIRECTION)
-    const focus = focusAt([10, 0, 0], { distance: 5 })
+    state = advanceSteadyTracking(state, [1, 2, 3]).state
+    expect(advanceSteadyTracking(state, [4, 2, 5]).anchor).toEqual([4, 2, 5])
+  })
 
-    state = beginFlight(state, {
-      focus,
-      focusedId: 'moon',
-      currentCameraPos: [0, 0, 20],
-      currentTargetPos: [0, 0, 0],
-      trackedPosition: [10, 0, 0],
-      nowMs: 0,
+  it('reports no anchor once the body genuinely stops moving (leaves manual panning alone while paused)', () => {
+    let state = createFlightLifecycleState(INITIAL_DIRECTION)
+    state = advanceSteadyTracking(state, [1, 2, 3]).state
+    expect(advanceSteadyTracking(state, [1, 2, 3]).anchor).toBeNull()
+  })
+})
+
+/** Mirrors CameraRig's own per-frame sequence against a minimal stand-in
+ *  for camera-controls: the camera is `target + offset`, a flight frame
+ *  writes both (setLookAt), and a tracking anchor moves only the target
+ *  (moveTo) — leaving the offset, the part the user orbits/dollies,
+ *  untouched. Returns the steady-phase target-vs-body error per frame. */
+function runRig(params: { bodyAt: (nowMs: number) => WorldVec; focus: FocusTarget; frameTimesMs: number[] }): {
+  offset: WorldVec
+  errors: number[]
+} {
+  let state = createFlightLifecycleState(INITIAL_DIRECTION)
+  let target: WorldVec = [0, 0, 0]
+  let offset: WorldVec = [0, 0, 20]
+  const errors: number[] = []
+  state = beginFlight(state, {
+    focus: params.focus,
+    focusedId: 'iss',
+    currentCameraPos: offset,
+    currentTargetPos: target,
+    trackedPosition: params.bodyAt(0),
+    nowMs: 0,
+  })
+  for (const nowMs of params.frameTimesMs) {
+    const tracked = params.bodyAt(nowMs)
+    if (state.isFlying) {
+      const sample = sampleFlight(state, nowMs)
+      target = sample.target
+      offset = [sample.position[0] - target[0], sample.position[1] - target[1], sample.position[2] - target[2]]
+      if (sample.progress >= 1) state = settleFlight(state)
+    } else {
+      const step = advanceSteadyTracking(state, tracked)
+      state = step.state
+      if (step.anchor) target = step.anchor
+      errors.push(Math.hypot(target[0] - tracked[0], target[1] - tracked[1], target[2] - tracked[2]))
+    }
+  }
+  return { offset, errors }
+}
+
+describe("a full flight-then-settle-then-track sequence, mirroring CameraRig.tsx's own useFrame loop", () => {
+  it('flies, settles at FLY_DURATION_MS, then tracks steadily with no discontinuity', () => {
+    const { errors, offset } = runRig({
+      bodyAt: () => [10, 0, 0],
+      focus: focusAt([10, 0, 0], { distance: 5 }),
+      frameTimesMs: Array.from({ length: 120 }, (_, i) => (i + 1) * (1000 / 60)),
     })
-    expect(state.isFlying).toBe(true)
+    expect(errors.length).toBeGreaterThan(0)
+    for (const error of errors) expect(error).toBe(0)
+    expect(Math.hypot(...offset)).toBeCloseTo(5, 9)
+  })
 
-    const midSample = sampleFlight(state, FLY_DURATION_MS / 2)
-    expect(midSample.progress).toBeGreaterThan(0)
-    expect(midSample.progress).toBeLessThan(1)
-    state = recordLiveTrackedPosition(state, [10, 0, 0])
-
-    const finalSample = sampleFlight(state, FLY_DURATION_MS)
-    expect(finalSample.progress).toBe(1)
-    state = recordLiveTrackedPosition(state, [10, 0, 0])
-    state = settleFlight(state, 'moon')
-    expect(state.isFlying).toBe(false)
-
-    // Steady tracking picks up seamlessly: the body hasn't moved since the
-    // last recorded position, so the very first post-flight frame reports
-    // no delta at all (not a big "catch up" jump).
-    const { delta } = advanceSteadyTracking(state, [10, 0, 0])
-    expect(delta).toBeNull()
-
-    // A genuine subsequent move IS reported.
-    const { delta: nextDelta } = advanceSteadyTracking(state, [11, 0, 0])
-    expect(nextDelta).toEqual([1, 0, 0])
+  // Real bug (review finding A1): steady tracking used to apply only
+  // frame-to-frame deltas, so any gap between the flight's PREDICTED end
+  // target and the body's real position at the moment of settling (render
+  // lag, a settle frame landing a few ms past FLY_DURATION_MS, a smoothed
+  // vs. raw position) was carried forward forever — for a fast orbiter at
+  // high playback speed, enough to leave the body permanently off-screen.
+  it('stays exactly on a MOVING body after an imperfectly-timed settle — no permanent drift', () => {
+    const speed = 0.01 // world units per ms — huge relative to the 1e-3 framing distance below
+    const bodyAt = (nowMs: number): WorldVec => [nowMs * speed, 0, 0]
+    // Prediction deliberately 3ms stale (render lag), and frames that never
+    // land exactly on FLY_DURATION_MS (the settle frame overshoots it).
+    const focus = focusAt(bodyAt(FLY_DURATION_MS - 3), { distance: 1e-3 })
+    const frameTimesMs = Array.from({ length: 200 }, (_, i) => 7 + i * 16.7)
+    const { errors, offset } = runRig({ bodyAt, focus, frameTimesMs })
+    expect(errors.length).toBeGreaterThan(100)
+    // Every steady frame — including the very first one after settling —
+    // has the target exactly on the live body, however far it's moved.
+    for (const error of errors) expect(error).toBe(0)
+    // ...and the camera's own offset (framing distance) survived intact.
+    expect(Math.hypot(...offset)).toBeCloseTo(1e-3, 9)
   })
 })

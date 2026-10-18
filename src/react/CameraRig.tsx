@@ -2,14 +2,16 @@ import { useEffect, useMemo, useRef, type MutableRefObject } from 'react'
 import { useThree, useFrame } from '@react-three/fiber'
 import { CameraControls } from '@react-three/drei'
 import * as THREE from 'three'
-import { type CameraObstacle, type FocusTarget } from '../camera'
+import { DEFAULT_VIEW_DIRECTION, MAX_CAMERA_DISTANCE, type CameraObstacle, type FocusTarget } from '../camera'
+import type { WorldVec } from '../render'
 import {
   acknowledgeNullFocus,
   advanceSteadyTracking,
   beginFlight,
   createFlightLifecycleState,
   focusChanged,
-  recordLiveTrackedPosition,
+  interruptFlight,
+  releaseClearedColliders,
   sampleFlight,
   settleFlight,
 } from './cameraFlightLifecycle'
@@ -45,7 +47,9 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  position jumping before the smooth flight to B even begins. The fix:
  *  exclude BOTH the outgoing and incoming body for the duration of the
  *  flight (excludedColliderIds below), only narrowing back down to just
- *  the new selection once that flight actually settles.
+ *  the new selection once the camera is genuinely clear of the outgoing
+ *  body (see cameraFlightLifecycle's releaseClearedColliders — it used to
+ *  narrow blindly at settle time, and never at all after a deselect).
  *
  *  Second real, observed bug this file works around: camera-controls
  *  actually keeps TWO camera/target states internally — a "live" one
@@ -173,7 +177,29 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  both ends — see applyContextBulge's own comment for why this is a
  *  deliberately simple approximation (centred on the hero, not a genuine
  *  off-centre dual-target frustum fit) rather than the fully general
- *  algorithm. */
+ *  algorithm.
+ *
+ *  Seventh real bug (review finding A1): steady tracking used to apply
+ *  only the tracked body's frame-to-frame DELTA on top of wherever the
+ *  target already sat. Any gap between the flight's predicted endTarget
+ *  and the body's real position at the moment of settling — render-to-
+ *  frame lag, the settle frame landing a few ms past FLY_DURATION_MS, a
+ *  smoothed vs. raw position — was then permanent: for the ISS at 2 d/s,
+ *  a 1ms mismatch is ~330x its framing distance, the body left off-screen
+ *  for good. Tracking now ANCHORS the target on the live position every
+ *  frame it moves (see advanceSteadyTracking), so any such gap heals on
+ *  the very next frame.
+ *
+ *  Eighth real bug (review finding A5): that delta was applied with
+ *  `setLookAt(..., false)`, which overwrites camera-controls' end state
+ *  with its live one and clears its user-control flags — every tracking
+ *  frame discarded any in-progress orbit/dolly damping, so manual input
+ *  felt sluggish and sticky while following a moving body. The anchor is
+ *  applied with `moveTo(..., false)` instead, which moves only the target
+ *  and leaves the spherical (orbit + dolly) state, live and end, alone.
+ *  (A side effect worth knowing: while the tracked body is moving, a
+ *  manual PAN is overridden each frame — tracking means the target stays
+ *  on the body. Panning still works while paused.) */
 export function CameraRig({
   focus,
   trackedPosition,
@@ -236,15 +262,49 @@ export function CameraRig({
   // Owns everything about whether a flight is in progress, where it's
   // headed, and which bodies are currently excluded from collision — see
   // cameraFlightLifecycle.ts, extracted out of this component specifically
-  // so the sequencing this file's header documents six real bugs about can
-  // be pinned down by a plain, fast unit test (cameraFlightLifecycle.test.ts)
+  // so the sequencing this file's header documents real bugs about can be
+  // pinned down by a plain, fast unit test (cameraFlightLifecycle.test.ts)
   // instead of only an e2e run or a manual repro.
-  const flightLifecycleRef = useRef(createFlightLifecycleState([0, 0.447, 0.894])) // matches the initial [0,60,120] camera offset
+  const flightLifecycleRef = useRef(createFlightLifecycleState(DEFAULT_VIEW_DIRECTION))
+
+  // Invisible proxy spheres, one per obstacle body — matched to each body's
+  // true-scale radius so camera-controls' raycast-based collision test (see
+  // colliderMeshes below) sees the same size the body actually renders at.
+  // Kept separate from the real rendered meshes (BodyShapes.tsx) on purpose:
+  // those include glow sprites, wireframes, and additive-blended rings that
+  // aren't solid and shouldn't ever block the camera, and a real GLTF model
+  // would be far more expensive to raycast against than a low-poly sphere.
+  // Keyed by body id (not array index) so a ref never gets attributed to
+  // the wrong body if the underlying body list is ever reordered.
+  const colliderMeshRefs = useRef<Map<string, THREE.Mesh>>(new Map())
+  // Bumped whenever a proxy mesh mounts/unmounts, so the colliderMeshes
+  // array below is rebuilt only when its inputs actually change (see
+  // syncColliderMeshes) instead of via filter/map/filter every frame.
+  const colliderMeshesVersion = useRef(0)
+  const colliderSync = useRef<{ excluded: ReadonlySet<string> | null; version: number }>({ excluded: null, version: -1 })
+  // Latest colliderBodies for the useFrame loop — positions/scales are
+  // applied imperatively there (see the proxy meshes' own comment below).
+  const colliderBodiesRef = useRef(colliderBodies)
+  colliderBodiesRef.current = colliderBodies
+
+  // Per-frame scratch vectors — reused rather than allocated every frame.
+  const scratch = useMemo(() => ({ position: new THREE.Vector3(), target: new THREE.Vector3() }), [])
 
   const lastReportedDistance = useRef(-1)
+  // Priority -2: BEFORE drei's own CameraControls, which calls
+  // `controls.update(delta)` at priority -1 (R3F runs useFrame callbacks
+  // in ascending priority order). A real, if subtle, lag this fixes:
+  // setLookAt/moveTo/dollyTo only write camera-controls' internal state —
+  // the camera object itself only moves inside update() — so running at
+  // the default priority 0 (AFTER update) meant every write here, flight
+  // frames and tracking anchors alike, reached the screen one frame late.
+  // Writing first lets the same frame's update() apply them (plus damping
+  // and the collision clamp, against this frame's colliderMeshes) before
+  // render. Negative priorities don't take over R3F's render loop.
   useFrame(() => {
     const controls = controlsRef.current
     if (!controls) return
+    const tracked: WorldVec | null = trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
 
     let lifecycle = flightLifecycleRef.current
 
@@ -279,14 +339,14 @@ export function CameraRig({
         // this file's header comment on the two separate states camera-
         // controls keeps). A new flight has to start from where the
         // camera actually, visibly is.
-        const currentCameraPos = controls.getPosition(new THREE.Vector3(), false)
-        const currentTargetPos = controls.getTarget(new THREE.Vector3(), false)
+        const currentCameraPos = controls.getPosition(scratch.position, false)
+        const currentTargetPos = controls.getTarget(scratch.target, false)
         lifecycle = beginFlight(lifecycle, {
           focus,
           focusedId,
           currentCameraPos: [currentCameraPos.x, currentCameraPos.y, currentCameraPos.z],
           currentTargetPos: [currentTargetPos.x, currentTargetPos.y, currentTargetPos.z],
-          trackedPosition: trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null,
+          trackedPosition: tracked,
           nowMs: performance.now(),
         })
       } else {
@@ -298,9 +358,17 @@ export function CameraRig({
     // straight there — no smooth transition, since the whole point of the
     // slider is an immediate, direct response, the same way scrolling to
     // zoom is immediate. Consumed once (reset to null) so it only fires for
-    // genuinely new slider input, not every subsequent frame.
+    // genuinely new slider input, not every subsequent frame. Interrupting
+    // a flight re-anchors the target on the live body (or the flight's own
+    // destination) FIRST — see interruptFlight for the real bug where the
+    // camera otherwise settled on the flight's frozen mid-tween look-at
+    // point and tracked empty space from there.
     if (manualDistance.current !== null) {
-      if (lifecycle.isFlying) lifecycle = settleFlight(lifecycle, focusedId)
+      if (lifecycle.isFlying) {
+        const interrupted = interruptFlight(lifecycle, tracked)
+        lifecycle = interrupted.state
+        void controls.moveTo(interrupted.anchor[0], interrupted.anchor[1], interrupted.anchor[2], false)
+      }
       void controls.dollyTo(manualDistance.current, false)
       manualDistance.current = null
     }
@@ -316,55 +384,40 @@ export function CameraRig({
       // what used to alias a fast orbiter's own motion into visible jitter.
       const { position, target, progress } = sampleFlight(lifecycle, performance.now())
       void controls.setLookAt(position[0], position[1], position[2], target[0], target[1], target[2], false)
-      // Still updated every frame — NOT for this flight's own math (which
-      // no longer needs it), but so the steady-state branch's very first
-      // post-flight delta is an ordinary, tiny one-frame motion instead of
-      // a big correction: by the time this flight ends, the body's real
-      // live position should already almost exactly match the predicted
-      // endTarget it flew to, since orbital motion is fully deterministic.
-      lifecycle = recordLiveTrackedPosition(lifecycle, trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null)
-      if (progress >= 1) lifecycle = settleFlight(lifecycle, focusedId)
+      // Settling clears the tracking anchor, so the very next frame's
+      // steady branch re-anchors ABSOLUTELY on the live body — whatever
+      // small gap exists between the predicted endTarget this flight
+      // landed on and where the body really is (see this file's header,
+      // seventh bug) is healed there rather than carried forward.
+      if (progress >= 1) lifecycle = settleFlight(lifecycle)
     } else {
-      // No flight in progress: rigidly translate the camera and its
-      // target by however far the body moved since the last frame,
-      // preserving whatever distance/angle is currently in effect (which
-      // may differ from the flight's own, if the user has since dragged
-      // or zoomed manually).
-      const { state: nextLifecycle, delta } = advanceSteadyTracking(
-        lifecycle,
-        trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
-      )
-      lifecycle = nextLifecycle
-      if (delta) {
-        // receiveEndValue=false — shift the LIVE (actually rendered)
-        // camera/target, not the transition-end state. Reading the end
-        // state here was the actual cause of a real, observed bug: this
-        // component's own per-update() collision clamp (see
-        // camera-controls' `_collisionTest`) only ever touches the LIVE
-        // spherical state, never `_sphericalEnd` — so reading the END
-        // state here re-derived a "corrected" position from the
-        // UNCLAMPED destination and wrote it straight back with
-        // `enableTransition: false`, which overwrites the LIVE state too,
-        // undoing that frame's collision clamp. Next frame, camera-
-        // controls reapplies the clamp, we undo it again — an every-frame
-        // fight that reads as the camera flickering between two different
-        // positions (reported directly: "I appear to be switching
-        // location alternating between frames"), worse at faster sim
-        // speeds since the per-frame tracking delta is larger. Reading
-        // (and shifting) the LIVE state instead means any clamp already
-        // in effect persists across frames rather than getting fought.
-        const pos = controls.getPosition(new THREE.Vector3(), false)
-        const target = controls.getTarget(new THREE.Vector3(), false)
-        void controls.setLookAt(
-          pos.x + delta[0],
-          pos.y + delta[1],
-          pos.z + delta[2],
-          target.x + delta[0],
-          target.y + delta[1],
-          target.z + delta[2],
-          false
-        )
-      }
+      // No flight in progress: keep the camera's target anchored on the
+      // body's live position (see advanceSteadyTracking, and this file's
+      // header comment, seventh and eighth bugs). `moveTo(..., false)`
+      // moves ONLY the target — camera-controls' live AND end target
+      // together — and never touches its spherical (orbit angle + dolly
+      // distance) state, live or end. So the camera ends up at
+      // `tracked + offset`, with the offset still entirely the user's:
+      // an in-progress orbit/dolly keeps damping smoothly, and a
+      // collision clamp on the live radius persists across frames (the
+      // second bug above) since nothing here rewrites the radius at all.
+      const step = advanceSteadyTracking(lifecycle, tracked)
+      lifecycle = step.state
+      if (step.anchor) void controls.moveTo(step.anchor[0], step.anchor[1], step.anchor[2], false)
+
+      // Narrow the collider exclusions to the current selection plus any
+      // previously-excluded body that's still in the camera's way — see
+      // releaseClearedColliders. Covers the normal post-flight narrowing,
+      // a slider-interrupted flight, AND a deselect (which used to leave
+      // the last selection excluded, i.e. fly-through-able, forever).
+      const cameraPos = controls.getPosition(scratch.position, false)
+      const targetPos = controls.getTarget(scratch.target, false)
+      lifecycle = releaseClearedColliders(lifecycle, {
+        focusedId,
+        cameraPos: [cameraPos.x, cameraPos.y, cameraPos.z],
+        targetPos: [targetPos.x, targetPos.y, targetPos.z],
+        colliderBodies: colliderBodiesRef.current,
+      })
     }
 
     flightLifecycleRef.current = lifecycle
@@ -379,56 +432,73 @@ export function CameraRig({
       onDistanceChange(liveDistance)
     }
 
-    // Re-synced every frame, not just when colliderBodies/excludedColliderIds
-    // change — cheap (a filter over however many bodies exist) and avoids
-    // having to fan this out to every place excludedColliderIds gets
-    // mutated (flight start, flight settle, and — if a body is deselected
-    // entirely — nowhere at all, which a dependency-array effect would
-    // miss). See this file's header comment for why the excluded set has
-    // to be a moving window rather than a fixed "current selection" value.
-    controls.colliderMeshes = colliderBodies
-      .filter((o) => !lifecycle.excludedColliderIds.has(o.id))
-      .map((o) => colliderMeshRefs.current.get(o.id))
-      .filter((m): m is THREE.Mesh => m != null)
-  })
+    syncColliderMeshes(controls, lifecycle.excludedColliderIds)
+  }, -2)
 
-  useEffect(() => {
-    const controls = controlsRef.current
-    if (!controls) return
-    controls.minDistance = minDistance
-    controls.smoothTime = MANUAL_SMOOTH_TIME
-  }, [minDistance])
-
-  // Invisible proxy spheres, one per obstacle body — matched to each body's
-  // true-scale radius so camera-controls' raycast-based collision test (see
-  // colliderMeshes above) sees the same size the body actually renders at.
-  // Kept separate from the real rendered meshes (BodyShapes.tsx) on purpose:
-  // those include glow sprites, wireframes, and additive-blended rings that
-  // aren't solid and shouldn't ever block the camera, and a real GLTF model
-  // would be far more expensive to raycast against than a low-poly sphere.
-  // Keyed by body id (not array index) so a ref never gets attributed to
-  // the wrong body if the underlying body list is ever reordered.
-  const colliderMeshRefs = useRef<Map<string, THREE.Mesh>>(new Map())
+  /** Positions every proxy sphere from the latest colliderBodies and, only
+   *  when the excluded set (compared by identity — the lifecycle helpers
+   *  return the same Set object when nothing changed) or the mounted mesh
+   *  set has changed, rebuilds camera-controls' colliderMeshes. Used to be
+   *  a filter/map/filter over every body EVERY frame. See this file's
+   *  header comment for why the excluded set has to be a moving window
+   *  rather than a fixed "current selection" value. */
+  function syncColliderMeshes(controls: CameraControls, excluded: ReadonlySet<string>): void {
+    for (const obstacle of colliderBodiesRef.current) {
+      const mesh = colliderMeshRefs.current.get(obstacle.id)
+      if (!mesh) continue
+      mesh.position.set(obstacle.position[0], obstacle.position[1], obstacle.position[2])
+      mesh.scale.setScalar(Math.max(obstacle.radius, 1e-9))
+      // This runs before controls.update() (priority -2), whose collision
+      // raycast reads matrixWorld — refresh it now rather than leaving the
+      // proxy a frame behind until the renderer's own matrix pass.
+      mesh.updateMatrixWorld()
+    }
+    const sync = colliderSync.current
+    if (sync.excluded === excluded && sync.version === colliderMeshesVersion.current) return
+    const meshes: THREE.Mesh[] = []
+    for (const [id, mesh] of colliderMeshRefs.current) if (!excluded.has(id)) meshes.push(mesh)
+    controls.colliderMeshes = meshes
+    colliderSync.current = { excluded, version: colliderMeshesVersion.current }
+  }
 
   const colliderGeometry = useMemo(() => new THREE.SphereGeometry(1, 12, 8), [])
   useEffect(() => () => colliderGeometry.dispose(), [colliderGeometry])
 
+  // The proxy meshes depend only on WHICH bodies exist, not where they are
+  // — their position/scale are written imperatively in useFrame (see
+  // syncColliderMeshes). Memoizing on the id list, with one stable ref
+  // callback per id, means a simDate tick (which hands this component a
+  // fresh colliderBodies array every frame while playing) no longer
+  // re-renders N meshes and detaches/reattaches N inline ref callbacks.
+  const colliderIdsKey = colliderBodies.map((o) => o.id).join('\u0000')
+  const colliderMeshElements = useMemo(() => {
+    const ids = colliderIdsKey === '' ? [] : colliderIdsKey.split('\u0000')
+    return ids.map((id) => (
+      <mesh
+        key={id}
+        ref={(mesh: THREE.Mesh | null) => {
+          if (mesh) colliderMeshRefs.current.set(id, mesh)
+          else colliderMeshRefs.current.delete(id)
+          colliderMeshesVersion.current++
+        }}
+        geometry={colliderGeometry}
+        visible={false}
+      />
+    ))
+  }, [colliderIdsKey, colliderGeometry])
+
   return (
     <>
-      <CameraControls ref={controlsRef} maxDistance={2000} />
-      {colliderBodies.map((obstacle) => (
-        <mesh
-          key={obstacle.id}
-          ref={(m) => {
-            if (m) colliderMeshRefs.current.set(obstacle.id, m)
-            else colliderMeshRefs.current.delete(obstacle.id)
-          }}
-          position={obstacle.position}
-          scale={Math.max(obstacle.radius, 1e-9)}
-          geometry={colliderGeometry}
-          visible={false}
-        />
-      ))}
+      {/* minDistance/smoothTime as props, not a one-off effect: an effect
+          keyed only on [minDistance] silently lost both settings whenever
+          drei recreated the controls instance (e.g. a camera change). */}
+      <CameraControls
+        ref={controlsRef}
+        minDistance={minDistance}
+        maxDistance={MAX_CAMERA_DISTANCE}
+        smoothTime={MANUAL_SMOOTH_TIME}
+      />
+      {colliderMeshElements}
     </>
   )
 }
