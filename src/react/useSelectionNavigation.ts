@@ -5,6 +5,7 @@ import {
   computeFocusForSystem,
   planFocusFlight,
   safePredictFlightTarget,
+  type BodyFraming,
   type CameraPose,
   type FlightPacing,
   type FocusTarget,
@@ -12,6 +13,7 @@ import {
 import type { BeltRegion, CelestialBody, StarSystemData } from '../types'
 import {
   childTarget,
+  framingForBodySelection,
   parentTarget,
   parseSelectionValue,
   resolveSelection,
@@ -41,6 +43,8 @@ export interface SelectionNavigationOptions {
   cameraPose?: { readonly current: CameraPose | null }
   /** See OrbitalSystemSceneProps.flightPacing. */
   flightPacing?: FlightPacing
+  /** See OrbitalSystemSceneProps.arrivalFraming. Defaults to 'body'. */
+  arrivalFraming?: BodyFraming
 }
 
 export interface SelectionNavigation {
@@ -48,6 +52,9 @@ export interface SelectionNavigation {
   selectedBody: CelestialBody | null
   selectedBelt: BeltRegion | null
   focus: FocusTarget | null
+  /** What the selected body is framed as (see framingForBodySelection);
+   *  null when no body is selected. */
+  framing: BodyFraming | null
   canGoUp: boolean
   canGoDown: boolean
   // Every callback below has a stable identity (see useStableCallback).
@@ -68,6 +75,8 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   const { system, index, clock, log } = options
   const [selection, setSelection] = useState<Selection>(null)
   const [focus, setFocus] = useState<FocusTarget | null>(null)
+  const [framing, setFraming] = useState<BodyFraming>('body')
+  const arrivalFraming = options.arrivalFraming ?? 'body'
   const resolved = resolveSelection(selection, index)
   const { selectedBody, selectedBelt } = resolved
 
@@ -88,9 +97,9 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   // in that case, so every sample would be identical to the single fixed
   // endpoint computeFocusForBody already predicts, same reasoning
   // flightTargetDate itself already uses.
-  function focusOnBodyWithTrajectory(body: CelestialBody, previousBody: CelestialBody | null = null): FocusTarget {
+  function focusOnBodyWithTrajectory(body: CelestialBody, bodyFraming: BodyFraming, previousBody: CelestialBody | null = null): FocusTarget {
     return planned((durationMs) => {
-      const target = computeFocusForBody(body, system, targetDate(durationMs), previousBody)
+      const target = computeFocusForBody(body, system, targetDate(durationMs), previousBody, bodyFraming)
       const predictedTargetAt = clock.playing
         ? (safePredictFlightTarget(body, system, clock.simDate, clock.daysPerSecond, target.distance, durationMs) ?? undefined)
         : undefined
@@ -112,18 +121,21 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   // again right after a jump-to-location click (which already knows
   // exactly which field it's for) stomped the field the jump had just set
   // and silently flipped the active slot out from under the user.
-  function focusOnBody(body: CelestialBody): void {
+  function focusOnBody(body: CelestialBody, bodyFraming: BodyFraming): void {
     // The OUTGOING body (before this selection replaces it) — passed
     // through so computeFocusForBody can find a shared context body (see
     // camera.ts's findContextBody) to keep in frame mid-flight, e.g.
     // Earth for a flight between the ISS and Hubble. null when nothing
     // (or a belt) was selected before this.
     setSelection({ kind: 'body', id: body.id })
-    setFocus(focusOnBodyWithTrajectory(body, selectedBody))
+    setFraming(bodyFraming)
+    setFocus(focusOnBodyWithTrajectory(body, bodyFraming, selectedBody))
     log.recordAction({ type: 'select-body', bodyId: body.id })
   }
+  // Picking the already-selected body again toggles its framing — see
+  // framingForBodySelection.
   function selectBodyNow(body: CelestialBody): void {
-    focusOnBody(body)
+    focusOnBody(body, framingForBodySelection(selection, framing, body.id, arrivalFraming))
     options.onSelectBody?.(body)
   }
   function selectBelt(belt: BeltRegion): void {
@@ -162,7 +174,7 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
     log.recordAction({ type: 'down' })
   })
   const recenter = useStableCallback(() => {
-    if (selectedBody) setFocus(focusOnBodyWithTrajectory(selectedBody))
+    if (selectedBody) setFocus(focusOnBodyWithTrajectory(selectedBody, framing))
     else if (selectedBelt) setFocus(focusOnBelt(selectedBelt))
     log.recordAction({ type: 'recenter' })
   })
@@ -200,8 +212,10 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
     const body = index.bodiesById.get(externalBodyId)
     // focusOnBody, not selectBody — see focusOnBody's own comment: this is
     // an already-chosen location's camera catching up, not a fresh user
-    // pick, so it must not re-fire onSelectBody.
-    if (body) focusOnBody(body)
+    // pick, so it must not re-fire onSelectBody. Always in the arrival
+    // framing: a repeat request for the selected body is "take me there",
+    // not the framing toggle a repeat click is.
+    if (body) focusOnBody(body, arrivalFraming)
     // Deliberately NOT depending on focusOnBody itself (a new closure every
     // render, capturing system/simDate — including it would re-run this
     // effect constantly and fight the intentional ordering described
@@ -215,6 +229,7 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
     selectedBody,
     selectedBelt,
     focus,
+    framing: selectedBody ? framing : null,
     canGoUp: parent !== null,
     canGoDown: child !== null,
     selectBody,

@@ -1,6 +1,7 @@
 import {
   buildSystemIndex,
   childTarget,
+  framingForBodySelection,
   parentTarget,
   parseSelectionValue,
   resolveSelection,
@@ -88,5 +89,19 @@ describe('parentTarget / childTarget', () => {
   it('has nowhere to go down from a childless body or a belt', () => {
     expect(childTarget(at({ kind: 'body', id: 'moon' }), index)).toBeNull()
     expect(childTarget(at({ kind: 'belt', id: 'belt:main' }), index)).toBeNull()
+  })
+})
+
+describe('framingForBodySelection', () => {
+  it('arrives at a newly picked body in the arrival framing', () => {
+    expect(framingForBodySelection(null, 'body', 'earth', 'body')).toBe('body')
+    expect(framingForBodySelection({ kind: 'body', id: 'moon' }, 'system', 'earth', 'body')).toBe('body')
+    expect(framingForBodySelection({ kind: 'belt', id: 'earth' }, 'body', 'earth', 'system')).toBe('system')
+  })
+
+  it('toggles between body and system framing when the selected body is picked again', () => {
+    expect(framingForBodySelection({ kind: 'body', id: 'earth' }, 'body', 'earth', 'body')).toBe('system')
+    expect(framingForBodySelection({ kind: 'body', id: 'earth' }, 'system', 'earth', 'body')).toBe('body')
+    expect(framingForBodySelection({ kind: 'body', id: 'earth' }, 'system', 'earth', 'system')).toBe('body')
   })
 })

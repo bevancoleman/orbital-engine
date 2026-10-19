@@ -160,6 +160,49 @@ describe('useSelectionNavigation', () => {
     hook.unmount()
   })
 
+  it('arrives framing the body itself, and toggles to its system framing when it is selected again', () => {
+    const { hook } = setup()
+    act(() => hook.current.selectFromDropdown('body:jupiter'))
+    expect(hook.current.framing).toBe('body')
+    const bodyDistance = hook.current.focus!.distance
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    expect(hook.current.framing).toBe('system')
+    expect(hook.current.selectedBody?.id).toBe('jupiter')
+    expect(hook.current.focus!.distance).toBeGreaterThan(bodyDistance * 10)
+    // Recenter keeps the framing the user chose.
+    act(() => hook.current.recenter())
+    expect(hook.current.framing).toBe('system')
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    expect(hook.current.framing).toBe('body')
+    expect(hook.current.focus!.distance).toBeCloseTo(bodyDistance, 9)
+    // A different body arrives in the arrival framing again.
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    act(() => hook.current.goDown())
+    expect(hook.current.framing).toBe('body')
+    act(() => hook.current.reset())
+    expect(hook.current.framing).toBeNull()
+    hook.unmount()
+  })
+
+  it("arrives in the moon-system framing with arrivalFraming: 'system'", () => {
+    const { hook } = setup({ arrivalFraming: 'system' })
+    act(() => hook.current.selectFromDropdown('body:jupiter'))
+    expect(hook.current.framing).toBe('system')
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    expect(hook.current.framing).toBe('body')
+    hook.unmount()
+  })
+
+  it('an external focus request always arrives in the arrival framing, even on the selected body', () => {
+    const { hook, options } = setup({ externalFocus: { bodyId: 'mars', token: 1 } })
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    expect(hook.current.framing).toBe('system')
+    options.externalFocus = { bodyId: 'mars', token: 2 }
+    hook.rerender()
+    expect(hook.current.framing).toBe('body')
+    hook.unmount()
+  })
+
   it('keeps callback identities stable across renders (memoized children depend on it)', () => {
     const { hook } = setup()
     const { selectBody, goUp, selectFromDropdown } = hook.current

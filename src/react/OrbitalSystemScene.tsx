@@ -12,6 +12,7 @@ import {
   computeSmoothedTrackedPosition,
   minCameraDistanceForRadius,
   nearPlaneForRadius,
+  type BodyFraming,
   type CameraPose,
   type FlightPacing,
 } from '../camera'
@@ -133,6 +134,15 @@ export interface OrbitalSystemSceneProps {
    * Read when a flight starts, so a change applies to the next one.
    */
   flightPacing?: FlightPacing
+  /**
+   * What selecting a body flies to. `'body'` (the default) frames the body
+   * itself — its diameter fills about 40% of the view's height, so a real
+   * surface texture is actually visible, with rings kept in frame.
+   * `'system'` frames the body together with its whole local moon/station
+   * system (the behaviour before this prop existed). Either way, clicking
+   * the already-selected body again toggles to the other framing and back.
+   */
+  arrivalFraming?: BodyFraming
 }
 
 /**
@@ -150,6 +160,8 @@ export interface OrbitalSystemSceneProps {
  *   cameraFlightLifecycle's describeCameraActivity)
  * - `data-flight-count` — fly-tos started since mount; only increases
  * - `data-focused-id` — the selected body or belt id; absent when none
+ * - `data-framing` — `body` | `system` (see `arrivalFraming`); absent
+ *   unless a body is selected
  * - `data-sim-playing` — `true` | `false`
  */
 export function OrbitalSystemScene({
@@ -163,6 +175,7 @@ export function OrbitalSystemScene({
   initialDaysPerSecond = DEFAULT_DAYS_PER_SECOND,
   onAction,
   flightPacing,
+  arrivalFraming = 'body',
 }: OrbitalSystemSceneProps) {
   const clock = useSimulationClock(initialPlaying, initialDaysPerSecond)
   const log = useActionLog(onAction, clock.simDateRef)
@@ -202,6 +215,7 @@ export function OrbitalSystemScene({
     onSystemChange: handleSystemChange,
     cameraPose,
     flightPacing,
+    arrivalFraming,
   })
   const { selectedBody, selectedBelt } = nav
 
@@ -343,6 +357,7 @@ export function OrbitalSystemScene({
       data-camera-state={cameraActivity.state}
       data-flight-count={cameraActivity.flightCount}
       data-focused-id={selectedBody?.id ?? selectedBelt?.id}
+      data-framing={nav.framing ?? undefined}
       data-sim-playing={clock.playing}
     >
       <Toolbar
