@@ -6,7 +6,7 @@
  * unit-testable without a renderer (see ARCHITECTURE.md's "Two-tier
  * testing" section).
  */
-import { findNearestCandidate } from '../proximitySelection'
+import { findPointerTarget } from '../proximitySelection'
 import { computeVisibleLabels, thinByScreenProximity, type ScreenCandidate } from '../labelDeclutter'
 import type { ProjectedCandidates, ScreenPoint } from './screenProjection'
 
@@ -59,7 +59,9 @@ function resolveHover(input: ProximityFrameInput): string | null {
   // selects from ever disagreeing.
   if (input.labelHoverId && onScreen.some((c) => c.id === input.labelHoverId)) return input.labelHoverId
   if (!input.pointerPx) return null
-  return findNearestCandidate(input.pointerPx.x, input.pointerPx.y, onScreen, PROXIMITY_SNAP_PX)?.id ?? null
+  // Bubble cursor for small bodies, a disc hit-test for ones drawn bigger
+  // than the snap radius — see findPointerTarget.
+  return findPointerTarget(input.pointerPx.x, input.pointerPx.y, onScreen, PROXIMITY_SNAP_PX)?.id ?? null
 }
 
 /** Selected/hovered are forced ahead of every real structural priority

@@ -29,6 +29,12 @@ export interface ProximityCandidate {
    *  canvas resolution. */
   x: number
   y: number
+  /** On-screen radius (px) of the body's rendered disc — see
+   *  findPointerTarget. Absent or 0 for a point-like target. */
+  radiusPx?: number
+  /** Distance from the camera, in any consistent unit — used only to
+   *  order overlapping discs (see findPointerTarget). */
+  depth?: number
 }
 
 /**
@@ -54,6 +60,62 @@ export function findNearestCandidate(
       best = candidate
       bestDistSq = distSq
     }
+  }
+  return best
+}
+
+/**
+ * What the pointer is over: findNearestCandidate's bubble cursor, plus a
+ * plain hit-test against each body's projected on-screen DISC.
+ *
+ * Why (a real, reported gap): the snap radius is measured from a body's
+ * projected CENTRE, which is right for the true-scale-tiny bodies this
+ * module was written for — but arrival framing fills ~40% of the view
+ * with the selected body, and a click on the edge of a disc that big
+ * landed hundreds of pixels from its centre and selected nothing. So:
+ *
+ *  1. Among discs containing the pointer, the one nearest the camera is
+ *     hit (it's the one drawn on top). Only discs larger than the snap
+ *     radius count: small and pixel-floored bodies stay point-like.
+ *  2. A point-like body still wins over that disc by the usual snap rule
+ *     when it is IN FRONT of it (a moon passing in front of its planet) —
+ *     one behind the disc is hidden by it and can't steal the click.
+ *  3. With no disc under the pointer, it's findNearestCandidate exactly,
+ *     so a cluster of small bodies behaves as it always has.
+ *
+ * A candidate without depth counts as unknown depth: it can't be "in
+ * front" of a disc, but still snaps when no disc is hit.
+ */
+export function findPointerTarget(
+  pointerX: number,
+  pointerY: number,
+  candidates: readonly ProximityCandidate[],
+  snapDistancePx: number
+): ProximityCandidate | null {
+  const disc = nearestDiscUnderPointer(pointerX, pointerY, candidates, snapDistancePx)
+  if (!disc) return findNearestCandidate(pointerX, pointerY, candidates, snapDistancePx)
+  const discDepth = disc.depth ?? Infinity
+  const inFront = candidates.filter((c) => c !== disc && c.depth !== undefined && c.depth < discDepth)
+  return findNearestCandidate(pointerX, pointerY, inFront, snapDistancePx) ?? disc
+}
+
+/** Only discs bigger than the snap radius count — a smaller one is already
+ *  covered by the snap, and treating it as a disc would let a tiny body's
+ *  few pixels outrank the bubble cursor's nearest-to-pointer rule. */
+function nearestDiscUnderPointer(
+  pointerX: number,
+  pointerY: number,
+  candidates: readonly ProximityCandidate[],
+  snapDistancePx: number
+): ProximityCandidate | null {
+  let best: ProximityCandidate | null = null
+  for (const candidate of candidates) {
+    const radius = candidate.radiusPx ?? 0
+    if (!(radius > snapDistancePx)) continue
+    const dx = candidate.x - pointerX
+    const dy = candidate.y - pointerY
+    if (dx * dx + dy * dy > radius * radius) continue
+    if (!best || (candidate.depth ?? Infinity) < (best.depth ?? Infinity)) best = candidate
   }
   return best
 }

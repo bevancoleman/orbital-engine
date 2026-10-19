@@ -99,4 +99,29 @@ describe('projectCandidatesToScreen', () => {
     )
     expect(result.onScreen.map((c) => c.id)).toEqual(['b', 'a'])
   })
+
+  it('measures each candidate projected disc and camera distance when given a disc measure', () => {
+    // Camera at z=10 looking at the origin: a radius-1 body at the origin
+    // is 10 units away; with a 500 px focal length its disc is 50 px.
+    const result = projectCandidatesToScreen(
+      [{ id: 'a', position: [0, 0, 0], priority: 1, radius: 1 }, { id: 'b', position: [0, 0, 5], priority: 1 }],
+      project,
+      SIZE,
+      0,
+      { focalLengthPx: 500, distanceTo: (p) => Math.hypot(p[0], p[1], p[2] - 10) }
+    )
+    expect(result.onScreen[0]!.radiusPx).toBeCloseTo(50)
+    expect(result.onScreen[0]!.depth).toBeCloseTo(10)
+    expect(result.onScreen[1]!.radiusPx).toBe(0)
+    expect(result.onScreen[1]!.depth).toBeCloseTo(5)
+  })
+
+  it('keeps a body on screen while its disc overlaps the viewport, even with its centre past the margin', () => {
+    const fake = (p: WorldVec): NdcPoint => ({ x: p[0], y: p[1], z: 0 })
+    // x = 1.5 NDC → 1000 px: 200 px past the right edge.
+    const candidates = [{ id: 'big', position: [1.5, 0, 0] as WorldVec, priority: 1, radius: 1 }]
+    const measure = (focalLengthPx: number) => ({ focalLengthPx, distanceTo: () => 1 })
+    expect(projectCandidatesToScreen(candidates, fake, SIZE, 0, measure(250)).onScreen.map((c) => c.id)).toEqual(['big'])
+    expect(projectCandidatesToScreen(candidates, fake, SIZE, 0, measure(150)).offScreenIds).toEqual(['big'])
+  })
 })

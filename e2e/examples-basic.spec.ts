@@ -594,4 +594,45 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
       expect(errors).toEqual([])
     })
   }
+  test('clicking anywhere on a large on-screen disc selects that body, not just near its centre', async ({ page }) => {
+    // Regression test for a real, reported gap: proximity selection only
+    // snapped within 28px of a body's projected CENTRE, and arrival framing
+    // fills ~40% of the view with the selected body — so a click on the
+    // edge of the disc selected nothing. Clicking the already-selected body
+    // toggles its framing (see framingForBodySelection), which is the
+    // observable proof the click hit it.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'Jupiter')
+    })
+    await expect(sceneRoot(page)).toHaveAttribute('data-framing', 'body')
+
+    // In this example's 450px-tall view the disc's radius is ~52px: 0.085
+    // of the height (~38px) from the centre is inside it and outside the
+    // 28px snap.
+    const box = (await page.locator('canvas').boundingBox())!
+    await page.mouse.move(box.x + box.width / 2 + box.height * 0.085, box.y + box.height / 2, { steps: 4 })
+    // Hover is resolved on the next rendered frame, as it is for a real
+    // pointer that has to move there before it clicks.
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await flyAndSettle(page, async () => {
+      await page.mouse.down()
+      await page.mouse.up()
+    })
+    await expect(sceneRoot(page)).toHaveAttribute('data-focused-id', 'jupiter')
+    await expect(sceneRoot(page)).toHaveAttribute('data-framing', 'system')
+
+    // And dead centre, which sits under the body's label element's own
+    // (unshifted) layout box — that box used to swallow the pointer, and
+    // R3F, reading offsetX/offsetY relative to it, hovered the wrong spot.
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await flyAndSettle(page, async () => {
+      await page.mouse.down()
+      await page.mouse.up()
+    })
+    await expect(sceneRoot(page)).toHaveAttribute('data-framing', 'body')
+    expect(errors).toEqual([])
+  })
 })

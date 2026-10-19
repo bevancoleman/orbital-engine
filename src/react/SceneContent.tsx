@@ -70,13 +70,18 @@ export function SceneContent({ system, simDate, selectedId, cameraDistance, onSe
     }
     return ids
   }, [system, selectedId])
+  // `radius` is the RENDERED radius (pixel floor included), the same one
+  // BodyMarker draws at — ProximitySelector hit-tests the pointer against
+  // that projected disc for a body drawn large (see findPointerTarget).
   const proximityCandidates = useMemo(
     () =>
       system.bodies.flatMap((b) => {
         const position = eligibleIds.has(b.id) ? positions.get(b.id) : undefined
-        return position ? [{ id: b.id, position, priority: depthById.get(b.id) ?? 0 }] : []
+        if (!position) return []
+        const radius = renderRadius(trueRadius(b.radiusKm), cameraDistance, viewportHeight)
+        return [{ id: b.id, position, priority: depthById.get(b.id) ?? 0, radius }]
       }),
-    [system, eligibleIds, positions, depthById]
+    [system, eligibleIds, positions, depthById, cameraDistance, viewportHeight]
   )
 
   return (
