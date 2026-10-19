@@ -52,14 +52,14 @@ jobs:
   # Deliberately NOT `npm run typecheck` over src/ (or a dts build) against
   # the old @types: src/ is written to the React 19 types (useRef(null) is
   # a mutable RefObject<T | null> there, a read-only `T | null` ref in 18)
-  # and drei 9.54's own useTexture/CameraControls types differ, so it
+  # and drei 9.56's own useTexture/CameraControls types differ, so it
   # reports a dozen internal-only errors no consumer ever sees. The
   # consumer typecheck covers the surface they do see, and the tarball is
   # built once with the devDependencies, the same way a release is.
   min-peers:
     runs-on: ubuntu-latest
     env:
-      MIN_RENDER_PEERS: three@0.152.2 @react-three/fiber@8.13.9 @react-three/drei@9.54.3
+      MIN_RENDER_PEERS: three@0.152.2 @react-three/fiber@8.13.9 @react-three/drei@9.56.5
       MIN_REACT: react@18.0.0 react-dom@18.0.0
       MIN_PEER_TYPES: "@types/three@0.152.1 @types/react@18.3.31 @types/react-dom@18.3.7"
     steps:

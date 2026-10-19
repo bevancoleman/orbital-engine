@@ -56,7 +56,7 @@ If you're adding a feature that touches rendering behavior (not just pure math i
 
 ## Minimum supported peers
 
-The `min-peers` CI job checks the oldest versions `peerDependencies` claims to support (three 0.152, @react-three/fiber 8.13, @react-three/drei 9.54, React 18), since every other job only sees the newer devDependency versions. It runs the unit suite with those peers swapped in, then installs the packed tarball into a scratch consumer project and runs `.github/min-peers/` there: ESM and CJS imports of both entry points, a scan for `THREE.*` members the oldest three lacks, a check on drei's camera-controls major, and a React 18 typecheck against the published `.d.ts`. The exact versions are at the top of the job in `.github/workflows/ci.yml`. If you raise or lower a peer floor in `package.json`, update them there too.
+The `min-peers` CI job checks the oldest versions `peerDependencies` claims to support (three 0.152, @react-three/fiber 8.13, @react-three/drei 9.56.5, React 18), since every other job only sees the newer devDependency versions. It runs the unit suite with those peers swapped in, then installs the packed tarball into a scratch consumer project and runs `.github/min-peers/` there: ESM and CJS imports of both entry points, a scan for `THREE.*` members the oldest three lacks, a check on drei's camera-controls major, and a React 18 typecheck against the published `.d.ts`. The exact versions are at the top of the job in `.github/workflows/ci.yml`. If you raise or lower a peer floor in `package.json`, update them there too.
 
 ## Before opening a PR
 

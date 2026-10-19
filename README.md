@@ -30,7 +30,7 @@ This library solves the same true-scale problem spacekit.js didn't attempt, and 
 npm install orbital-engine three @react-three/fiber @react-three/drei react react-dom
 ```
 
-`three` (r152+), `@react-three/fiber` (8.13+ or 9), `@react-three/drei` (9.54+ or 10), `react` and `react-dom` (18 or 19) are peer dependencies — see `peerDependencies` in [`package.json`](./package.json) for the exact ranges. Pair fiber 8 / drei 9 with React 18, fiber 9 / drei 10 with React 19.
+`three` (r152+), `@react-three/fiber` (8.13+ or 9), `@react-three/drei` (9.56.5+ or 10), `react` and `react-dom` (18 or 19) are peer dependencies — see `peerDependencies` in [`package.json`](./package.json) for the exact ranges. Pair fiber 8 / drei 9 with React 18, fiber 9 / drei 10 with React 19.
 
 ## Quickstart
 
