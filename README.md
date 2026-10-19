@@ -208,6 +208,16 @@ This replaces an earlier fixed distance-ratio cutoff that could hide a body enti
 
 `validateSystemData(system)` returns every data-contract and legibility warning for a system as a `SystemDataWarning[]`, each tagged with a `kind`: `missing-position`, `unrecognized-type`, `unknown-parent`, `parent-cycle`, `invalid-orbit` (non-positive axis or period, eccentricity out of range, non-finite angle, unparseable or offset-less epoch), `invalid-radius`, `periapsis-inside-parent`, `embedded-in-parent`, `embedded-in-sibling`, `invalid-ring`, `invalid-belt`. Malformed data still renders — an unknown parent or a cycle anchors at the system origin — so these are signals, not errors. `<OrbitalSystemScene devMode>` lists them in its dev overlay. `unknown-parent`, `parent-cycle`, `invalid-orbit`, `invalid-radius` and `periapsis-inside-parent` were added in 1.5.0 — a consumer with an exhaustive `switch` over `kind` must add cases for them.
 
+## Arrival framing
+
+A fly-to a body arrives framing the body itself: its diameter fills about 40% of the view's height (`BODY_VIEW_FILL`), so its surface (and a real texture, if it has one) is actually visible, with a ring system kept in frame. Clicking the already-selected body again flies out to its whole local moon/station system, and clicking it once more flies back in. `arrivalFraming="system"` makes the moon-system view the one a selection arrives at instead:
+
+```tsx
+<OrbitalSystemScene system={SOLAR_SYSTEM} arrivalFraming="system" />
+```
+
+A satellite far smaller than the camera's precision floor (the ISS, Hubble) can't fill that much of the view; it arrives as close as the floor allows. When the body would hide its parent from the "look back toward the parent" angle a fly-to ends on (Earth behind the Moon), the view is turned just far enough to show the parent beside it. The root element's `data-framing` (`body` / `system`) says which framing the selected body is in.
+
 ## Fly-to pacing
 
 Selecting a body flies the camera along van Wijk & Nuij's optimal zoom-and-pan path ("Smooth and efficient zooming and panning", 2003): it zooms out until the start and the destination are both comfortably in view, pans, then zooms in, eased in and out so it starts and ends at rest. A flight's duration is proportional to the length of that path — how much the view really changes — so a hop between neighbouring stations is quick and a dive from a planet to a station across the system takes longer, at the same perceived speed. `flightPacing` tunes it:
@@ -234,12 +244,14 @@ Types, math, and reference data are exported from the package root (`orbital-eng
 | `ExternalFocusRequest` | `orbital-engine/react` | Type for the `externalFocus` prop — flies the camera to a body id from outside the component (see [`examples/basic`](./examples/basic)'s "Fly to" buttons). |
 | `RoutePreview` | `orbital-engine/react` | Type for the `routePreview` prop — draws a line through an ordered chain of body ids. |
 | `FlightPacing` | `orbital-engine/react`, `orbital-engine` | Type for the `flightPacing` prop — see Fly-to pacing, above. |
+| `BodyFraming` | `orbital-engine/react`, `orbital-engine` | Type for the `arrivalFraming` prop (`'body'` / `'system'`) — see Arrival framing, above. |
 | `positionAtTime`, `orbitPath` | `orbital-engine` | Kepler propagation, given `OrbitalElements` and a `Date`. |
 | `resolveAllWorldPositions` | `orbital-engine` | Every body's current world position (orbit or fixed), respecting parent hierarchy. |
 | `poleFromEquatorialJ2000` | `orbital-engine` | IAU pole right ascension/declination → a `PoleDirection` in the J2000 ecliptic frame. |
 | `validateSystemData` | `orbital-engine` | Every data warning for a system — see Validation, above. |
 | `compressDistance`, `trueRadius` | `orbital-engine` | The scale math — km in, render-space units out. |
-| `computeFocusForBody`, `computeFocusForSystem` | `orbital-engine` | Camera framing targets for a fly-to. |
+| `computeFocusForBody`, `computeFocusForSystem` | `orbital-engine` | Camera framing targets for a fly-to (`computeFocusForBody` takes a `BodyFraming`). |
+| `distanceToFillView`, `BODY_VIEW_FILL`, `RING_VIEW_FILL` | `orbital-engine` | The camera distance at which a sphere fills a given share of the view, and the shares arrival framing uses. |
 | `findNearestCandidate` | `orbital-engine` | Proximity selection, given screen-space candidates. |
 | `computeVisibleLabels`, `computeOrbitalDepth`, `thinByScreenProximity` | `orbital-engine` | Label/body declutter, prioritized by structural depth. |
 | `computeVisibleBodyIds`, `MAX_VISIBLE_SECONDARY` | `orbital-engine` | Which bodies render at all at the current zoom — see Visibility, above. |
