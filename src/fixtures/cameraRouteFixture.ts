@@ -8,10 +8,10 @@
  */
 
 import { FLY_DURATION_MS } from '../camera'
+import { MS_PER_DAY } from '../constants'
 import { DEFAULT_DAYS_PER_SECOND, MAX_DAYS_PER_SECOND, formatPlaybackSpeed } from '../timeScale'
 import type { CelestialBody, StarSystemData } from '../types'
 
-const MS_PER_DAY = 86_400_000
 
 /** Target render rate this fixture samples at — see
  *  CAMERA_ROUTE_SAMPLES_PER_FLIGHT/CAMERA_ROUTE_TRACK_STEPS for why "one

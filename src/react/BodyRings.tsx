@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
-import { Points, PointMaterial } from '@react-three/drei'
+import { PointMaterial } from '@react-three/drei'
 import * as THREE from 'three'
 import { sampleBeltParticles } from '../belts'
-import { ringTiltRadians, ringWorldRadius } from '../rings'
+import { ringPlaneQuaternion, ringWorldRadius } from '../rings'
 import type { CelestialBody, RingBand } from '../types'
 import { glowSprite, ringStreakTexture } from './textures'
+import { PointCloud } from './PointCloud'
 
 const DEFAULT_DISC_OPACITY = 0.35
 const DEFAULT_RING_PARTICLES = 600
@@ -17,13 +18,14 @@ const RING_PARTICLE_SPREAD_DEG = 1.5
  * body's scene group — so it moves, fades in and out, and is selected with
  * the body rather than being a separate object at the same spot. Radii
  * scale off the body's rendered radius (see rings.ts's ringWorldRadius),
- * and the whole system is tilted into the body's equatorial plane by its
- * axial tilt.
+ * and the whole system is oriented into the body's equatorial plane by its
+ * spin pole (see rings.ts's ringPlaneQuaternion — falling back to
+ * axialTiltDeg when a body has no pole).
  */
 export function BodyRings({ body, radius, color }: { body: CelestialBody; radius: number; color: string }) {
   if (!body.rings?.length) return null
   return (
-    <group rotation={[ringTiltRadians(body), 0, 0]}>
+    <group quaternion={ringPlaneQuaternion(body)}>
       {body.rings.map((band, index) =>
         band.style === 'particles' ? (
           <RingParticles key={index} body={body} band={band} index={index} radius={radius} color={band.color ?? color} />
@@ -87,8 +89,8 @@ function RingParticles({ body, band, index, radius, color }: { body: CelestialBo
   }, [body, band, index, radius])
 
   return (
-    <Points positions={positions}>
+    <PointCloud positions={positions}>
       <PointMaterial map={glowSprite()} color={color} size={3} sizeAttenuation={false} transparent opacity={0.6} depthWrite={false} blending={THREE.AdditiveBlending} />
-    </Points>
+    </PointCloud>
   )
 }

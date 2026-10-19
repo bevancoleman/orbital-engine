@@ -166,3 +166,36 @@ describe('thinByScreenProximity', () => {
     expect(thinByScreenProximity(candidates, 40)).toEqual(computeVisibleLabels(candidates, 40))
   })
 })
+
+describe('thinByScreenProximity — agrees with the naive O(n²) pass', () => {
+  /** The original all-pairs implementation, kept as the reference. */
+  function naive(candidates: readonly LabelCandidate[], minSeparationPx: number): Set<string> {
+    const sorted = [...candidates].sort((a, b) => a.priority - b.priority)
+    const kept: LabelCandidate[] = []
+    const minSepSq = minSeparationPx * minSeparationPx
+    for (const c of sorted) {
+      if (kept.some((k) => (c.x - k.x) ** 2 + (c.y - k.y) ** 2 <= minSepSq)) continue
+      kept.push(c)
+    }
+    return new Set(kept.map((k) => k.id))
+  }
+
+  function scatter(n: number, seed: number): LabelCandidate[] {
+    let s = seed
+    const rand = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648
+    return Array.from({ length: n }, (_, i) => ({ id: `c${i}`, x: rand() * 800 - 100, y: rand() * 600 - 50, priority: Math.floor(rand() * 4) }))
+  }
+
+  it.each([0, 1, 7.5, 24, 300])('keeps exactly the same set at minSeparation %s px', (minSep) => {
+    for (const seed of [1, 2, 3]) {
+      const candidates = scatter(600, seed)
+      expect(thinByScreenProximity(candidates, minSep)).toEqual(naive(candidates, minSep))
+    }
+  })
+
+  it('treats exact duplicates as overlapping even at 0 px, and negative separations like their magnitude', () => {
+    const dupes = [{ id: 'a', x: 5, y: 5, priority: 0 }, { id: 'b', x: 5, y: 5, priority: 1 }, { id: 'c', x: 9, y: 5, priority: 1 }]
+    expect(thinByScreenProximity(dupes, 0)).toEqual(naive(dupes, 0))
+    expect(thinByScreenProximity(dupes, -5)).toEqual(naive(dupes, -5))
+  })
+})

@@ -80,3 +80,16 @@ describe('formatPlaybackSpeed', () => {
     expect(formatPlaybackSpeed(justAboveRealTime)).toMatch(/^1 day \/ \d+s$/)
   })
 })
+
+describe('clampPlaybackSpeed — non-numeric input', () => {
+  // Saved/shared sessions route through this, and a NaN used to come
+  // straight back out and poison the simulated date.
+  it('turns NaN into the default speed', () => {
+    expect(clampPlaybackSpeed(Number.NaN)).toBe(DEFAULT_DAYS_PER_SECOND)
+  })
+
+  it('still clamps infinities to the ends of the range', () => {
+    expect(clampPlaybackSpeed(Number.POSITIVE_INFINITY)).toBe(MAX_DAYS_PER_SECOND)
+    expect(clampPlaybackSpeed(Number.NEGATIVE_INFINITY)).toBe(REAL_TIME_DAYS_PER_SECOND)
+  })
+})

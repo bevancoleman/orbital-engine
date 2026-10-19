@@ -14,40 +14,72 @@
  * material rather than invented to fit whatever data happens to be handy.
  */
 
-export type BodyType =
-  | 'star'
-  | 'planet'
-  | 'dwarf_planet'
-  | 'moon'
-  | 'station'
-  /** A structure genuinely built on a parent body's own surface (a
-   *  landing-zone city, a ground-based prison, a mining outpost) — as
-   *  opposed to 'station', which orbits or floats free. This matters for
-   *  more than labelling: sitting at/near the parent's own real radius is
-   *  the DEFINITION of correct for this type, not a containment problem —
-   *  findBodiesInsideParent/findBodiesInsideSiblings both exclude it for
-   *  exactly that reason (see their own comments). Rendered as a small
-   *  surface marker, not a floating torus, so it doesn't visually read as
-   *  an orbiting structure it isn't. */
-  | 'surface_installation'
-  /** A travel gateway between systems — e.g. a wormhole or a game's fast-
-   *  travel jump point. Rendered distinctly from an ordinary station: it's
-   *  a hole between systems, not a structure. */
-  | 'jump_point'
-  /** A named navigation marker with no physical structure of its own —
-   *  visually the least substantial type, since it isn't a "thing" at all,
-   *  just a labelled point in space. */
-  | 'nav_point'
-  | 'asteroid'
-  | 'comet'
+/**
+ * Every real BodyType value, as a runtime array — the single source of
+ * truth `BodyType` itself is derived from, so the runtime check in
+ * dataContractWarnings.ts (findBodiesWithUnrecognizedType) can't drift out
+ * of step with the type the way a hand-copied list could. What each value
+ * means is documented on `BodyType` below.
+ */
+export const BODY_TYPES = [
+  'star',
+  'planet',
+  'dwarf_planet',
+  'moon',
+  'station',
+  'surface_installation',
+  'jump_point',
+  'nav_point',
+  'asteroid',
+  'comet',
+] as const
 
 /**
- * Classical orbital elements, all relative to the parent body's own
- * reference plane (for a planet, the ecliptic; for a moon, conventionally
- * its planet's equatorial or Laplace plane — kept simple here as "whatever
- * plane the source publishes the inclination against", which is the same
- * simplification every casual orbital diagram makes).
+ * What kind of thing a body is. Most values are self-explanatory; the
+ * three that aren't:
+ *
+ * - `'surface_installation'`: a structure genuinely built on a parent
+ *   body's own surface (a landing-zone city, a ground-based prison, a
+ *   mining outpost) — as opposed to `'station'`, which orbits or floats
+ *   free. This matters for more than labelling: sitting at/near the
+ *   parent's own real radius is the DEFINITION of correct for this type,
+ *   not a containment problem — findBodiesInsideParent/
+ *   findBodiesInsideSiblings both exclude it for exactly that reason (see
+ *   their own comments). Rendered as a small surface marker, not a
+ *   floating torus, so it doesn't visually read as an orbiting structure
+ *   it isn't.
+ * - `'jump_point'`: a travel gateway between systems — e.g. a wormhole or
+ *   a game's fast-travel jump point. Rendered distinctly from an ordinary
+ *   station: it's a hole between systems, not a structure.
+ * - `'nav_point'`: a named navigation marker with no physical structure of
+ *   its own — visually the least substantial type, since it isn't a
+ *   "thing" at all, just a labelled point in space.
  */
+export type BodyType = (typeof BODY_TYPES)[number]
+
+/** A real km vector — x/y in the system's reference plane, z out of it
+ *  (orbital convention, before render.ts remaps it into three.js's Y-up
+ *  world). Lives here, with the rest of the data contract; still
+ *  re-exported from kepler.ts, where it used to be declared. */
+export interface Vec3Km {
+  x: number
+  y: number
+  z: number
+}
+
+/**
+ * A direction in the system's own reference frame, as a longitude in the
+ * reference plane (degrees from +x, counter-clockwise seen from +z) and a
+ * latitude out of it (degrees, +90 = straight up +z). For the bundled
+ * Solar System that frame is the J2000 ecliptic, so this is ecliptic
+ * longitude/latitude; see poleFromEquatorialJ2000 (orientation.ts) for
+ * converting the IAU's published right ascension/declination into it.
+ */
+export interface PoleDirection {
+  longitudeDeg: number
+  latitudeDeg: number
+}
+
 export interface OrbitalElements {
   /** Semi-major axis, km */
   semiMajorAxisKm: number
@@ -64,8 +96,29 @@ export interface OrbitalElements {
   meanAnomalyAtEpochDeg: number
   /** Orbital period, days */
   orbitalPeriodDays: number
-  /** ISO date meanAnomalyAtEpochDeg is measured from */
+  /**
+   * ISO 8601 date meanAnomalyAtEpochDeg is measured from. Give a UTC `Z`
+   * or an explicit offset (`2000-01-01T12:00:00Z`) or a bare date
+   * (`2000-01-01`, which ISO defines as UTC). A date-time with no offset is
+   * read as UTC by this engine — JavaScript's own `Date` would read it as
+   * the viewer's LOCAL time, putting every body somewhere slightly
+   * different per time zone — and is flagged by validateSystemData as an
+   * `invalid-orbit` warning (`epoch-without-offset`), since the author
+   * probably didn't mean either reading on purpose.
+   */
   epoch: string
+  /**
+   * Pole of the plane `inclinationDeg`/`longitudeOfAscendingNodeDeg`/
+   * `argumentOfPeriapsisDeg` are measured against, in the system's
+   * reference frame (see PoleDirection). Unset means the reference plane
+   * itself. That plane's own x-axis (where the ascending node is measured
+   * from) is its ascending node on the reference plane — see
+   * orientation.ts's planeBasis. Typically the parent's own `pole` (moon
+   * elements quoted against the planet's equator) or a moon's local
+   * Laplace pole; a ringed planet's moons only line up with its rings when
+   * this matches the planet's `pole`.
+   */
+  referencePlanePole?: PoleDirection
 }
 
 /**
@@ -217,16 +270,30 @@ export interface CelestialBody {
    */
   atmosphereHeightKm?: number
   /**
-   * Obliquity, degrees — the tilt of this body's equator (and so of its
-   * ring plane) against its own orbital reference plane. Saturn's rings sit
-   * at its 26.7°, Uranus's at a near-sideways 97.8°. Only `rings` use it
-   * so far; unset means 0 (rings flat in the reference plane).
+   * Obliquity, degrees — the tilt of this body's equator against its own
+   * orbit (Saturn 26.7°, Uranus a near-sideways 97.8°). On its own it says
+   * how FAR the equator tilts but not which WAY, so it's only a fallback
+   * for the ring plane when `pole` isn't set: the equator is then taken as
+   * tilted by this much with its ascending node on the reference frame's
+   * +x axis — the same convention as an orbit's inclination, so a moon with
+   * `inclinationDeg` equal to this and `longitudeOfAscendingNodeDeg` 0 lies
+   * exactly in the ring plane. Unset (and no `pole`) means 0.
    */
   axialTiltDeg?: number
   /**
+   * Direction of the body's spin axis — the pole its rotation turns
+   * anticlockwise about (the right-hand rule), in the system's reference
+   * frame (see PoleDirection). Defines the equatorial plane its `rings`
+   * are drawn in, and it's what a moon's `orbit.referencePlanePole` should
+   * match when its elements are quoted against this body's equator. For a
+   * retrograde rotator (Uranus, Pluto) this is the opposite end from the
+   * IAU's "north" pole for planets. Takes precedence over `axialTiltDeg`.
+   */
+  pole?: PoleDirection
+  /**
    * The body's own ring system — part of the body, not a separate object:
    * drawn with it, moving with it, selected and framed with it, in its
-   * equatorial plane (see `axialTiltDeg`). Radii are real km from the
+   * equatorial plane (see `pole`, or `axialTiltDeg` as a fallback). Radii are real km from the
    * body's centre and scale with the body as it's rendered, so a ring stays
    * in proportion even while a small body is floored to a minimum on-screen
    * size (see pixelFloor.ts). For a population that surrounds a star, or a
@@ -279,7 +346,7 @@ export type BeltShape = 'ring' | 'shell' | 'cluster'
 export interface BeltSite {
   name: string
   /** Real positions, km, relative to the belt's own `parentId`. */
-  positions: { xKm: number; yKm: number; zKm: number }[]
+  positions: FixedPosition[]
   color?: string
   note?: string
   wikiSummary?: string
@@ -308,9 +375,14 @@ export interface BeltRegion {
   parentId: string
   innerRadiusKm: number
   outerRadiusKm: number
-  /** Degrees — how far particles scatter above/below the reference plane.
-   *  A few degrees for a planetary ring, tens of degrees for the asteroid
-   *  belt, effectively all directions (~90°+) for a cloud like Oort's. */
+  /**
+   * Degrees — the full angular THICKNESS of the population, centred on the
+   * reference plane: particles scatter up to half of this above it and
+   * half below (the asteroid belt's 20 is ±10°). For a 'shell', 180 is a
+   * complete sphere; anything less is a shell with its polar caps left
+   * empty. A few degrees for a thin ring, tens of degrees for the asteroid
+   * belt.
+   */
   inclinationSpreadDeg: number
   /** How many particles to render. When `realPositions` is set, this is
    *  just its length (the real count); otherwise it's a rendering/
@@ -328,7 +400,7 @@ export interface BeltRegion {
    * [innerRadiusKm, outerRadiusKm] — real data over an invented
    * distribution, whenever real data actually exists.
    */
-  realPositions?: { xKm: number; yKm: number; zKm: number }[]
+  realPositions?: FixedPosition[]
   /**
    * Radius ranges the scattered population keeps clear of — e.g. the
    * asteroid belt's Kirkwood gaps, cleared by resonance with Jupiter. Only

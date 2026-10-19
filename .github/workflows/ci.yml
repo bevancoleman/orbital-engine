@@ -5,32 +5,55 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# Actions are pinned to full commit SHAs (tags can be moved); the trailing
+# `# vX.Y.Z` comment is what Dependabot reads and rewrites when it bumps them.
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # --ignore-scripts skips `prepare` (a full build) — the explicit build
+      # step below is the one that counts.
+      - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test
+      - run: npm run test:coverage
       - run: npm run build
+      # Package-shape checks against the real tarball: exports/types per
+      # condition (attw) and general package.json/publishing lint (publint).
+      - run: npx --yes publint@0.3.25 --strict
+      - run: npx --yes @arethetypeswrong/cli@0.18.5 --pack .
 
   e2e:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
-      - run: npm ci --prefix examples/basic
-      - run: npm ci --prefix examples/with-models
+      # The examples link the root package via `file:../..`; with scripts
+      # ignored, its `prepare` doesn't rebuild dist/ a second time.
+      - run: npm ci --ignore-scripts --prefix examples/basic
+      - run: npm ci --ignore-scripts --prefix examples/with-models
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
+      - name: Upload Playwright report and traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14

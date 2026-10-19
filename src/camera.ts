@@ -10,11 +10,29 @@
 import { resolveWorldPosition, type WorldVec } from './render'
 import { compressDistance, trueRadius } from './scale'
 import { ringOuterRadiusKm } from './rings'
+import { MS_PER_DAY } from './constants'
+import { lookupBody } from './hierarchy'
+import {
+  addVec3,
+  anyPerpendicularUnitVec3,
+  dotVec3,
+  lengthVec3,
+  lerpVec3,
+  normalizeOr,
+  scaleVec3,
+  subtractVec3,
+} from './vec3'
 import type { BeltRegion, CelestialBody, StarSystemData } from './types'
 
 export const DEFAULT_CAMERA_DISTANCE = 134 // matches the initial camera position in OrbitalSystemScene
 
-const MS_PER_DAY = 86_400_000
+/** The unit viewing direction (target -> camera) of the Canvas's own
+ *  initial camera position, [0, 60, 120] (see OrbitalSystemScene) —
+ *  CameraRig's starting `lastGoodDirection` and routeCameraSimulator's
+ *  first-leg starting view. One shared, genuinely normalized constant: the
+ *  two used to each hardcode a rounded [0, 0.447, 0.894], which isn't
+ *  quite unit length. */
+export const DEFAULT_VIEW_DIRECTION: WorldVec = [0, 1 / Math.sqrt(5), 2 / Math.sqrt(5)]
 
 /** How long a fly-to takes, start to end (CameraRig.tsx's own eased tween —
  *  see sampleFlightPath below). Exported from here, not just kept local to
@@ -161,7 +179,7 @@ export function findContextBody(fromBody: CelestialBody, toBody: CelestialBody, 
       chain.push(current)
       seen.add(current.id)
       if (current.parentId) {
-        current = system.bodies.find((b) => b.id === current!.parentId)
+        current = lookupBody(system.bodies, current.parentId)
       } else if (star && current.id !== star.id) {
         current = star
       } else {
@@ -405,18 +423,46 @@ export function applyContextBulge(
   const bump = midFlightBump(t)
   if (bump <= 0) return pathPosition
   const natural = naturalFlightOffset(startPosition, startTarget, endPosition, endTarget, t)
+  if (!(natural.distance > 0)) return pathPosition
   const neededDistance = contextFitDistance(target, contextBody.position, contextBody.radius)
-  // Already comfortably fits — pathPosition untouched, INCLUDING its
-  // direction. A real bug this guards against: computing a rotated
-  // direction unconditionally (whenever bump > 0) still nudged the
-  // camera sideways even when no extra distance was needed at all, since
-  // rotating direction alone (at an unchanged distance) is still a real
-  // position change, not a no-op.
-  if (neededDistance <= natural.distance || natural.distance <= 0) return pathPosition
-  const distance = natural.distance * Math.pow(neededDistance / natural.distance, bump)
+  // How far short of fitting the context body the natural framing falls,
+  // in log space — 0 whenever it already fits. Everything below is a
+  // CONTINUOUS function of this (and of bump), which is the fix for a
+  // real, measured bug: this used to return pathPosition untouched
+  // whenever the context body already fit, and otherwise a position
+  // whose DIRECTION was already rotated by the full bump. At the exact
+  // crossover (needed == natural distance) the distance matched but the
+  // direction snapped by up to `bump` of the way toward away-from-context
+  // in a single frame — measured at ~29° on an ISS/Hubble-style flight
+  // past Earth. Now the rotation weight ramps in smoothly with the
+  // shortfall instead (CONTEXT_BULGE_ROTATION_RAMP), so at zero shortfall
+  // it's exactly the natural framing, same as before — the original
+  // reason for the early return (rotating direction alone, with no extra
+  // distance needed, is still a real sideways nudge) still holds.
+  const shortfall = Math.max(0, Math.log(neededDistance / natural.distance))
+  const distance = natural.distance * Math.exp(shortfall * bump)
+  const rotationWeight = bump * smoothstep01(shortfall / CONTEXT_BULGE_ROTATION_RAMP)
   const awayFromContext = normalizeOr(subtractVec3(target, contextBody.position), natural.direction)
-  const direction = normalizeOr(lerpVec3(natural.direction, awayFromContext, bump), natural.direction)
+  const direction = slerpUnitVec3(natural.direction, awayFromContext, rotationWeight)
   return addVec3(target, scaleVec3(direction, distance))
+}
+
+/** How large applyContextBulge's log-space shortfall (ln(needed/natural
+ *  distance)) has to get before its direction blend reaches the full
+ *  `bump` weight. Wide on purpose: a true-scale flight's natural distance
+ *  sweeps many orders of magnitude in a fraction of a second, so a narrow
+ *  ramp would still rotate the view across only a frame or two — ln(1e4)
+ *  spreads the swing outward across the several-orders-of-magnitude
+ *  stretch where the context body stops fitting, measured at well under
+ *  1° of view change between finely-spaced samples on the same flight
+ *  that used to jump ~29° in one frame. */
+const CONTEXT_BULGE_ROTATION_RAMP = Math.log(1e4)
+
+/** Hermite smoothstep on [0, 1], clamped — zero slope at both ends, so a
+ *  weight driven by it eases in and out with no kink. */
+function smoothstep01(x: number): number {
+  const c = Math.min(1, Math.max(0, x))
+  return c * c * (3 - 2 * c)
 }
 
 /** A body to steer the camera's flight path away from — see
@@ -449,28 +495,15 @@ export function computeColliderBodies(system: StarSystemData, simDate: Date): Ca
   return system.bodies.map((b) => ({
     id: b.id,
     position: resolveWorldPosition(b, system.bodies, simDate),
-    radius: trueRadius(b.radiusKm),
+    // A non-finite radius (missing/invalid radiusKm) would become a NaN
+    // mesh scale on CameraRig's collider proxy — 0 instead (CameraRig
+    // floors the proxy at a tiny positive scale anyway).
+    radius: finiteOrZero(trueRadius(b.radiusKm)),
   }))
 }
 
-function subtractVec3(a: WorldVec, b: WorldVec): WorldVec {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-function addVec3(a: WorldVec, b: WorldVec): WorldVec {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-function scaleVec3(a: WorldVec, s: number): WorldVec {
-  return [a[0] * s, a[1] * s, a[2] * s]
-}
-
-function lengthVec3(a: WorldVec): number {
-  return Math.hypot(a[0], a[1], a[2])
-}
-
-function dotVec3(a: WorldVec, b: WorldVec): number {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+function finiteOrZero(value: number): number {
+  return Number.isFinite(value) ? value : 0
 }
 
 /**
@@ -504,16 +537,16 @@ function slerpUnitVec3(a: WorldVec, b: WorldVec, t: number): WorldVec {
   const cosTheta = Math.max(-1, Math.min(1, dotVec3(a, b)))
   if (cosTheta > 0.9995) return normalizeOr(lerpVec3(a, b, t), a)
   const theta = Math.acos(cosTheta) * t
-  const relative = normalizeOr(subtractVec3(b, scaleVec3(a, cosTheta)), b)
+  // Exactly (or numerically) antipodal: `b - a·cosθ` is then the zero
+  // vector, and every great circle through a and b is equally valid — pick
+  // any one, via an arbitrary perpendicular. The old fallback reused `b`
+  // itself as the "perpendicular" axis, which isn't one: the result then
+  // collapsed through zero length partway through and overshot to ~1.41x
+  // unit length later, reachable whenever a flight's arrival direction
+  // happened to be exactly opposite its lookBias-adjusted end direction.
+  const rejection = subtractVec3(b, scaleVec3(a, cosTheta))
+  const relative = lengthVec3(rejection) > 1e-9 ? normalizeOr(rejection, b) : anyPerpendicularUnitVec3(a)
   return addVec3(scaleVec3(a, Math.cos(theta)), scaleVec3(relative, Math.sin(theta)))
-}
-
-/** Normalizes `v`, falling back to `fallback` (assumed already sane —
- *  never itself renormalized here) when `v` is degenerate (zero or
- *  near-zero length) rather than producing NaNs/Infinity. */
-function normalizeOr(v: WorldVec, fallback: WorldVec): WorldVec {
-  const len = lengthVec3(v)
-  return len > 1e-9 ? scaleVec3(v, 1 / len) : fallback
 }
 
 /** How strongly a flight's final look direction gets pulled toward "facing
@@ -663,25 +696,42 @@ export function trackingDelta(previous: WorldVec | null, live: WorldVec): WorldV
  * bounds on both sides of it.
  */
 export function smoothTrajectory(points: readonly WorldVec[], windowRadius: number): WorldVec[] {
-  if (windowRadius <= 0) return points.slice()
-  return points.map((_, i) => {
-    const lo = Math.max(0, i - windowRadius)
-    const hi = Math.min(points.length - 1, i + windowRadius)
-    let sx = 0,
-      sy = 0,
-      sz = 0
-    for (let k = lo; k <= hi; k++) {
-      sx += points[k]![0]
-      sy += points[k]![1]
-      sz += points[k]![2]
-    }
-    const n = hi - lo + 1
-    return [sx / n, sy / n, sz / n]
-  })
+  if (!(windowRadius > 0)) return points.slice()
+  // A FRACTIONAL radius (see adaptiveSmoothingRadius, which returns one)
+  // blends the two neighbouring integer windows linearly — what keeps the
+  // smoothed result continuous as the affordable radius shrinks or grows,
+  // rather than stepping each time it crosses a whole number.
+  const lower = Math.floor(windowRadius)
+  const fraction = windowRadius - lower
+  if (fraction === 0) return movingAverage(buildPrefixSums(points), points.length, lower)
+  const prefix = buildPrefixSums(points)
+  const below = movingAverage(prefix, points.length, lower)
+  const above = movingAverage(prefix, points.length, lower + 1)
+  return below.map((p, i) => lerpVec3(p, above[i]!, fraction))
 }
 
-function lerpVec3(a: WorldVec, b: WorldVec, t: number): WorldVec {
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+/** Running per-axis sums (prefix[k] = sum of points[0..k-1]) — lets every
+ *  window average below cost O(1) instead of O(window), the shared core of
+ *  both smoothTrajectory and adaptiveSmoothingRadius (which used to each
+ *  re-sum every window from scratch: O(N·R) per radius, O(N·R²) for the
+ *  adaptive search). */
+function buildPrefixSums(points: readonly WorldVec[]): WorldVec[] {
+  const prefix: WorldVec[] = [[0, 0, 0]]
+  for (let i = 0; i < points.length; i++) prefix.push(addVec3(prefix[i]!, points[i]!))
+  return prefix
+}
+
+/** Clamped-window moving average of `count` points at an INTEGER radius,
+ *  from buildPrefixSums' output — same "clamp at the ends rather than pad"
+ *  rule smoothTrajectory's own comment describes. */
+function movingAverage(prefix: readonly WorldVec[], count: number, radius: number): WorldVec[] {
+  const out: WorldVec[] = []
+  for (let i = 0; i < count; i++) {
+    const lo = Math.max(0, i - radius)
+    const hi = Math.min(count - 1, i + radius)
+    out.push(scaleVec3(subtractVec3(prefix[hi + 1]!, prefix[lo]!), 1 / (hi - lo + 1)))
+  }
+  return out
 }
 
 /**
@@ -714,24 +764,30 @@ export function adaptiveSmoothingRadius(
   maxLagFraction: number = 0.15
 ): number {
   const maxLag = maxLagFraction * viewingDistance
-  for (let radius = maxRadius; radius > 0; radius--) {
-    let worstExcursion = 0
-    for (let i = 0; i < points.length; i++) {
-      const lo = Math.max(0, i - radius)
-      const hi = Math.min(points.length - 1, i + radius)
-      let sx = 0,
-        sy = 0,
-        sz = 0
-      for (let k = lo; k <= hi; k++) {
-        sx += points[k]![0]
-        sy += points[k]![1]
-        sz += points[k]![2]
-      }
-      const n = hi - lo + 1
-      const dist = lengthVec3(subtractVec3(points[i]!, [sx / n, sy / n, sz / n]))
-      worstExcursion = Math.max(worstExcursion, dist)
-    }
-    if (worstExcursion <= maxLag) return radius
+  const ceiling = Math.max(0, Math.floor(maxRadius))
+  const prefix = buildPrefixSums(points)
+  const worstExcursion = (radius: number): number => {
+    const smoothed = movingAverage(prefix, points.length, radius)
+    let worst = 0
+    for (let i = 0; i < points.length; i++) worst = Math.max(worst, lengthVec3(subtractVec3(points[i]!, smoothed[i]!)))
+    return worst
+  }
+  // Returns a FRACTIONAL radius, interpolating between the largest whole
+  // radius that fits (`radius`) and the next one up (which doesn't), rather
+  // than the old integer step — a real, measured bug: each time the
+  // affordable radius flipped between r and r-1 (as the viewing distance,
+  // or the body's own excursions, changed frame to frame), the tracked
+  // position jumped by up to maxLagFraction of the viewing distance in a
+  // single frame (~8.5° off-axis). smoothTrajectory blends the two
+  // neighbouring windows for a fractional radius, and since each point's
+  // blended excursion is at most the same blend of the two windows'
+  // excursions, interpolating to exactly maxLag still never exceeds it.
+  let above = worstExcursion(ceiling)
+  if (above <= maxLag) return ceiling
+  for (let radius = ceiling - 1; radius >= 0; radius--) {
+    const current = radius === 0 ? 0 : worstExcursion(radius)
+    if (current <= maxLag) return radius + Math.min(1, Math.max(0, (maxLag - current) / (above - current)))
+    above = current
   }
   return 0
 }
@@ -950,6 +1006,57 @@ export function sampleFlightPath(
   return { position: addVec3(target, scaleVec3(direction, distance)), target }
 }
 
+/** A fly-to's fixed inputs — both endpoints, the context body to keep in
+ *  frame mid-flight, and the destination's predicted trajectory — i.e.
+ *  everything sampleFlightFrame needs besides progress itself. */
+export interface FlightEndpoints {
+  startPosition: WorldVec
+  startTarget: WorldVec
+  endPosition: WorldVec
+  endTarget: WorldVec
+  /** See FocusTarget.contextBody. */
+  contextBody: { position: WorldVec; radius: number } | null
+  /** See FocusTarget.predictedTargetAt. */
+  predictedTargetAt: ((t: number) => WorldVec) | null
+}
+
+/**
+ * The full per-frame flight composition — sampleFlightPath's eased tween,
+ * the look-at point pushed clear of the context body, then the context
+ * bulge — as ONE function shared by CameraRig's real flight (via
+ * cameraFlightLifecycle.ts's sampleFlight) and routeCameraSimulator.ts's
+ * fixture flights. The simulator used to call sampleFlightPath alone and
+ * so never exercised the bulge at all; sharing the composition is what
+ * keeps the fixture honest about the path CameraRig actually renders.
+ */
+export function sampleFlightFrame(flight: FlightEndpoints, t: number): FlightPathPoint {
+  const path = sampleFlightPath(
+    flight.startPosition,
+    flight.startTarget,
+    flight.endPosition,
+    flight.endTarget,
+    t,
+    flight.predictedTargetAt ?? undefined
+  )
+  // path.target is sampleFlightPath's own independently-lerped target — a
+  // straight line between two points that can each be on very different
+  // sides of a shared nearby parent, so pushed back outside the context
+  // body's own volume (a no-op whenever it's already clear) before it's
+  // used as the look-at anchor for anything below.
+  const target = keepClearOfContextBody(path.target, flight.contextBody)
+  const position = applyContextBulge(
+    path.position,
+    flight.startPosition,
+    flight.startTarget,
+    flight.endPosition,
+    flight.endTarget,
+    target,
+    flight.contextBody,
+    t
+  )
+  return { position, target }
+}
+
 /**
  * Camera distance that fits a world-space radius comfortably in view, for
  * the default 50° vertical FOV — same idea as fitting a frustum, just
@@ -970,9 +1077,14 @@ export function sampleFlightPath(
  * landed.
  */
 export function distanceToFit(worldRadius: number, marginFactor = 2.2): number {
+  // A NaN radius (a body with no usable radiusKm reaching here via
+  // trueRadius) used to poison every Math.max/min below into NaN — and a
+  // NaN camera distance into a NaN camera position. Treated as "nothing to
+  // fit" instead: the floor, the same as a zero radius.
+  const radius = Number.isNaN(worldRadius) ? 0 : worldRadius
   const halfFovRad = (VERTICAL_FOV_DEG * Math.PI) / 360
-  const floor = minCameraDistanceForRadius(worldRadius)
-  const raw = (Math.max(worldRadius, floor / 2) * marginFactor) / Math.tan(halfFovRad)
+  const floor = minCameraDistanceForRadius(radius)
+  const raw = (Math.max(radius, floor / 2) * marginFactor) / Math.tan(halfFovRad)
   return Math.min(MAX_CAMERA_DISTANCE, Math.max(floor, raw))
 }
 
@@ -1045,7 +1157,7 @@ export function computeFocusForBody(
     maxExtent = Math.max(maxExtent, dist + trueRadius(child.radiusKm))
   }
 
-  const parent = body.parentId ? system.bodies.find((b) => b.id === body.parentId) : undefined
+  const parent = body.parentId ? lookupBody(system.bodies, body.parentId) : undefined
   const lookBias: WorldVec | null = parent ? subtractVec3(resolveWorldPosition(parent, system.bodies, simDate), bodyPos) : null
 
   const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
@@ -1099,6 +1211,12 @@ export function predictBodyTrajectory(
   durationMs: number,
   samples: number = DEFAULT_TRAJECTORY_SAMPLES
 ): WorldVec[] {
+  // samples=0 used to divide 0/0 into NaN dates (and NaN positions), then
+  // crash sampleTrajectory with an out-of-range index — fail loudly and
+  // clearly at the source instead.
+  if (!Number.isInteger(samples) || samples < 1) {
+    throw new RangeError(`predictBodyTrajectory: samples must be a positive integer, got ${samples}`)
+  }
   const points: WorldVec[] = []
   for (let i = 0; i <= samples; i++) {
     const elapsedRealMs = (i / samples) * durationMs
@@ -1131,8 +1249,8 @@ function sampleTrajectory(points: readonly WorldVec[], t: number): WorldVec {
  *  "how far did the body actually wander" over the span it was sampled
  *  across, as opposed to just its start-to-end displacement (which can
  *  understate a body that loops most of the way back to where it began).
- *  O(n²) in sample count, fine at the sizes this engine actually uses
- *  (tens to low hundreds of samples). */
+ *  O(n²) in sample count — see trajectoryExceeds for the cheap bounding-box
+ *  pre-check safePredictFlightTarget uses to skip this in the common case. */
 export function trajectoryDiameter(points: readonly WorldVec[]): number {
   let maxDist = 0
   for (let i = 0; i < points.length; i++) {
@@ -1141,6 +1259,27 @@ export function trajectoryDiameter(points: readonly WorldVec[]): number {
     }
   }
   return maxDist
+}
+
+/** True when trajectoryDiameter(points) > limit, without paying for the
+ *  O(n²) pairwise scan whenever an O(n) bounding box already settles it:
+ *  the box's diagonal is an upper bound on the diameter (so a diagonal
+ *  within `limit` means the diameter is too), and its longest side is a
+ *  lower bound (so a side past `limit` means the diameter is too). Only
+ *  the band between the two needs the exact answer. */
+function trajectoryExceeds(points: readonly WorldVec[], limit: number): boolean {
+  const min: WorldVec = [Infinity, Infinity, Infinity]
+  const max: WorldVec = [-Infinity, -Infinity, -Infinity]
+  for (const p of points) {
+    for (let c = 0; c < 3; c++) {
+      min[c] = Math.min(min[c]!, p[c]!)
+      max[c] = Math.max(max[c]!, p[c]!)
+    }
+  }
+  const extent = subtractVec3(max, min)
+  if (lengthVec3(extent) <= limit) return false
+  if (Math.max(extent[0], extent[1], extent[2]) > limit) return true
+  return trajectoryDiameter(points) > limit
 }
 
 /** Convenience wrapper combining predictBodyTrajectory + sampleTrajectory
@@ -1180,7 +1319,7 @@ export function safePredictFlightTarget(
   maxExcursionFraction: number = 0.5
 ): ((t: number) => WorldVec) | null {
   const points = predictBodyTrajectory(body, system, startDate, daysPerSecond, durationMs, samples)
-  if (trajectoryDiameter(points) > maxExcursionFraction * viewingDistance) return null
+  if (trajectoryExceeds(points, maxExcursionFraction * viewingDistance)) return null
   return (t: number) => sampleTrajectory(points, t)
 }
 
@@ -1210,7 +1349,7 @@ export function computeFocusForSystem(system: StarSystemData, simDate: Date): Fo
 /** Where to fly the camera for a selected belt: centred on its parent, at a
  *  distance that fits the belt's full outer radius. */
 export function computeFocusForBelt(belt: BeltRegion, system: StarSystemData, simDate: Date): FocusTarget {
-  const parent = system.bodies.find((b) => b.id === belt.parentId)
+  const parent = lookupBody(system.bodies, belt.parentId)
   const parentPos = parent ? resolveWorldPosition(parent, system.bodies, simDate) : ([0, 0, 0] as WorldVec)
   const outerWorldRadius = compressDistance(belt.outerRadiusKm)
   return { position: parentPos, distance: distanceToFit(outerWorldRadius, 1.6), lookBias: null, contextBody: null }

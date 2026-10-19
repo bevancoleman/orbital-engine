@@ -5,6 +5,19 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # three / react / @react-three/* are peer-locked to each other (fiber
+      # caps react, drei pins fiber's major, @types/three tracks three) —
+      # bumped one at a time they fail peer resolution. Listed before
+      # dev-dependencies because Dependabot uses the first matching group.
+      render-stack:
+        patterns:
+          - "three"
+          - "@types/three"
+          - "@react-three/*"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
       dev-dependencies:
         dependency-type: development
       security-updates:
@@ -26,6 +39,15 @@ updates:
     schedule:
       interval: weekly
     groups:
+      render-stack: # same peer-locked set as the root entry — see there
+        patterns:
+          - "three"
+          - "@types/three"
+          - "@react-three/*"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
       # vite and @vitejs/plugin-react are peer-locked to each other — bumping
       # one without the other breaks npm's peer resolution (seen firsthand:
       # PRs #6-#9). Grouping all dev deps keeps such pairs moving together.
@@ -40,10 +62,29 @@ updates:
     schedule:
       interval: weekly
     groups:
+      render-stack: # same peer-locked set as the root entry — see there
+        patterns:
+          - "three"
+          - "@types/three"
+          - "@react-three/*"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
       dev-dependencies:
         dependency-type: development
       security-updates:
         applies-to: security-updates
+        patterns:
+          - "*"
+  # Offline asset-rebuild scripts (not installed by the example or CI), but
+  # their lockfile still pulls in native code (sharp) worth keeping patched.
+  - package-ecosystem: npm
+    directory: /examples/with-models/asset-tools
+    schedule:
+      interval: weekly
+    groups:
+      dependencies:
         patterns:
           - "*"
   - package-ecosystem: github-actions

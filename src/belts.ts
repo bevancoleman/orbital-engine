@@ -41,34 +41,64 @@ const GAP_RETRIES = 20
  *
  * - Seeded from the belt's id, so the same belt scatters identically on
  *   every load rather than "sparkling" to a new pattern each time.
- * - Radius is drawn uniformly by AREA (r = √(r₀² + u(r₁² − r₀²))), not
- *   uniformly by radius — uniform-by-radius piles particles up at the inner
- *   edge, where each ring of the belt has less area to spread over.
+ * - For a 'ring' or 'cluster', radius is drawn uniformly by AREA
+ *   (r = √(r₀² + u(r₁² − r₀²))), not uniformly by radius — uniform-by-
+ *   radius piles particles up at the inner edge, where each ring of the
+ *   belt has less area to spread over. Elevation is spread uniformly
+ *   across ±half the inclination spread (see BeltRegion.
+ *   inclinationSpreadDeg) — thin enough that the sphere's curvature
+ *   doesn't matter.
+ * - For a 'shell', the same reasoning one dimension up: radius uniform by
+ *   VOLUME (r = ∛(r₀³ + u(r₁³ − r₀³))), and elevation uniform by SOLID
+ *   ANGLE (sin φ uniform, capped at ±half the spread — 180° is the full
+ *   sphere). Real, observed bug: shells used the ring sampling, which is
+ *   pole-heavy (uniform in angle crowds the poles' shrinking circles) and
+ *   inner-heavy (r² rather than r³) — and the Oort cloud's spread of 90
+ *   drew only a ±45° band, not a cloud.
  * - Radii inside any of the belt's `gaps` are redrawn.
  * - Angle is spread round the full circle, or across ±half the angular
  *   spread for a co-orbital population (added to its live reference angle
  *   at render time — see resolve.ts's coOrbitalReferenceAngle).
- * - Elevation is spread across ±half the inclination spread.
+ *
+ * Every particle makes the same draws in the same order whatever the
+ * shape, so changing how one shape maps them never reshuffles another's.
  */
 export function sampleBeltParticles(belt: BeltRegion): Float32Array {
   const rand = mulberry32(hashString(belt.id))
-  const [inner, outer] = [belt.innerRadiusKm, belt.outerRadiusKm]
   const inGap = (r: number) => belt.gaps?.some((gap) => r > gap.innerRadiusKm && r < gap.outerRadiusKm) ?? false
   const angularSpread = belt.coOrbital ? (belt.coOrbital.angularSpreadDeg * Math.PI) / 180 : Math.PI * 2
-  const elevationSpread = (belt.inclinationSpreadDeg * Math.PI) / 180
+  const { radiusFor, elevationFor } = shapeSampler(belt)
 
   const out = new Float32Array(belt.particleCount * 3)
   for (let i = 0; i < belt.particleCount; i++) {
     let radius = 0
     for (let attempt = 0; attempt < GAP_RETRIES; attempt++) {
-      radius = Math.sqrt(inner * inner + rand() * (outer * outer - inner * inner))
+      radius = radiusFor(rand())
       if (!inGap(radius)) break
     }
     out[i * 3] = radius
     out[i * 3 + 1] = belt.coOrbital ? (rand() - 0.5) * angularSpread : rand() * Math.PI * 2
-    out[i * 3 + 2] = (rand() - 0.5) * elevationSpread
+    out[i * 3 + 2] = elevationFor(rand())
   }
   return out
+}
+
+/** Maps uniform draws u ∈ [0, 1) to a radius and an elevation for the
+ *  belt's shape — see sampleBeltParticles for why each shape differs. */
+function shapeSampler(belt: BeltRegion): { radiusFor: (u: number) => number; elevationFor: (u: number) => number } {
+  const [inner, outer] = [belt.innerRadiusKm, belt.outerRadiusKm]
+  const elevationSpread = (belt.inclinationSpreadDeg * Math.PI) / 180
+  if (beltShape(belt) === 'shell') {
+    const maxSin = Math.sin(Math.min(elevationSpread / 2, Math.PI / 2))
+    return {
+      radiusFor: (u) => Math.cbrt(inner ** 3 + u * (outer ** 3 - inner ** 3)),
+      elevationFor: (u) => Math.asin((2 * u - 1) * maxSin),
+    }
+  }
+  return {
+    radiusFor: (u) => Math.sqrt(inner * inner + u * (outer * outer - inner * inner)),
+    elevationFor: (u) => (u - 0.5) * elevationSpread,
+  }
 }
 
 /** The thinnest glow band drawn, as the largest allowed inner/outer ratio —

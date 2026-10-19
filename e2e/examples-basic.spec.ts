@@ -1,82 +1,74 @@
 import { test, expect, type Page } from '@playwright/test'
 
+import {
+  CENTRE,
+  EMPTY_SPACE_MAX_LIT,
+  bodyStaysCentred,
+  describeSamples,
+  litFractionAt,
+  sampleFlight,
+  sampleFor,
+} from './support/frameSampler'
+import {
+  flightCount,
+  flyAndSettle,
+  gotoScene,
+  play,
+  sceneRoot,
+  setMaxSpeed,
+  setRangeValue,
+  trackErrors,
+  waitForCameraAtRest,
+} from './support/scene'
+
 // Regression coverage for the engine's built-in (placeholder-shape)
 // rendering path — examples/basic never sets `modelUrl` on any body, so
 // everything here renders through PlaceholderBodyShape, not a loaded glTF
 // model. This is the path every consumer hits by default; a real 3D model
 // is opt-in per body (see examples/with-models for that path instead).
+//
+// No fixed sleeps: every wait is on the scene's observable state (its
+// root's data-camera-state / data-flight-count / data-focused-id /
+// data-sim-playing attributes — see support/scene.ts) or an auto-retrying
+// assertion, and every "what's on screen" check reads real rendered frames
+// (see support/frameSampler.ts) — never a screenshot taken at a guessed
+// moment of the ~900ms flight.
 
-function consoleErrors(page: Page): string[] {
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
-  page.on('console', (m) => {
-    if (m.type() === 'error') errors.push(m.text())
-  })
-  return errors
+const URL = 'http://localhost:5173/'
+
+function select(page: Page, label: string): Promise<string[]> {
+  return page.locator('select').selectOption({ label })
 }
 
-/** Reports whether a region of the rendered page — centered at the given
- *  normalized (cx, cy) in [0, 1] within the canvas, `sizeFraction` of its
- *  smaller dimension square — has any real content in it, as opposed to
- *  being pure/near-pure empty space. This is the real, direct way to check
- *  "is the selected body actually on screen, not just did nothing throw"
- *  — the scene's background is always solid black (see the Canvas's own
- *  `<color attach="background">`), so a region with nothing in it screens
- *  as uniformly black. Used to catch the exact regression this guards: the
- *  camera finishing a fly-to/zoom pointed at empty space instead of the
- *  tracked body, which no console-error check would ever catch (nothing
- *  throws — the camera is just aimed wrong).
- *
- *  Implemented via PNG byte size, not manual pixel inspection — an earlier
- *  version drew the canvas onto an offscreen 2D canvas and read pixels
- *  back via an in-page `page.evaluate()`, which isn't synchronized with
- *  the browser's actual paint/composite cycle the way `page.screenshot()`
- *  is; it intermittently read a stale/blank buffer even while the body was
- *  demonstrably visible in a real screenshot taken the same moment. A
- *  uniform black region compresses to a tiny PNG (a few hundred bytes);
- *  anything with real content — a body, its label text, starfield detail —
- *  is at least an order of magnitude larger. `page.screenshot()` goes
- *  through Playwright's own capture path, so it reflects what was actually
- *  composited, not an ad-hoc in-page redraw.
- *
- *  `sizeFraction` defaults to a generous "somewhere reasonably central"
- *  region, not a pixel-exact center point — camera framing settles a
- *  selected body close to center, not dead-on-the-pixel. */
-async function canvasHasContentAt(page: Page, cx = 0.5, cy = 0.5, sizeFraction = 0.3): Promise<boolean> {
-  const box = await page.locator('canvas').boundingBox()
-  if (!box) return false
-  const size = Math.max(20, Math.min(box.width, box.height) * sizeFraction)
-  const clip = {
-    x: Math.min(Math.max(box.x, box.x + box.width * cx - size / 2), box.x + box.width - size),
-    y: Math.min(Math.max(box.y, box.y + box.height * cy - size / 2), box.y + box.height - size),
-    width: size,
-    height: size,
-  }
-  const buf = await page.screenshot({ clip })
-  // Empirically: a genuinely empty (near-black starfield) region compresses
-  // to ~150-200 bytes; real content (a body, label text) is 10x-100x that.
-  return buf.length > 500
+/** The example keys OrbitalSystemScene by system id, so switching mounts a
+ *  fresh scene (flight count back to 0) whose own initial framing flight
+ *  is the one to wait for. The click's React update is a discrete event,
+ *  committed before click() resolves, so the old scene's state can't be
+ *  mistaken for the new one's. */
+async function switchToFictionalSystem(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /Fictional system/ }).click()
+  await expect(page.getByRole('button', { name: 'Aurum', exact: true })).toBeVisible()
+  await waitForCameraAtRest(page, 1)
 }
 
 test.describe('examples/basic — built-in placeholder rendering', () => {
   test('loads the real Solar System with no console errors and a filled canvas', async ({ page }) => {
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(1000)
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
 
     const canvas = page.locator('canvas')
     await expect(canvas).toBeVisible()
     const box = await canvas.boundingBox()
     expect(box?.width).toBeGreaterThan(100)
     expect(box?.height).toBeGreaterThan(100)
+    expect(await litFractionAt(page)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
     expect(errors).toEqual([])
   })
 
   test('selecting a body via the dropdown shows real orbital data in the info panel', async ({ page }) => {
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-    await page.locator('select').selectOption({ label: 'Earth' })
-    await page.waitForTimeout(500)
+    await gotoScene(page, URL)
+    await select(page, 'Earth')
+    await expect(sceneRoot(page)).toHaveAttribute('data-focused-id', 'earth')
 
     // The info panel shows real Kepler elements for an orbiting body —
     // semi-major axis (AU), eccentricity, inclination, period. These are
@@ -88,11 +80,9 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
   })
 
   test('flying to the ISS does not crash and shows the pixel-floor note', async ({ page }) => {
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-    await page.getByRole('button', { name: /ISS/ }).click()
-    await page.waitForTimeout(1500)
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, () => page.getByRole('button', { name: /ISS/ }).click())
 
     // ISS's radiusKm is tiny enough that, without the pixel-floor system,
     // this body would render sub-pixel/invisible — the note field on this
@@ -100,25 +90,27 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // snapshot, not a stable mean element. Its presence is a reasonable
     // proxy that the real (non-placeholder-data) ISS entry rendered and
     // was selectable at all.
+    await expect(sceneRoot(page)).toHaveAttribute('data-focused-id', 'iss')
     await expect(page.locator('text=/snapshot/i')).toBeVisible()
     expect(errors).toEqual([])
   })
 
   test('switching to the fictional fixed-position system re-renders without error', async ({ page }) => {
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-    await page.getByRole('button', { name: /Fictional system/ }).click()
-    await page.waitForTimeout(1000)
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await switchToFictionalSystem(page)
 
-    await expect(page.getByRole('button', { name: 'Aurum', exact: true })).toBeVisible()
     // The dropdown is a genuine selection (unlike the "Fly to" buttons,
     // which only move the camera — see focusOnBody vs selectBody in
-    // OrbitalSystemScene — so it's the one that actually notifies onSelectBody
-    // and updates this page's own "Selected: …" text).
-    await page.locator('select').selectOption({ label: 'Aurum' })
-    await page.waitForTimeout(1000)
+    // useSelectionNavigation — so it's the one that actually notifies
+    // onSelectBody and updates this page's own "Selected: …" text).
+    await flyAndSettle(page, async () => {
+      await select(page, 'Aurum')
+    })
     await expect(page.getByText('Selected: Aurum')).toBeVisible()
+    // A fixed-position body is still "tracked" (its position just never
+    // changes) — the camera locks on it the same way.
+    await expect(sceneRoot(page)).toHaveAttribute('data-camera-state', 'tracking')
     // A fixedPosition body has no orbital elements — the info panel must
     // not show Kepler-element fields for it.
     await expect(page.getByText(/^a: /)).not.toBeVisible()
@@ -145,19 +137,13 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // which legitimately hides a label when two land close together on
     // screen at some other zoom level — a real, separate, working feature,
     // not the bug this test guards against.
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-    await page.getByRole('button', { name: /Fictional system/ }).click()
-    await page.waitForTimeout(1000)
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await switchToFictionalSystem(page)
 
-    const slider = page.locator('input[type=range]').first()
-    await slider.evaluate((el) => {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-      setter.call(el, '700')
-      el.dispatchEvent(new window.Event('input', { bubbles: true }))
-    })
-    await page.waitForTimeout(700)
+    // The zoom slider applies immediately (no flight); the label
+    // assertions below auto-retry until the visibility pass has caught up.
+    await setRangeValue(page.locator('input[type=range]').first(), 700)
 
     // The toolbar's own "Fly to" buttons share the same text as the
     // in-canvas labels this test actually cares about — scope to <div>
@@ -166,18 +152,6 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     await expect(page.getByText('Outbound Gateway', { exact: true }).and(page.locator('div'))).toBeVisible()
     expect(errors).toEqual([])
   })
-
-  /** The zoom slider's own numeric value (see OrbitalSystemScene's `input[
-   *  title^="Zoom"]`) — a direct, reliably-readable proxy for the live
-   *  camera-to-target distance (CameraRig's `onDistanceChange`), without
-   *  the timing imprecision of screenshot-based sampling. Distance is a
-   *  monotonic (log-mapped) function of this value, so "does the value
-   *  change gradually" and "does the value ever change at all" are both
-   *  answerable straight from this, no pixel inspection needed. */
-  async function zoomSliderValue(page: Page): Promise<number> {
-    const value = await page.locator('input[type=range][title^="Zoom"]').inputValue()
-    return Number(value)
-  }
 
   test('camera tracks a fast-orbiting selected body through the zoom-in and afterward, without needing Recenter', async ({ page }) => {
     // Regression test for two related, real, reported bugs, both about
@@ -190,9 +164,12 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // playback speeds that's a large fraction of a full lap within the
     // ~900ms flight itself), the body would already be gone by the time
     // the camera finished arriving, and the user had to click Recenter
-    // manually to reacquire it. Checked by directly sampling the WebGL
-    // canvas — a console-error check would never catch this, since
-    // nothing throws when the camera is just pointed at empty space.
+    // manually to reacquire it. Checked on every rendered frame from the
+    // landing onward — the ISS's own label (projected from the body's
+    // position by the same camera) must sit over the canvas centre, and
+    // the centre must have real rendered content. A console-error check
+    // would never catch this: nothing throws when the camera is just
+    // pointed at empty space.
     //
     // (b) "when time is on it is causing a lot of jumping... zooming to
     // ISS from the initial position when time is moving" — traced to a
@@ -202,59 +179,68 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // flight's own end kept leaping somewhere new every frame — visible as
     // the reported DISTANCE (not just position) failing to settle cleanly.
     //
-    // Both were fixed the same way: OrbitalSystemScene computes the fresh
-    // focus using a simDate already advanced by the flight's own duration
-    // (see camera.ts's FLY_DURATION_MS/computeFocusForBody), so the flight
-    // target is fixed — computed once, deterministically — for its whole
-    // duration. The precise numeric claim (computeFocusForBody actually
-    // resolves a predicted future simDate correctly, and the flight
-    // endpoint stays fixed regardless of the tracked body's later live
-    // position) is now covered exactly and deterministically by
-    // camera.test.ts's "resolving a PREDICTED (non-"now") simDate" tests
-    // and cameraFlightLifecycle.test.ts's "fixes the endpoint at flight
-    // start" test. What only a real e2e run can still add: the actual
-    // rendered canvas has real content (not empty space) once the flight
-    // lands and stays tracked afterward, AND the reported distance
-    // actually reaches and settles at the true-scale ISS distance instead
-    // of wobbling.
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    // Long enough that the initial "frame the whole system" flight has
-    // fully settled before this test's own flight starts — otherwise the
-    // two overlap and this test would be exercising an unrelated,
-    // legitimate "a fresh selection interrupts an in-progress flight"
-    // case instead of the one it's named for.
-    await page.waitForTimeout(1500)
-    // Time starts paused by default now (see OrbitalSystemScene's
-    // initialPlaying prop) — this test is specifically about tracking a
-    // MOVING body, so it needs to explicitly start playback.
-    await page.getByRole('button', { name: 'Play' }).click()
+    // Both were fixed the same way: the flight target is computed once,
+    // deterministically, from a simDate already advanced by the flight's
+    // own duration (see camera.ts's FLY_DURATION_MS/computeFocusForBody).
+    // The precise numeric claims are covered by camera.test.ts's
+    // "resolving a PREDICTED (non-"now") simDate" tests and
+    // cameraFlightLifecycle.test.ts's "fixes the endpoint at flight start"
+    // test. What only a real browser can add: the rendered frames
+    // themselves, every one of them, through and after the landing.
+    const errors = trackErrors(page)
+    // gotoScene waits for the initial "frame the whole system" flight to
+    // land — otherwise this test would be exercising the unrelated,
+    // legitimate "a fresh selection interrupts an in-progress flight" case.
+    await gotoScene(page, URL)
+    // Time starts paused by default (see OrbitalSystemScene's
+    // initialPlaying prop) — this test is about tracking a MOVING body.
+    await play(page)
 
-    await page.getByRole('button', { name: /ISS/ }).click()
-
-    const samples: number[] = []
-    for (let i = 0; i < 14; i++) {
-      samples.push(await zoomSliderValue(page))
-      await page.waitForTimeout(60)
-    }
-    // Distance itself monotonically shrinks (small tolerance for sampling
-    // noise around equal integer slider values) — a genuine regression
+    const flight = await sampleFlight(page, () => page.getByRole('button', { name: /ISS/ }).click(), { bodyName: 'ISS' })
+    const flying = flight.filter((s) => s.cameraState === 'flying')
+    expect(flying.length, describeSamples(flight)).toBeGreaterThan(0)
+    // Distance itself monotonically shrinks across every flight frame
+    // (small tolerance for equal-ish slider values) — a genuine regression
     // (e.g. re-deriving the end distance from a moving target each frame)
     // tends to wobble the DISTANCE too, not just position. And it must
     // have actually gone somewhere, not stalled at the start.
-    for (let i = 1; i < samples.length; i++) {
-      expect(samples[i]!).toBeLessThanOrEqual(samples[i - 1]! + 2)
+    for (let i = 1; i < flying.length; i++) {
+      expect(flying[i]!.zoom, describeSamples(flight)).toBeLessThanOrEqual(flying[i - 1]!.zoom + 2)
     }
-    expect(samples[samples.length - 1]!).toBeLessThan(samples[0]! - 10)
+    expect(flight[flight.length - 1]!.zoom).toBeLessThan(flight[0]!.zoom - 10)
 
-    // And the canvas must show real content both right as the ~900ms
-    // fly-to completes (exactly the moment bug (a) put the camera looking
-    // at empty space) and afterward, as the ISS keeps moving — not just
-    // win the single frame right as the flight ends.
-    expect(await canvasHasContentAt(page)).toBe(true)
-    await page.waitForTimeout(2000)
-    expect(await canvasHasContentAt(page)).toBe(true)
+    // The landing frame itself (exactly the moment bug (a) put the camera
+    // on empty space) and two more seconds of the ISS moving afterward.
+    const landed = [...flight.slice(-1), ...(await sampleFor(page, 2000, { bodyName: 'ISS' }))]
+    const centred = bodyStaysCentred(landed)
+    expect(centred.ok, centred.detail).toBe(true)
+    for (const sample of landed) expect(sample.lit, describeSamples(landed)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
+    expect(errors).toEqual([])
+  })
 
+  test('the ISS stays centred for several seconds at maximum playback speed (no slow drift)', async ({ page }) => {
+    // Coverage for review finding A1 (see cameraFlightLifecycle's
+    // advanceSteadyTracking): steady tracking used to apply only the
+    // frame-to-frame DELTA of the tracked position, so any gap between the
+    // flight's predicted end target and the body's real position at the
+    // settle frame was carried forward forever — at speed, the ISS crept
+    // (or jumped) off-screen and never came back. Unit tests pin the
+    // anchoring rule; this checks the real render loop over many frames at
+    // the speed where a 1ms mismatch is hundreds of framing distances.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await setMaxSpeed(page)
+    await play(page)
+    await flyAndSettle(page, () => page.getByRole('button', { name: /ISS/ }).click())
+
+    const samples = await sampleFor(page, 3000, { bodyName: 'ISS' })
+    expect(samples.length).toBeGreaterThan(5)
+    const centred = bodyStaysCentred(samples)
+    expect(centred.ok, centred.detail).toBe(true)
+    for (const sample of samples) {
+      expect(sample.cameraState).toBe('tracking')
+      expect(sample.lit, describeSamples(samples)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
+    }
     expect(errors).toEqual([])
   })
 
@@ -268,57 +254,43 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // animating whenever a component's delta fell below its fixed 1e-5
     // world-unit epsilon (routine for two true-scale satellites both only
     // a few hundred km from Earth), and a genuine race between a
-    // `useEffect`-driven flight start and R3F's own frame loop.
+    // `useEffect`-driven flight start and R3F's own frame loop. Both are
+    // covered precisely by unit tests (camera.test.ts's "still animates
+    // smoothly across a true-scale-tiny distance", cameraFlightLifecycle
+    // .test.ts's "excludes both the outgoing and incoming body"); 2
+    // switches here are enough to catch a regression in the real loop.
     //
-    // Both the exact numeric claim (sampleFlightPath still produces real,
-    // distinct intermediate points at THIS pair's own tiny (~1e-6 world
-    // unit) scale rather than collapsing to a snap — camera.test.ts's own
-    // "still animates smoothly across a true-scale-tiny distance" test)
-    // AND the collider-exclusion sequencing behind the race itself
-    // (cameraFlightLifecycle.test.ts's "excludes both the outgoing and
-    // incoming body" test) are now covered precisely and deterministically
-    // by fast unit tests — this no longer needs many repeated iterations
-    // to have a reasonable chance of catching a timing-dependent race; 2 is
-    // enough to catch a REGRESSION in either while staying fast. What only
-    // e2e coverage can still usefully add: repeated real selection churn
-    // between two true-scale bodies never throws, and the canvas has real
-    // content both mid-flight and once settled — the latter specifically
-    // guards the shared-parent "establishing shot" fix (see camera.ts's
-    // findContextBody/applyContextBulge) actually rendering correctly,
-    // which no pure-function test can see (it doesn't render anything).
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-
+    // Mid-flight is asserted on EVERY flight frame: a separate, real issue
+    // meant the straight-line path between two satellites of the same
+    // nearby parent could put the camera behind/inside that parent's own
+    // mesh partway through, blanking the canvas to empty deep space for a
+    // frame or two (Earth failing backface culling from the inside) —
+    // first seen around 100ms into the flight, NOT at the midpoint, which
+    // is why the old fixed-time screenshots (at 100ms and 450ms) were both
+    // fragile and incomplete. Fixed by camera.ts's applyContextBulge/
+    // findContextBody — Earth (their shared parent) stays framed as an
+    // establishing-shot anchor through the flight, so every frame has real
+    // content. No pure-function test can see that rendered result.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
     // Already paused by default (see OrbitalSystemScene's initialPlaying
     // prop) — the report was specifically that this reproduces without
     // the camera also having to cope with the objects moving.
+    await flyAndSettle(page, async () => {
+      await select(page, 'ISS')
+    })
 
-    await page.locator('select').selectOption({ label: 'ISS' })
-    await page.waitForTimeout(1200)
-
-    for (let i = 0; i < 2; i++) {
-      const label = i % 2 === 0 ? 'Hubble Space Telescope' : 'ISS'
-      await page.locator('select').selectOption({ label })
-      // Mid-flight is now also asserted, not just settled: a separate,
-      // real issue meant the straight-line path between two satellites of
-      // the same nearby parent could put the camera behind/inside that
-      // parent's own mesh partway through, blanking the canvas to empty
-      // deep space for a frame or two (Earth failing backface culling
-      // from the inside) — verified (directly, via screenshot) to show up
-      // specifically around 100ms into the ~900ms flight for this pair,
-      // NOT at the midpoint; sampling at 450ms alone passed even with the
-      // bug reintroduced, since that's past where it actually occurs.
-      // Fixed by camera.ts's applyContextBulge/findContextBody — Earth
-      // (their shared parent) now stays framed as an establishing-shot
-      // anchor for a good stretch of the flight, not just its exact
-      // midpoint, so there should be real content on screen throughout.
-      await page.waitForTimeout(100)
-      expect(await canvasHasContentAt(page)).toBe(true)
-      await page.waitForTimeout(350) // roughly the flight's own midpoint
-      expect(await canvasHasContentAt(page)).toBe(true)
-      await page.waitForTimeout(850) // let it fully settle
-      expect(await canvasHasContentAt(page)).toBe(true)
+    for (const label of ['Hubble Space Telescope', 'ISS']) {
+      const samples = await sampleFlight(page, async () => {
+        await select(page, label)
+      }, { bodyName: label })
+      const flying = samples.filter((s) => s.cameraState === 'flying')
+      expect(flying.length, describeSamples(samples)).toBeGreaterThan(0)
+      for (const sample of samples) expect(sample.lit, describeSamples(samples)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
+      // And it lands centred on the new body (checked over a few more
+      // frames, not just the landing one).
+      const centred = bodyStaysCentred(await sampleFor(page, 300, { bodyName: label }))
+      expect(centred.ok, centred.detail).toBe(true)
     }
 
     expect(errors).toEqual([])
@@ -328,46 +300,34 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     page,
   }) => {
     // Regression test for a real, reported bug: watching a selected body
-    // with the simulation running quickly (2 d/s at the time this was
-    // reported — this scene's default speed has since changed, see
-    // timeScale.ts, so this drives the slider explicitly rather than
-    // relying on whatever the current default happens to be) showed the
-    // Moon "appearing twice... switching location alternating between
-    // frames" — traced to CameraRig reading camera-controls' TRANSITION-
-    // END camera state (the default) instead of its LIVE one while
-    // rigidly translating the tracked camera/target each frame, which
-    // silently undid camera-controls' own per-frame collision clamp,
-    // immediately reapplied next frame, forever — see CameraRig.tsx's own
-    // header comment. A steady, uncontested track (no manual zoom, no
-    // flight) should report a STABLE distance from one sample to the
-    // next; a clamp-fight shows up as the reported distance swinging by a
-    // large amount between consecutive samples, not settling.
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-
-    await page.locator('select').selectOption({ label: 'Moon' })
-    await page.waitForTimeout(1500) // let the fly-to settle
-
-    // Time starts paused by default now (see OrbitalSystemScene's
-    // initialPlaying prop) — this test needs it playing throughout, and
-    // pushed up fast: the higher the speed, the bigger the per-frame
-    // tracking delta, and the more this bug (when present) shows up.
-    const speedSlider = page.getByLabel('Speed')
-    await speedSlider.evaluate((el) => {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-      setter.call(el, '1000') // max — a simulated year every 60 real seconds
-      el.dispatchEvent(new window.Event('input', { bubbles: true }))
+    // with the simulation running quickly showed the Moon "appearing
+    // twice... switching location alternating between frames" — traced to
+    // CameraRig reading camera-controls' TRANSITION-END camera state (the
+    // default) instead of its LIVE one while rigidly translating the
+    // tracked camera/target each frame, which silently undid camera-
+    // controls' own per-frame collision clamp, immediately reapplied next
+    // frame, forever — see CameraRig.tsx's own header comment. A steady,
+    // uncontested track (no manual zoom, no flight) should report a STABLE
+    // distance from one frame to the next; a clamp-fight shows up as the
+    // reported distance swinging by a large amount between consecutive
+    // frames. Sampled on every rendered frame rather than every ~60ms, so
+    // a frame-to-frame alternation can't alias away.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'Moon')
     })
-    await page.getByRole('button', { name: 'Play' }).click()
 
-    const samples: number[] = []
-    for (let i = 0; i < 20; i++) {
-      samples.push(await zoomSliderValue(page))
-      await page.waitForTimeout(60)
-    }
+    // Driven explicitly to max rather than relying on the default speed
+    // (see timeScale.ts): the higher the speed, the bigger the per-frame
+    // tracking delta, and the more this bug (when present) shows up.
+    await setMaxSpeed(page)
+    await play(page)
 
-    expect(await canvasHasContentAt(page)).toBe(true)
+    const samples = await sampleFor(page, 1500, { bodyName: 'Moon' })
+    const centred = bodyStaysCentred(samples)
+    expect(centred.ok, centred.detail).toBe(true)
+    expect(samples[samples.length - 1]!.lit).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
 
     // A clamp-fight alternates between two distant values every frame —
     // total movement many times larger than the actual range visited.
@@ -376,53 +336,132 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // generously rather than demanding an exactly flat line, since a real
     // obstruction passing briefly through the view is correct behaviour,
     // not a bug — only RAPID, REPEATED back-and-forth is.
-    const range = Math.max(...samples) - Math.min(...samples)
-    const totalVariation = samples.slice(1).reduce((sum, v, i) => sum + Math.abs(v - samples[i]!), 0)
-    expect(totalVariation).toBeLessThan(Math.max(range, 1) * 6)
+    const zooms = samples.map((s) => s.zoom)
+    const range = Math.max(...zooms) - Math.min(...zooms)
+    const totalVariation = zooms.slice(1).reduce((sum, v, i) => sum + Math.abs(v - zooms[i]!), 0)
+    expect(totalVariation, describeSamples(samples)).toBeLessThan(Math.max(range, 1) * 6)
 
     expect(errors).toEqual([])
   })
 
-  test('ringed planets render their own ring systems when selected, without errors', async ({ page }) => {
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-    for (const label of ['Saturn', 'Uranus']) {
-      await page.locator('select').selectOption({ label })
-      await page.waitForTimeout(2500)
+  test('moving the zoom slider mid-flight ends framed on the destination', async ({ page }) => {
+    // Coverage for interruptFlight (see cameraFlightLifecycle): the slider
+    // used to settle a flight wherever its tween happened to be (e.g. 38%
+    // of the way there) and then track empty space from that frozen
+    // mid-flight look-at point. The slider is moved from inside the page
+    // on the first frame the camera reports `flying`, so it's guaranteed
+    // to land mid-flight however slowly the browser is rendering.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    const before = await flightCount(page)
+    await select(page, 'Earth')
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          const root = document.querySelector<HTMLElement>('[data-camera-state]')!
+          const slider = document.querySelector<HTMLInputElement>('input[type=range][title^="Zoom"]')!
+          const tick = (): void => {
+            if (root.dataset.cameraState !== 'flying') {
+              requestAnimationFrame(tick)
+              return
+            }
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+            setter.call(slider, '400')
+            slider.dispatchEvent(new window.Event('input', { bubbles: true }))
+            resolve()
+          }
+          tick()
+        })
+    )
+    await waitForCameraAtRest(page, before + 1)
+    await expect(sceneRoot(page)).toHaveAttribute('data-camera-state', 'tracking')
+
+    const samples = await sampleFor(page, 500, { bodyName: 'Earth' })
+    const centred = bodyStaysCentred(samples)
+    expect(centred.ok, centred.detail).toBe(true)
+    for (const sample of samples) expect(sample.lit, describeSamples(samples)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
+    expect(errors).toEqual([])
+  })
+
+  test('rapid A → B → C selection does not throw and ends framed on C', async ({ page }) => {
+    // Coverage for retargeting while a flight is still in progress (see
+    // cameraFlightLifecycle's beginFlight: every body already excluded
+    // from collision stays excluded, and each new flight starts from the
+    // camera's LIVE mid-tween position). The three selections are made
+    // from inside the page, one animation frame apart, so each one is
+    // seen by the frame loop as its own flight start — well within the
+    // previous one's ~900ms.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    const before = await flightCount(page)
+    await page.evaluate(async (ids) => {
+      const dropdown = document.querySelector('select')!
+      const nextFrame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+      for (const id of ids) {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!
+        setter.call(dropdown, `body:${id}`)
+        dropdown.dispatchEvent(new window.Event('change', { bubbles: true }))
+        await nextFrame()
+      }
+    }, ['mars', 'jupiter', 'saturn'])
+    await waitForCameraAtRest(page, before + 3)
+    await expect(sceneRoot(page)).toHaveAttribute('data-focused-id', 'saturn')
+
+    const samples = await sampleFor(page, 500, { bodyName: 'Saturn' })
+    const centred = bodyStaysCentred(samples)
+    expect(centred.ok, centred.detail).toBe(true)
+    expect(errors).toEqual([])
+  })
+
+  test('ringed planets and the asteroid belt render when selected, without errors', async ({ page }) => {
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    for (const [label, id] of [
+      ['Saturn', 'saturn'],
+      ['Uranus', 'uranus'],
+    ] as const) {
+      await flyAndSettle(page, async () => {
+        await select(page, label)
+      })
+      await expect(sceneRoot(page)).toHaveAttribute('data-focused-id', id)
       // The rings are part of the planet: framing takes them in, so the
       // centre of the view has the planet and its rings in it.
-      expect(await canvasHasContentAt(page, 0.5, 0.5, 0.4)).toBe(true)
+      const samples = await sampleFor(page, 300, { bodyName: label, region: { ...CENTRE, sizeFraction: 0.4 } })
+      const centred = bodyStaysCentred(samples)
+      expect(centred.ok, centred.detail).toBe(true)
+      for (const sample of samples) expect(sample.lit, describeSamples(samples)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
     }
-    await page.locator('select').selectOption({ label: 'Asteroid Belt' })
-    await page.waitForTimeout(1500)
+    // A belt has no single body to track — the camera frames it and rests.
+    await flyAndSettle(page, async () => {
+      await select(page, 'Asteroid Belt')
+    })
+    await expect(sceneRoot(page)).toHaveAttribute('data-focused-id', 'asteroid-belt')
+    await expect(sceneRoot(page)).toHaveAttribute('data-camera-state', 'idle')
+    expect(await litFractionAt(page)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
     expect(errors).toEqual([])
   })
 
-  test('sanity check: canvasHasContentAt can actually detect empty space', async ({ page }) => {
-    // Proves the helper above isn't just trivially always-true. The exact
-    // center of frame isn't safe to assume is empty (the default view is
-    // already framed on the star, which sits right there) — a screen
-    // CORNER is: no reasonable camera framing (whole-system or zoomed to
-    // any one body) puts a foreground object in the extreme corner of the
-    // viewport, so it's reliably deep space regardless of what's selected.
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(1000)
-    // A small region here, deliberately — the default 0.3 "generous,
-    // roughly central" size would extend well past the corner into real
-    // content at this zoom level, which isn't what this check is testing.
-    expect(await canvasHasContentAt(page, 0.02, 0.02, 0.03)).toBe(false)
+  test('sanity check: the frame sampler can actually detect empty space', async ({ page }) => {
+    // Proves the lit-fraction check above isn't just trivially always-true.
+    // The exact center of frame isn't safe to assume is empty (the default
+    // view is already framed on the star, which sits right there) — a
+    // canvas CORNER is: no reasonable camera framing puts a foreground
+    // object in the extreme corner, so it's reliably deep space. The
+    // sampler reads WebGL pixels only, so the HTML dev panel overlaid on
+    // that corner doesn't count (a screenshot-based check saw it).
+    await gotoScene(page, URL)
+    expect(await litFractionAt(page, { cx: 0.02, cy: 0.02, sizeFraction: 0.03 })).toBeLessThan(EMPTY_SPACE_MAX_LIT)
+    expect(await litFractionAt(page)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
   })
 
-  /** The action log textarea's current text (see App.tsx's `aria-label="Action
-   *  log"` textarea, fed by OrbitalSystemScene's onAction prop) — read the
-   *  same way the existing tests read the Speed slider's value. */
-  async function actionLogText(page: Page): Promise<string> {
-    return page.getByLabel('Action log').inputValue()
+  /** The action log textarea (see App.tsx's `aria-label="Action log"`
+   *  textarea, fed by OrbitalSystemScene's onAction prop). */
+  function actionLog(page: Page) {
+    return page.getByLabel('Action log')
   }
 
   test('recordable UI actions (select, pause/play, speed) show up in the action log in order', async ({ page }) => {
-    // Coverage for the new onAction/actionLog feature (see src/actionLog.ts):
+    // Coverage for the onAction/actionLog feature (see src/actionLog.ts):
     // this session's own camera bugs took a lot of screenshot debugging to
     // pin down partly because a bug report never said exactly what was
     // clicked, when, or what the simulated date was at the time — this test
@@ -430,45 +469,32 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // textarea and preserves the order actions happened in, not the exact
     // timing/format details (those are covered precisely and deterministically
     // by actionLog.test.ts).
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
 
     // A session-start entry should already be there from mount, before any
     // user interaction at all.
-    expect(await actionLogText(page)).toContain('session-start')
+    await expect(actionLog(page)).toHaveValue(/session-start/)
 
-    await page.locator('select').selectOption({ label: 'Earth' })
-    await page.waitForTimeout(300)
-    await page.getByRole('button', { name: 'Play' }).click()
-    await page.waitForTimeout(300)
+    await select(page, 'Earth')
+    await expect(actionLog(page)).toHaveValue(/select-body/)
+    await play(page)
+    await expect(actionLog(page)).toHaveValue(/ play /)
     await page.getByRole('button', { name: 'Pause' }).click()
-    await page.waitForTimeout(300)
+    await expect(sceneRoot(page)).toHaveAttribute('data-sim-playing', 'false')
+    await expect(actionLog(page)).toHaveValue(/pause/)
 
-    const speedSlider = page.getByLabel('Speed')
-    await speedSlider.evaluate((el) => {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-      setter.call(el, '700')
-      el.dispatchEvent(new window.Event('input', { bubbles: true }))
-    })
-    // Poll rather than a single fixed wait past the 300ms debounce — under
-    // real browser/CI scheduling load the debounce firing can land a bit
-    // later than the nominal 300ms, and a flaky fixed wait here would be
-    // indistinguishable from an actual regression.
-    await expect(async () => {
-      expect(await actionLogText(page)).toContain('set-speed')
-    }).toPass({ timeout: 3000 })
+    await setRangeValue(page.getByLabel('Speed'), 700)
+    // Auto-retrying: the 300ms debounce can land later than nominal under
+    // real browser/CI scheduling load.
+    await expect(actionLog(page)).toHaveValue(/set-speed/)
 
-    const text = await actionLogText(page)
+    const text = await actionLog(page).inputValue()
     const selectBodyAt = text.indexOf('select-body')
     const playAt = text.indexOf(' play ')
     const pauseAt = text.indexOf('pause')
     const setSpeedAt = text.indexOf('set-speed')
 
-    expect(selectBodyAt).toBeGreaterThan(-1)
-    expect(playAt).toBeGreaterThan(-1)
-    expect(pauseAt).toBeGreaterThan(-1)
-    expect(setSpeedAt).toBeGreaterThan(-1)
     expect(selectBodyAt).toBeLessThan(playAt)
     expect(playAt).toBeLessThan(pauseAt)
     expect(pauseAt).toBeLessThan(setSpeedAt)
@@ -483,8 +509,7 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // noise instead of the one value the user actually settled on. This
     // drives many rapid raw changes and asserts the log ends up with far
     // fewer set-speed entries than changes made, not one per change.
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
+    await gotoScene(page, URL)
 
     const speedSlider = page.getByLabel('Speed')
     const rawChangeCount = 15
@@ -495,9 +520,7 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // at all — while passing locally every time), and 15 round-trips each
     // needing to land within the fixed 300ms debounce window is exactly the
     // shape of test that overhead breaks. A single synchronous in-page loop
-    // has no such per-step overhead, making the real gap between events the
-    // ~few ms the setTimeout calls below actually take, not whatever the
-    // test runner's IPC happened to cost that run.
+    // has no such per-step overhead.
     await speedSlider.evaluate((el, count) => {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
       for (let i = 0; i < count; i++) {
@@ -505,32 +528,30 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
         el.dispatchEvent(new window.Event('input', { bubbles: true }))
       }
     }, rawChangeCount)
-    // Let the debounce settle once dragging stops — poll rather than a
-    // single fixed wait, same reasoning as the ordering test above.
-    await expect(async () => {
-      expect(await actionLogText(page)).toContain('set-speed')
-    }).toPass({ timeout: 3000 })
+    // Let the debounce settle once dragging stops — auto-retrying, same
+    // reasoning as the ordering test above.
+    await expect(actionLog(page)).toHaveValue(/set-speed/)
 
-    const text = await actionLogText(page)
+    const text = await actionLog(page).inputValue()
     const setSpeedCount = (text.match(/set-speed/g) ?? []).length
     expect(setSpeedCount).toBeGreaterThan(0)
     expect(setSpeedCount).toBeLessThan(rawChangeCount / 3)
   })
 
   test('Up/Down/Recenter/Reset controls do not throw', async ({ page }) => {
-    const errors = consoleErrors(page)
-    await page.goto('http://localhost:5173/')
-    await page.waitForTimeout(800)
-    await page.locator('select').selectOption({ label: 'Earth' })
-    await page.waitForTimeout(500)
-    await page.getByRole('button', { name: '↓ Down' }).click()
-    await page.waitForTimeout(300)
-    await page.getByRole('button', { name: '⟲ Recenter' }).click()
-    await page.waitForTimeout(300)
-    await page.getByRole('button', { name: '↑ Up' }).click()
-    await page.waitForTimeout(300)
-    await page.getByRole('button', { name: 'Reset' }).click()
-    await page.waitForTimeout(300)
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'Earth')
+    })
+    // Each control starts exactly one flight; waiting for each to land
+    // means every one is exercised from a settled camera.
+    for (const name of ['↓ Down', '⟲ Recenter', '↑ Up', 'Reset']) {
+      await flyAndSettle(page, () => page.getByRole('button', { name }).click())
+    }
+    // Reset returns to the whole-system view: nothing selected.
+    await expect(sceneRoot(page)).not.toHaveAttribute('data-focused-id', /.+/)
+    await expect(sceneRoot(page)).toHaveAttribute('data-camera-state', 'idle')
     expect(errors).toEqual([])
   })
 })
