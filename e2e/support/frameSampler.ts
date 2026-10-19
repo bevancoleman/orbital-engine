@@ -63,7 +63,7 @@ declare global {
  * via collectFrameSamples. Screenshots cost ~0.5s each on a software-
  * rendered canvas (several frames), so the old approach of screenshotting
  * "mid-flight" at a guessed wall-clock time landed at an arbitrary point
- * of the ~900ms flight, or missed it entirely under parallel load.
+ * of the flight, or missed it entirely under parallel load.
  *
  * Why this isn't stale (an earlier in-page attempt was): the canvas is
  * created without preserveDrawingBuffer, so its pixels are only valid

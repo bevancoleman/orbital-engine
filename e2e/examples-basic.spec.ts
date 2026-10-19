@@ -32,7 +32,7 @@ import {
 // data-sim-playing attributes — see support/scene.ts) or an auto-retrying
 // assertion, and every "what's on screen" check reads real rendered frames
 // (see support/frameSampler.ts) — never a screenshot taken at a guessed
-// moment of the ~900ms flight.
+// moment of the flight.
 
 const URL = 'http://localhost:5173/'
 
@@ -162,7 +162,7 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // was when the fly-to STARTED, not where it ended up — for a fast
     // orbiter (the ISS completes a real orbit in ~92 minutes; at typical
     // playback speeds that's a large fraction of a full lap within the
-    // ~900ms flight itself), the body would already be gone by the time
+    // flight itself), the body would already be gone by the time
     // the camera finished arriving, and the user had to click Recenter
     // manually to reacquire it. Checked on every rendered frame from the
     // landing onward — the ISS's own label (projected from the body's
@@ -181,7 +181,8 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     //
     // Both were fixed the same way: the flight target is computed once,
     // deterministically, from a simDate already advanced by the flight's
-    // own duration (see camera.ts's FLY_DURATION_MS/computeFocusForBody).
+    // own planned duration (see camera.ts's planFocusFlight and
+    // computeFocusForBody).
     // The precise numeric claims are covered by camera.test.ts's
     // "resolving a PREDICTED (non-"now") simDate" tests and
     // cameraFlightLifecycle.test.ts's "fixes the endpoint at flight start"
@@ -390,7 +391,7 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // camera's LIVE mid-tween position). The three selections are made
     // from inside the page, one animation frame apart, so each one is
     // seen by the frame loop as its own flight start — well within the
-    // previous one's ~900ms.
+    // previous one's 1.2s minimum.
     const errors = trackErrors(page)
     await gotoScene(page, URL)
     const before = await flightCount(page)
