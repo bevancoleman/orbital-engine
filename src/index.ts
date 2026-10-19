@@ -69,8 +69,9 @@ export {
   computeFocusForBody,
   computeFocusForSystem,
   computeFocusForBelt,
+  DEFAULT_FLIGHT_PACING,
 } from './camera'
-export type { FocusTarget } from './camera'
+export type { FocusTarget, FlightPacing } from './camera'
 
 // Visibility / level of detail
 export { MAX_VISIBLE_SECONDARY, computeVisibleBodyIds, isAlwaysVisible } from './visibility'

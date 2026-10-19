@@ -12,6 +12,8 @@ import {
   computeSmoothedTrackedPosition,
   minCameraDistanceForRadius,
   nearPlaneForRadius,
+  type CameraPose,
+  type FlightPacing,
 } from '../camera'
 import { DEFAULT_DAYS_PER_SECOND } from '../timeScale'
 import { distanceToSliderPosition, sliderPositionToDistance } from '../zoomSlider'
@@ -122,6 +124,15 @@ export interface OrbitalSystemSceneProps {
    *  reproducing a log means driving the same UI a real user would, which
    *  belongs in a browser-automation script, not this component. */
   onAction?: (entry: ActionLogEntry) => void
+  /**
+   * How fly-tos are paced. A flight's duration is proportional to how much
+   * it really travels — zooming out far enough to see both ends, panning,
+   * zooming back in (van Wijk & Nuij's smooth zoom-and-pan path) — at
+   * `speed` (a multiplier on the default pace; 2 = twice as fast), clamped
+   * to [`minMs`, `maxMs`]. Defaults: `{ speed: 1, minMs: 1200, maxMs: 4000 }`.
+   * Read when a flight starts, so a change applies to the next one.
+   */
+  flightPacing?: FlightPacing
 }
 
 /**
@@ -151,6 +162,7 @@ export function OrbitalSystemScene({
   initialPlaying = false,
   initialDaysPerSecond = DEFAULT_DAYS_PER_SECOND,
   onAction,
+  flightPacing,
 }: OrbitalSystemSceneProps) {
   const clock = useSimulationClock(initialPlaying, initialDaysPerSecond)
   const log = useActionLog(onAction, clock.simDateRef)
@@ -176,6 +188,10 @@ export function OrbitalSystemScene({
       initialDaysPerSecond: clock.daysPerSecond,
     })
   })
+  // The camera's live pose, written by CameraRig every frame — a new
+  // selection plans its flight's duration (and its arrival prediction)
+  // from it. A ref, not state: it changes every frame.
+  const cameraPose = useRef<CameraPose | null>(null)
   const nav = useSelectionNavigation({
     system,
     index,
@@ -184,6 +200,8 @@ export function OrbitalSystemScene({
     onSelectBody,
     externalFocus,
     onSystemChange: handleSystemChange,
+    cameraPose,
+    flightPacing,
   })
   const { selectedBody, selectedBelt } = nav
 
@@ -386,6 +404,8 @@ export function OrbitalSystemScene({
             minDistance={zoomSliderMinDistance}
             nearPlane={dynamicNearPlane}
             onActivityChange={setCameraActivity}
+            flightPacing={flightPacing}
+            cameraPose={cameraPose}
           />
           {devMode && <PerfStats onUpdate={setRendererStats} />}
         </Canvas>

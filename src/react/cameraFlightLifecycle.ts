@@ -17,7 +17,14 @@
  * finished, and which bodies should currently be excluded from collision.
  */
 
-import { FLY_DURATION_MS, computeFlightEndpoint, sampleFlightFrame, type CameraObstacle, type FocusTarget } from '../camera'
+import {
+  computeFlightEndpoint,
+  flightDurationMs,
+  sampleFlightFrame,
+  type CameraObstacle,
+  type FlightPacing,
+  type FocusTarget,
+} from '../camera'
 import type { WorldVec } from '../render'
 import { dotVec3, lengthVec3, subtractVec3 } from '../vec3'
 
@@ -27,6 +34,11 @@ export interface FlightState {
   endPosition: WorldVec
   endTarget: WorldVec
   startTimeMs: number
+  /** How long this flight takes (see camera.ts's flightDurationMs) — fixed
+   *  when it starts, and the SAME number the destination's predicted
+   *  arrival was computed for (FocusTarget.flightDurationMs), so the
+   *  flight lands exactly when and where the prediction said. */
+  durationMs: number
   /** The nearest shared ancestor of the outgoing and incoming body (see
    *  camera.ts's findContextBody) — kept in frame around the flight's
    *  midpoint (see applyContextBulge). null when there isn't one worth
@@ -83,6 +95,7 @@ export function createFlightLifecycleState(initialDirection: WorldVec): CameraFl
       endPosition: [0, 0, 0],
       endTarget: [0, 0, 0],
       startTimeMs: 0,
+      durationMs: 1,
       contextBody: null,
       predictedTargetAt: null,
     },
@@ -138,6 +151,13 @@ function unionIds(previous: ReadonlySet<string>, ...ids: (string | null)[]): Set
  * it, and camera-controls' collision test yanked the live distance in
  * instantly. Bodies only leave the set via releaseClearedColliders, once
  * the camera is genuinely clear of them.
+ *
+ * The duration is `focus.flightDurationMs` when the caller planned one
+ * (it predicted a moving body's arrival for exactly that long — see
+ * FocusTarget.flightDurationMs), otherwise computed here from the
+ * endpoints and `pacing`. A retarget mid-flight starts from the live
+ * pose, so there's no jump; it does NOT carry the old flight's velocity
+ * over — the new flight eases in from rest like any other.
  */
 export function beginFlight(
   state: CameraFlightLifecycleState,
@@ -148,6 +168,7 @@ export function beginFlight(
     currentTargetPos: WorldVec
     trackedPosition: WorldVec | null
     nowMs: number
+    pacing?: FlightPacing
   }
 ): CameraFlightLifecycleState {
   const { focus, focusedId, currentCameraPos, currentTargetPos, nowMs } = params
@@ -165,6 +186,11 @@ export function beginFlight(
       endPosition,
       endTarget,
       startTimeMs: nowMs,
+      durationMs: Math.max(
+        1,
+        focus.flightDurationMs ??
+          flightDurationMs({ startPosition: currentCameraPos, startTarget: currentTargetPos, endPosition, endTarget }, params.pacing)
+      ),
       contextBody: focus.contextBody,
       predictedTargetAt: focus.predictedTargetAt ?? null,
     },
@@ -277,7 +303,7 @@ export interface FlightSample {
 
 /**
  * Where the camera + its target should sit RIGHT NOW, `nowMs` into an
- * in-progress flight (see FLY_DURATION_MS) — the same eased-tween +
+ * in-progress flight (see FlightState.durationMs) — the same eased-tween +
  * context-bulge composition CameraRig.tsx's own useFrame applies each
  * frame, extracted here as a pure function of `state.flight` and `nowMs`
  * alone. Never re-reads a live tracked position for the flight's own math
@@ -287,7 +313,7 @@ export interface FlightSample {
  */
 export function sampleFlight(state: CameraFlightLifecycleState, nowMs: number): FlightSample {
   const { flight } = state
-  const progress = Math.min(1, Math.max(0, (nowMs - flight.startTimeMs) / FLY_DURATION_MS))
+  const progress = Math.min(1, Math.max(0, (nowMs - flight.startTimeMs) / flight.durationMs))
   // The full tween + keep-clear target + context bulge composition lives
   // in camera.ts (sampleFlightFrame), shared with routeCameraSimulator so
   // the regression fixture exercises exactly what's rendered here.
@@ -309,7 +335,7 @@ export function sampleFlight(state: CameraFlightLifecycleState, nowMs: number): 
  * already was. A real bug (review finding A1): any gap between the
  * flight's PREDICTED end target and the body's real position at the
  * moment of settling (render-to-frame lag, the settle frame landing a few
- * ms past FLY_DURATION_MS, a smoothed vs. raw position) was then carried
+ * ms past the flight's duration, a smoothed vs. raw position) was then carried
  * forward forever. For the ISS at 2 d/s, a 1ms mismatch is ~330x its
  * framing distance — the body left permanently off-screen. Anchoring on
  * the live position heals any such gap on the very next frame.
@@ -350,7 +376,7 @@ export interface CameraFrameStep {
  * the landing frame itself was rendered aimed at the flight's PREDICTED
  * end target. For a fast orbiter that prediction is never exact — the
  * simulated clock only commits every TICK_INTERVAL_SECONDS (100ms) and
- * real frames don't land on FLY_DURATION_MS exactly — and at speed the
+ * real frames don't land on the flight's duration exactly — and at speed the
  * ISS moves many framing distances in that gap, so every fly-to while
  * playing flashed the body off-screen for one frame (several hundred ms
  * at a low frame rate) before snapping back. Anchoring on the live body
@@ -412,7 +438,8 @@ export interface CameraActivity {
  * mirrors it onto its root element as `data-camera-state` /
  * `data-flight-count`). Exists so browser tests — and any consumer that
  * wants to — can wait on what the camera is actually doing instead of
- * guessing at wall-clock timings around the ~900ms flight.
+ * guessing at wall-clock timings around a flight whose length varies
+ * (see camera.ts's flightDurationMs).
  */
 export function describeCameraActivity(state: CameraFlightLifecycleState, trackedPosition: WorldVec | null): CameraActivity {
   const activity: CameraActivityState = state.isFlying ? 'flying' : trackedPosition ? 'tracking' : 'idle'

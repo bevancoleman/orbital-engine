@@ -6,7 +6,7 @@
  * composition CameraRig does (see camera.ts).
  */
 
-import { CAMERA_ROUTE_SAMPLES_PER_FLIGHT, CAMERA_ROUTE_START_DATE } from '../fixtures/cameraRouteFixture'
+import { CAMERA_ROUTE_FLIGHT_FPS, CAMERA_ROUTE_START_DATE } from '../fixtures/cameraRouteFixture'
 import { simulateCameraRoute, type CameraRouteFrame } from '../routeCameraSimulator'
 import { resolveWorldPosition, type WorldVec } from '../render'
 import { trueRadius } from '../scale'
@@ -54,7 +54,7 @@ const SYSTEM: StarSystemData = {
 
 describe('simulateCameraRoute — context-body bulge on a sibling flight past a shared parent', () => {
   const frames = simulateCameraRoute(SYSTEM, ['stationA', 'stationB'], CAMERA_ROUTE_START_DATE, {
-    samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+    framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
     trackSteps: 1,
     trackStepMs: 0,
   })
@@ -77,14 +77,15 @@ describe('simulateCameraRoute — context-body bulge on a sibling flight past a 
   })
 
   it('turns the view continuously — no single-sample jump that survives denser sampling', () => {
-    // A ~170° swing around the planet in one 900ms flight is genuinely
-    // fast near the start (easeOutCubic's steepest stretch reads ~26° per
-    // 60fps frame here), so this checks CONTINUITY rather than the main
-    // fixture's per-frame ceiling: at 10x the frame density, a smooth path's
+    // A ~170° swing around the planet used to read ~26° per 60fps frame
+    // near the start of a fixed 900ms, front-loaded flight (now it's spread
+    // over the flight's own planned duration, eased in and out — see
+    // flightSmoothness.test.ts for the per-frame ceilings), so this checks
+    // CONTINUITY: at 10x the frame density, a smooth path's
     // per-sample turn shrinks roughly tenfold, while a discontinuity (the
     // old bulge's crossover snap) would stay just as large.
     const dense = simulateCameraRoute(SYSTEM, ['stationA', 'stationB'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT * 10,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS * 10,
       trackSteps: 1,
       trackStepMs: 0,
     })

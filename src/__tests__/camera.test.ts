@@ -14,7 +14,6 @@ import {
   applyContextBulge,
   contextFitDistance,
   distanceToFit,
-  easeOutCubic,
   findContextBody,
   keepClearOfContextBody,
   midFlightBump,
@@ -514,6 +513,11 @@ describe('midFlightBump', () => {
     expect(midFlightBump(0.3)).toBeCloseTo(midFlightBump(0.7), 10)
   })
 
+  it('fades in and out with zero slope, so a bulged flight still starts and ends at rest', () => {
+    expect(midFlightBump(1e-4) / 1e-4).toBeLessThan(1e-2)
+    expect(midFlightBump(1 - 1e-4) / 1e-4).toBeLessThan(1e-2)
+  })
+
   it('clamps t outside [0, 1] to the nearer endpoint', () => {
     expect(midFlightBump(-1)).toBe(0)
     expect(midFlightBump(2)).toBe(0)
@@ -930,26 +934,6 @@ describe('camera flight math — arrival direction, end direction, and endpoint'
   })
 })
 
-describe('easeOutCubic', () => {
-  it('starts at 0 and ends at 1', () => {
-    expect(easeOutCubic(0)).toBe(0)
-    expect(easeOutCubic(1)).toBe(1)
-  })
-
-  it('is monotonically non-decreasing across [0, 1]', () => {
-    let prev = -Infinity
-    for (let t = 0; t <= 1; t += 0.05) {
-      const value = easeOutCubic(t)
-      expect(value).toBeGreaterThanOrEqual(prev)
-      prev = value
-    }
-  })
-
-  it('front-loads progress — further along at t=0.25 than a linear ease would be', () => {
-    expect(easeOutCubic(0.25)).toBeGreaterThan(0.25)
-  })
-})
-
 describe('sampleFlightPath — the camera path CameraRig actually renders each frame', () => {
   const start = { position: [0, 0, 100] as WorldVec, target: [0, 0, 0] as WorldVec }
   const end = { position: [50, 10, 0] as WorldVec, target: [40, 0, 0] as WorldVec }
@@ -976,14 +960,18 @@ describe('sampleFlightPath — the camera path CameraRig actually renders each f
     })
   })
 
+  // The look-at point, not the camera: on the van Wijk & Nuij path the
+  // camera may legitimately back away first (zooming out to keep both
+  // ends in view — here the destination starts ~22° off-axis, near the
+  // frame's edge) before closing in, so its distance to the end position
+  // is not monotonic. The look-at point's progress is, and the camera does
+  // close in steadily over the second half.
   it('makes genuine, monotonic progress toward the end as t increases', () => {
-    const distances = [0, 0.25, 0.5, 0.75, 1].map((t) => {
-      const { position } = sampleFlightPath(start.position, start.target, end.position, end.target, t)
-      return Math.hypot(position[0] - end.position[0], position[1] - end.position[1], position[2] - end.position[2])
-    })
-    for (let i = 1; i < distances.length; i++) {
-      expect(distances[i]!).toBeLessThan(distances[i - 1]!)
-    }
+    const samples = [0, 0.25, 0.5, 0.75, 1].map((t) => sampleFlightPath(start.position, start.target, end.position, end.target, t))
+    const targetGaps = samples.map(({ target }) => Math.hypot(...(subtract(target, end.target) as WorldVec)))
+    const cameraGaps = samples.map(({ position }) => Math.hypot(...(subtract(position, end.position) as WorldVec)))
+    for (let i = 1; i < samples.length; i++) expect(targetGaps[i]!).toBeLessThan(targetGaps[i - 1]!)
+    for (let i = 3; i < samples.length; i++) expect(cameraGaps[i]!).toBeLessThan(cameraGaps[i - 1]!)
   })
 
   it('produces a genuinely distinct intermediate point partway through, not a two-step jump', () => {

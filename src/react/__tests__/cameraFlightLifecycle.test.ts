@@ -1,4 +1,4 @@
-import { DEFAULT_VIEW_DIRECTION, FLY_DURATION_MS, type CameraObstacle, type FocusTarget } from '../../camera'
+import { DEFAULT_VIEW_DIRECTION, flightDurationMs, type CameraObstacle, type FocusTarget } from '../../camera'
 import {
   acknowledgeNullFocus,
   advanceCameraFrame,
@@ -19,8 +19,12 @@ import type { WorldVec } from '../../render'
 
 const INITIAL_DIRECTION: WorldVec = DEFAULT_VIEW_DIRECTION
 
+/** The duration these tests' focuses carry (FocusTarget.flightDurationMs)
+ *  — a planned flight's length, as useSelectionNavigation would set it. */
+const FLY_DURATION_MS = 900
+
 function focusAt(position: WorldVec, overrides: Partial<FocusTarget> = {}): FocusTarget {
-  return { position, distance: 10, lookBias: null, contextBody: null, ...overrides }
+  return { position, distance: 10, lookBias: null, contextBody: null, flightDurationMs: FLY_DURATION_MS, ...overrides }
 }
 
 describe('focusChanged', () => {
@@ -197,7 +201,75 @@ describe('beginFlight', () => {
     })
     expect([...toC.excludedColliderIds].sort()).toEqual(['a', 'b', 'c'])
   })
+
+  // The planned duration is what a moving body's arrival was predicted
+  // for — the flight must land at exactly that moment.
+  it('uses the focus\'s own planned flightDurationMs when it has one', () => {
+    const state = beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), {
+      focus: focusAt([10, 0, 0], { flightDurationMs: 2_345 }),
+      focusedId: 'a',
+      currentCameraPos: [0, 0, 20],
+      currentTargetPos: [0, 0, 0],
+      trackedPosition: null,
+      nowMs: 0,
+    })
+    expect(state.flight.durationMs).toBe(2_345)
+    expect(sampleFlight(state, 2_344).progress).toBeLessThan(1)
+    expect(sampleFlight(state, 2_345).progress).toBe(1)
+  })
+
+  it('computes the duration from its own endpoints and pacing when the focus has none', () => {
+    const params = {
+      focus: focusAt([10, 0, 0], { flightDurationMs: undefined, distance: 1e-4 }),
+      focusedId: 'a',
+      currentCameraPos: [0, 0, 20] as WorldVec,
+      currentTargetPos: [0, 0, 0] as WorldVec,
+      trackedPosition: null,
+      nowMs: 0,
+    }
+    const state = beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), params)
+    const expected = flightDurationMs(state.flight)
+    expect(state.flight.durationMs).toBe(expected)
+    expect(expected).toBeGreaterThan(1_200)
+    const fast = beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), { ...params, pacing: { speed: 2, minMs: 1 } })
+    expect(fast.flight.durationMs).toBeCloseTo(expected / 2, 6)
+  })
+
+  // A -> B -> C: the new flight starts from wherever the camera visibly
+  // is mid-way to B — no jump on the retarget frame.
+  it('starts a mid-flight retarget exactly where the interrupted flight had got to', () => {
+    const toB = beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), {
+      focus: focusAt([10, 0, 0]),
+      focusedId: 'b',
+      currentCameraPos: [0, 0, 20],
+      currentTargetPos: [0, 0, 0],
+      trackedPosition: null,
+      nowMs: 0,
+    })
+    const live = sampleFlight(toB, 400)
+    const toC = beginFlight(toB, {
+      focus: focusAt([0, 30, 0]),
+      focusedId: 'c',
+      currentCameraPos: live.position,
+      currentTargetPos: live.target,
+      trackedPosition: null,
+      nowMs: 400,
+    })
+    const first = sampleFlight(toC, 400)
+    expect(first.position).toEqual(live.position)
+    expect(first.target).toEqual(live.target)
+    // ...and eases away from there rather than lurching on the next frame.
+    const next = sampleFlight(toC, 416)
+    const step = Math.hypot(next.position[0] - live.position[0], next.position[1] - live.position[1], next.position[2] - live.position[2])
+    const later = sampleFlight(toC, 400 + FLY_DURATION_MS / 2)
+    const midStep = Math.hypot(...(subtractPoints(sampleFlight(toC, 416 + FLY_DURATION_MS / 2).position, later.position)))
+    expect(step).toBeLessThan(midStep)
+  })
 })
+
+function subtractPoints(a: WorldVec, b: WorldVec): WorldVec {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
 
 describe('settleFlight', () => {
   it('ends the flight and drops the tracking anchor so the next steady frame re-anchors absolutely', () => {
@@ -318,9 +390,9 @@ describe('releaseClearedColliders', () => {
 
 describe('sampleFlight', () => {
   // Third real, observed bug: settling has to be driven by ELAPSED TIME
-  // (FLY_DURATION_MS), not a promise that structurally can't resolve while
+  // (the flight's own durationMs), not a promise that structurally can't resolve while
   // the destination keeps moving — this is exactly what `progress` is for.
-  it('reaches progress 1 exactly at FLY_DURATION_MS and clamps beyond it', () => {
+  it('reaches progress 1 exactly at the flight\'s duration and clamps beyond it', () => {
     const state = beginFlight(createFlightLifecycleState(INITIAL_DIRECTION), {
       focus: focusAt([10, 0, 0]),
       focusedId: 'a',

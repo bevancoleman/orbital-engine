@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import {
-  FLY_DURATION_MS,
   computeFocusForBelt,
   computeFocusForBody,
   computeFocusForSystem,
+  planFocusFlight,
   safePredictFlightTarget,
+  type CameraPose,
+  type FlightPacing,
   type FocusTarget,
 } from '../camera'
 import type { BeltRegion, CelestialBody, StarSystemData } from '../types'
@@ -32,6 +34,13 @@ export interface SelectionNavigationOptions {
    *  — the scene uses it to clear the interaction store and restart the
    *  action log's session. */
   onSystemChange: () => void
+  /** The camera's live pose (CameraRig writes it every frame) — a new
+   *  flight's duration is planned from it, and a moving destination's
+   *  arrival predicted for that duration (see camera.ts's planFocusFlight).
+   *  null before the first frame. */
+  cameraPose?: { readonly current: CameraPose | null }
+  /** See OrbitalSystemSceneProps.flightPacing. */
+  flightPacing?: FlightPacing
 }
 
 export interface SelectionNavigation {
@@ -62,7 +71,15 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   const resolved = resolveSelection(selection, index)
   const { selectedBody, selectedBelt } = resolved
 
-  const targetDate = (): Date => flightTargetDate(clock.simDate, clock.playing, clock.daysPerSecond, FLY_DURATION_MS)
+  const targetDate = (durationMs: number): Date => flightTargetDate(clock.simDate, clock.playing, clock.daysPerSecond, durationMs)
+
+  // Plans the flight's duration from the live camera pose first, then
+  // predicts the arrival for exactly that duration — see planFocusFlight.
+  // The flight reuses that duration (FocusTarget.flightDurationMs), so a
+  // moving destination is where the prediction said when the flight lands.
+  function planned(focusAt: (durationMs: number) => FocusTarget): FocusTarget {
+    return planFocusFlight(focusAt, options.cameraPose?.current ?? null, options.flightPacing)
+  }
 
   // computeFocusForBody, plus (while playing) where `body` will REALLY be
   // at each moment of the flight there, not just at its predicted end point
@@ -72,12 +89,16 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   // endpoint computeFocusForBody already predicts, same reasoning
   // flightTargetDate itself already uses.
   function focusOnBodyWithTrajectory(body: CelestialBody, previousBody: CelestialBody | null = null): FocusTarget {
-    const target = computeFocusForBody(body, system, targetDate(), previousBody)
-    const predictedTargetAt = clock.playing
-      ? (safePredictFlightTarget(body, system, clock.simDate, clock.daysPerSecond, target.distance) ?? undefined)
-      : undefined
-    return { ...target, predictedTargetAt }
+    return planned((durationMs) => {
+      const target = computeFocusForBody(body, system, targetDate(durationMs), previousBody)
+      const predictedTargetAt = clock.playing
+        ? (safePredictFlightTarget(body, system, clock.simDate, clock.daysPerSecond, target.distance, durationMs) ?? undefined)
+        : undefined
+      return { ...target, predictedTargetAt }
+    })
   }
+  const focusOnBelt = (belt: BeltRegion): FocusTarget => planned((ms) => computeFocusForBelt(belt, system, targetDate(ms)))
+  const focusOnSystem = (): FocusTarget => planned((ms) => computeFocusForSystem(system, targetDate(ms)))
 
   // Split from selectBody (below) on purpose: this updates the scene's own
   // selection/camera state only, without notifying onSelectBody — used by
@@ -107,7 +128,7 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   }
   function selectBelt(belt: BeltRegion): void {
     setSelection({ kind: 'belt', id: belt.id })
-    setFocus(computeFocusForBelt(belt, system, targetDate()))
+    setFocus(focusOnBelt(belt))
     log.recordAction({ type: 'select-belt', beltId: belt.id })
   }
 
@@ -142,12 +163,12 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   })
   const recenter = useStableCallback(() => {
     if (selectedBody) setFocus(focusOnBodyWithTrajectory(selectedBody))
-    else if (selectedBelt) setFocus(computeFocusForBelt(selectedBelt, system, targetDate()))
+    else if (selectedBelt) setFocus(focusOnBelt(selectedBelt))
     log.recordAction({ type: 'recenter' })
   })
   const reset = useStableCallback(() => {
     setSelection(null)
-    setFocus(computeFocusForSystem(system, targetDate()))
+    setFocus(focusOnSystem())
     log.recordAction({ type: 'reset' })
   })
 
@@ -158,7 +179,7 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   // sane framing for it.
   useEffect(() => {
     setSelection(null)
-    setFocus(computeFocusForSystem(system, targetDate()))
+    setFocus(focusOnSystem())
     options.onSystemChange()
     // Deliberately keyed on system.id alone, not simDate (which ticks every
     // frame) or the callbacks — this must re-run only when a genuinely

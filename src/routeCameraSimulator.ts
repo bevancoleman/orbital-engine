@@ -6,8 +6,9 @@
  * given (system, waypoints, startDate, options), so it's fixture-friendly:
  * same inputs always produce the same frame-by-frame trace.
  *
- * Each waypoint is a full leg: a flight (sampleFlightPath, eased over
- * SAMPLES_PER_FLIGHT steps) followed by a settle/track phase (trackingDelta,
+ * Each waypoint is a full leg: a flight (sampleFlightFrame, one step per
+ * `framesPerSecond` frame of that flight's own duration — see camera.ts's
+ * flightDurationMs/planFocusFlight) followed by a settle/track phase (trackingDelta,
  * over TRACK_STEPS sim-time steps) that keeps the camera locked onto the
  * arrived-at body as it keeps moving under simulated orbital motion.
  *
@@ -16,22 +17,23 @@
  * own useFrame loop — sampling coarser than that spreads the exact same
  * total change across fewer, bigger per-sample deltas and manufactures an
  * apparent "sharp" turn or path bend that a real frame-by-frame playback
- * would never show (see CAMERA_ROUTE_SAMPLES_PER_FLIGHT's own comment).
+ * would never show (see CAMERA_ROUTE_FLIGHT_FPS's own comment).
  */
 
 import {
   DEFAULT_CAMERA_DISTANCE,
   DEFAULT_VIEW_DIRECTION,
   VERTICAL_FOV_DEG,
-  FLY_DURATION_MS,
   computeFlightEndpoint,
   computeFocusForBody,
+  planFocusFlight,
   sampleFlightFrame,
   safePredictFlightTarget,
+  smoothstep,
   trackingDelta,
   smoothTrajectory,
   adaptiveSmoothingRadius,
-  easeOutCubic,
+  type FlightPacing,
   type FocusTarget,
 } from './camera'
 import { MS_PER_DAY } from './constants'
@@ -72,8 +74,8 @@ export interface CameraRouteFrame {
    *  (cameraPos - target, normalized) and the immediately preceding
    *  frame's — null for the very first frame (nothing to compare against).
    *  Within a single leg's flight phase this is expected to be smooth
-   *  (roughly monotonically decreasing under easeOutCubic's deceleration,
-   *  see naturalFlightOffset in camera.ts) — a spike here independent of
+   *  (rising and falling with smoothstep's ease-in-out, see
+   *  naturalFlightOffset in camera.ts) — a spike here independent of
    *  the overall rotation size is exactly the "aggressive, not smooth"
    *  whiplash naturalFlightOffset's slerp exists to prevent. A jump AT a
    *  leg boundary (last frame of one leg vs. first frame of the next) is
@@ -97,12 +99,12 @@ export interface CameraRouteFrame {
    *  measured from the actual target delta sampleFlightPath returned, not
    *  just echoing its own `t` input, so a regression in that math shows up
    *  here too. Target only (not camera position): sampleFlightPath's
-   *  target is a plain eased lerp between two fixed points, so this is
-   *  guaranteed monotonic and exactly matches easeOutCubic(t) when nothing
-   *  has regressed — a clean invariant to assert on. Camera position
-   *  deliberately does NOT get the same treatment: naturalFlightOffset
-   *  (see camera.ts) nlerps the offset DIRECTION while geometrically
-   *  interpolating its distance, an intentionally curved path with no such
+   *  target is a lerp between two fixed points by the zoom-and-pan path's
+   *  own pan fraction (see camera.ts's zoomPanPath), so this is guaranteed
+   *  monotonic when nothing has regressed — a clean invariant to assert
+   *  on. Camera position deliberately does NOT get the same treatment:
+   *  naturalFlightOffset (see camera.ts) slerps the offset DIRECTION while
+   *  zooming its distance out and back in, an intentionally curved path with no such
    *  monotonic guarantee — `positionConvergence` below tracks it for the
    *  plot without asserting monotonicity on it. Null for track frames. */
   convergence: number | null
@@ -156,7 +158,17 @@ export interface CameraRouteFrame {
 }
 
 export interface SimulateCameraRouteOptions {
+  /** A FIXED number of steps for every flight, overriding
+   *  `framesPerSecond` — for tests that want a specific count. Omitted
+   *  (the default), each flight gets one step per frame of its own
+   *  duration. */
   samplesPerFlight?: number
+  /** Frame rate a flight is sampled at when `samplesPerFlight` is omitted
+   *  — one step per rendered frame, same as CameraRig.tsx's own useFrame
+   *  loop. Defaults to 60. */
+  framesPerSecond?: number
+  /** How flights are paced — see camera.ts's FlightPacing. */
+  flightPacing?: FlightPacing
   trackSteps?: number
   trackStepMs?: number
   /** Playback rate (days/second) to assume was in effect at the moment
@@ -211,22 +223,27 @@ function findBody(system: StarSystemData, id: string): CelestialBody {
   return found
 }
 
-type ResolvedRouteOptions = Required<SimulateCameraRouteOptions>
+type ResolvedRouteOptions = Required<Omit<SimulateCameraRouteOptions, 'samplesPerFlight'>> & { samplesPerFlight: number | null }
 
 /** Fills in defaults and rejects option values that would otherwise turn
  *  into NaN frames — samplesPerFlight=0 used to divide 0/0 into a NaN `t`
  *  for every flight frame, then crash deep inside trajectory sampling. */
 function resolveRouteOptions(options: SimulateCameraRouteOptions): ResolvedRouteOptions {
   const resolved: ResolvedRouteOptions = {
-    samplesPerFlight: options.samplesPerFlight ?? 10,
+    samplesPerFlight: options.samplesPerFlight ?? null,
+    framesPerSecond: options.framesPerSecond ?? 60,
+    flightPacing: options.flightPacing ?? {},
     trackSteps: options.trackSteps ?? 6,
     trackStepMs: options.trackStepMs ?? 30 * 60 * 1000,
     flightDaysPerSecond: options.flightDaysPerSecond ?? 0,
     smoothTracking: options.smoothTracking ?? false,
     smoothTrackingWindow: options.smoothTrackingWindow ?? 7,
   }
-  if (!Number.isInteger(resolved.samplesPerFlight) || resolved.samplesPerFlight < 1) {
+  if (resolved.samplesPerFlight !== null && (!Number.isInteger(resolved.samplesPerFlight) || resolved.samplesPerFlight < 1)) {
     throw new RangeError(`simulateCameraRoute: samplesPerFlight must be a positive integer, got ${resolved.samplesPerFlight}`)
+  }
+  if (!(resolved.framesPerSecond > 0)) {
+    throw new RangeError(`simulateCameraRoute: framesPerSecond must be positive, got ${resolved.framesPerSecond}`)
   }
   if (!Number.isInteger(resolved.trackSteps) || resolved.trackSteps < 0) {
     throw new RangeError(`simulateCameraRoute: trackSteps must be a non-negative integer, got ${resolved.trackSteps}`)
@@ -235,11 +252,11 @@ function resolveRouteOptions(options: SimulateCameraRouteOptions): ResolvedRoute
 }
 
 /** How far simulated time has advanced `t` of the way through a flight
- *  that started at `legStartMs` — the same playback-speed × real-elapsed-
- *  time conversion OrbitalSystemScene applies to predict a flight's
- *  arrival. */
-function flightSampleDate(legStartMs: number, flightDaysPerSecond: number, t: number): Date {
-  return new Date(legStartMs + flightDaysPerSecond * MS_PER_DAY * ((t * FLY_DURATION_MS) / 1000))
+ *  of `durationMs` that started at `legStartMs` — the same playback-speed
+ *  × real-elapsed-time conversion OrbitalSystemScene applies to predict a
+ *  flight's arrival. */
+function flightSampleDate(legStartMs: number, flightDaysPerSecond: number, t: number, durationMs: number): Date {
+  return new Date(legStartMs + flightDaysPerSecond * MS_PER_DAY * ((t * durationMs) / 1000))
 }
 
 /** Everything that carries over from one frame (and one leg) to the next —
@@ -303,6 +320,8 @@ interface RouteLeg {
   targetBody: CelestialBody
   parentBody: CelestialBody | null
   focus: FocusTarget
+  /** This leg's flight duration (planned — see planFocusFlight). */
+  durationMs: number
 }
 
 /** Runs the full fixed route and returns every frame in order. Pure/
@@ -340,9 +359,20 @@ export function simulateCameraRoute(
     // moment, computed two different ways — for any nonzero
     // flightDaysPerSecond, silently defeating the whole point of
     // predicting the destination's trajectory.
-    const predictedArrivalDate = flightSampleDate(trace.simMs, resolved.flightDaysPerSecond, 1)
-    const focus = computeFocusForBody(targetBody, system, predictedArrivalDate, trace.previousBody)
-    const leg: RouteLeg = { legIndex, waypointId, targetBody, parentBody, focus }
+    //
+    // The duration is planned the same way useSelectionNavigation plans
+    // it for a real selection: from the live camera pose, before
+    // predicting the arrival for exactly that long (see planFocusFlight).
+    const legStartMs = trace.simMs
+    const focus = planFocusFlight(
+      (durationMs) =>
+        computeFocusForBody(targetBody, system, flightSampleDate(legStartMs, resolved.flightDaysPerSecond, 1, durationMs), trace.previousBody),
+      { position: trace.cameraPos, target: trace.target },
+      resolved.flightPacing
+    )
+    const durationMs = focus.flightDurationMs ?? 0
+    const predictedArrivalDate = flightSampleDate(legStartMs, resolved.flightDaysPerSecond, 1, durationMs)
+    const leg: RouteLeg = { legIndex, waypointId, targetBody, parentBody, focus, durationMs }
 
     simulateFlightPhase(system, leg, resolved, trace, frames)
     // The running sim clock has to actually CATCH UP to predictedArrivalDate
@@ -364,7 +394,8 @@ export function simulateCameraRoute(
   return frames
 }
 
-/** One leg's flight phase: samplesPerFlight + 1 frames from wherever the
+/** One leg's flight phase: one frame per step (see flightStepCount), plus
+ *  the start frame, from wherever the
  *  camera currently is to the leg's settled framing, via the same
  *  sampleFlightFrame composition (tween + context-body clearance + bulge)
  *  CameraRig renders. Leaves `trace` at the flight's exact end. */
@@ -375,8 +406,9 @@ function simulateFlightPhase(
   trace: RouteTrace,
   frames: CameraRouteFrame[]
 ): void {
-  const { focus, targetBody, parentBody } = leg
+  const { focus, targetBody, parentBody, durationMs } = leg
   const legStartMs = trace.simMs
+  const steps = flightStepCount(options, durationMs)
   const endpoint = computeFlightEndpoint(trace.cameraPos, trace.target, focus, trace.direction)
   // Where the destination ACTUALLY will be at several points across the
   // flight (not just its very end, which `endpoint.target` alone already
@@ -387,7 +419,7 @@ function simulateFlightPhase(
   // sample is identical to `endpoint.target`, i.e. exactly the previous
   // behaviour.
   //
-  // Sample count matches samplesPerFlight — one trajectory sample per real
+  // Sample count matches the flight's own step count — one trajectory sample per real
   // rendered frame, same "don't under-sample" rule already applied to the
   // flight/track step counts themselves (see this file's own header
   // comment). Real, measured consequence of getting this wrong: under-
@@ -403,8 +435,8 @@ function simulateFlightPhase(
   // orbiter whose own predicted excursion during the flight is a large
   // fraction of `focus.distance` (this leg's own final viewing distance)
   // still bent the flight path 50-90°/frame even at full sample density —
-  // genuine inherited curvature, not aliasing. Falls back to `null` (plain
-  // fixed-endpoint fastTargetLerp) in that regime — see its own comment in
+  // genuine inherited curvature, not aliasing. Falls back to `null` (the
+  // plain fixed endpoint) in that regime — see its own comment in
   // camera.ts.
   const predictedTargetAt = safePredictFlightTarget(
     targetBody,
@@ -412,8 +444,8 @@ function simulateFlightPhase(
     new Date(legStartMs),
     options.flightDaysPerSecond,
     focus.distance,
-    FLY_DURATION_MS,
-    options.samplesPerFlight
+    durationMs,
+    steps
   )
   const flight = {
     startPosition: trace.cameraPos,
@@ -435,16 +467,16 @@ function simulateFlightPhase(
   // this reset existed).
   trace.previousMoveDirection = null
 
-  for (let step = 0; step <= options.samplesPerFlight; step++) {
-    const t = step / options.samplesPerFlight
+  for (let step = 0; step <= steps; step++) {
+    const t = step / steps
     const point = sampleFlightFrame(flight, t)
     // Degenerate leg (start and end target coincide, e.g. a flight that
     // only changes distance/angle, not look-at point): falls back to the
-    // closed-form easeOutCubic(t) rather than a 0/0 ratio.
+    // flight's own timing curve, smoothstep(t), rather than a 0/0 ratio.
     const targetDist = lengthVec3(subtractVec3(point.target, flight.startTarget))
     const posDist = lengthVec3(subtractVec3(point.position, flight.startPosition))
-    const convergence = totalTargetDist > 1e-9 ? targetDist / totalTargetDist : easeOutCubic(t)
-    const positionConvergence = totalPosDist > 1e-9 ? posDist / totalPosDist : easeOutCubic(t)
+    const convergence = totalTargetDist > 1e-9 ? targetDist / totalTargetDist : smoothstep(t)
+    const positionConvergence = totalPosDist > 1e-9 ? posDist / totalPosDist : smoothstep(t)
 
     const turnRateDeg = recordTurn(trace, point.position, point.target)
     const { turn: flightPathTurnDeg, moved } = recordMove(trace, point.position)
@@ -459,7 +491,7 @@ function simulateFlightPhase(
     // began — neither is where the body actually is mid-flight. At
     // flightDaysPerSecond=0 (the reference fixture) the sample date never
     // advances, so this is identical to before.
-    const sampleDate = flightSampleDate(legStartMs, options.flightDaysPerSecond, t)
+    const sampleDate = flightSampleDate(legStartMs, options.flightDaysPerSecond, t, durationMs)
     const realTargetPos = resolveWorldPosition(targetBody, system.bodies, sampleDate)
     const realParentPos = parentBody ? resolveWorldPosition(parentBody, system.bodies, sampleDate) : null
 
@@ -486,6 +518,13 @@ function simulateFlightPhase(
   trace.cameraPos = endpoint.position
   trace.target = endpoint.target
   trace.direction = endpoint.direction
+}
+
+/** Steps a flight of `durationMs` is sampled in: the fixed
+ *  samplesPerFlight override when given, otherwise one per frame. */
+function flightStepCount(options: ResolvedRouteOptions, durationMs: number): number {
+  if (options.samplesPerFlight !== null) return options.samplesPerFlight
+  return Math.max(1, Math.round((durationMs / 1000) * options.framesPerSecond))
 }
 
 /** One leg's settle/track phase: trackSteps frames following the arrived-

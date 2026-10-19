@@ -7,8 +7,11 @@
  */
 
 import {
+  DEFAULT_CAMERA_DISTANCE,
   DEFAULT_VIEW_DIRECTION,
   adaptiveSmoothingRadius,
+  computeFocusForBody,
+  planFocusFlight,
   applyContextBulge,
   computeColliderBodies,
   computeSmoothedTrackedPosition,
@@ -22,6 +25,7 @@ import {
   trajectoryDiameter,
 } from '../camera'
 import { resolveWorldPosition, type WorldVec } from '../render'
+import { scaleVec3 } from '../vec3'
 import { simulateCameraRoute } from '../routeCameraSimulator'
 import { CAMERA_ROUTE_FIXTURE_SYSTEM, CAMERA_ROUTE_START_DATE } from '../fixtures/cameraRouteFixture'
 import type { CelestialBody, OrbitalElements, StarSystemData } from '../types'
@@ -164,6 +168,12 @@ describe('trajectory sample-count guards', () => {
       simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['planetA'], CAMERA_ROUTE_START_DATE, { samplesPerFlight: 0 })
     ).toThrow(RangeError)
   })
+
+  it('rejects a non-positive framesPerSecond in the route simulator', () => {
+    expect(() =>
+      simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['planetA'], CAMERA_ROUTE_START_DATE, { framesPerSecond: 0 })
+    ).toThrow(RangeError)
+  })
 })
 
 describe('non-finite radius guards', () => {
@@ -276,7 +286,18 @@ describe('simulateCameraRoute — flight framing measured at each sample\'s real
     const flight = frames.filter((f) => f.phase === 'flight')
     const times = flight.map((f) => new Date(f.simDate).getTime())
     expect(times[0]).toBe(CAMERA_ROUTE_START_DATE.getTime())
-    expect(times[times.length - 1]).toBe(CAMERA_ROUTE_START_DATE.getTime() + 0.9 * 86_400_000)
+    // Arrival is the leg start plus the flight's own PLANNED duration of
+    // simulated time at 1 d/s — planned from the starting camera pose the
+    // same way useSelectionNavigation plans a real selection.
+    const moon = CAMERA_ROUTE_FIXTURE_SYSTEM.bodies.find((b) => b.id === 'moonA')!
+    const start = CAMERA_ROUTE_START_DATE.getTime()
+    const planned = planFocusFlight(
+      (ms) => computeFocusForBody(moon, CAMERA_ROUTE_FIXTURE_SYSTEM, new Date(start + ms * 86_400)),
+      { position: scaleVec3(DEFAULT_VIEW_DIRECTION, DEFAULT_CAMERA_DISTANCE), target: [0, 0, 0] }
+    )
+    const durationMs = planned.flightDurationMs!
+    expect(durationMs).toBeGreaterThanOrEqual(1200)
+    expect(Math.abs(times[times.length - 1]! - (start + durationMs * 86_400))).toBeLessThanOrEqual(1)
     for (let i = 1; i < times.length; i++) expect(times[i]!).toBeGreaterThan(times[i - 1]!)
   })
 })
