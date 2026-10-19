@@ -130,6 +130,33 @@ export const MAX_CAMERA_DISTANCE = 2000
 // pixel-to-world conversion) agrees with what the camera actually renders.
 export const VERTICAL_FOV_DEG = 50
 
+/** What a fly-to a body frames — see computeFocusForBody. `'body'` is the
+ *  body itself (plus its rings), filling BODY_VIEW_FILL of the view;
+ *  `'system'` is the body together with its whole local moon/station
+ *  system. Exposed on OrbitalSystemScene as `arrivalFraming`. */
+export type BodyFraming = 'body' | 'system'
+
+/** The share of the view's height a body's diameter fills when a fly-to
+ *  arrives in `'body'` framing (see computeFocusForBody). Arrival used to
+ *  always frame the body plus its whole moon system, so a planet landed as
+ *  a small dot and its real surface texture was barely visible — reported
+ *  as wanting to "actually see the planet on arrival". 0.4 is big enough
+ *  to read the surface, small enough to keep the limb, some space around
+ *  it, and (see lookBiasClearanceDeg) a parent beside it all in frame. */
+export const BODY_VIEW_FILL = 0.4
+
+/** The most of the view's height a ring system's outer diameter may fill
+ *  in `'body'` framing. Rings are part of the body (see CelestialBody.
+ *  rings) so they stay in frame; most of their span is horizontal, which
+ *  a landscape view has extra room for. Saturn's rings reach ~2.4 of its
+ *  radii, so Saturn itself still fills about a third of the view. */
+export const RING_VIEW_FILL = 0.8
+
+/** Extra angle kept between the edge of the framed body and the edge of
+ *  its parent on screen when lookBias would otherwise hide the parent
+ *  behind the body — see lookBiasClearanceDeg. */
+export const LOOK_BIAS_CLEARANCE_MARGIN_DEG = 3
+
 export interface FocusTarget {
   position: [number, number, number]
   distance: number
@@ -141,6 +168,12 @@ export interface FocusTarget {
    *  whatever direction the camera happened to arrive from forever — see
    *  computeEndDirection. */
   lookBias: WorldVec | null
+  /** The smallest angle, in degrees, the parent (see `lookBias`) must sit
+   *  off the settled view axis so the framed body doesn't eclipse it —
+   *  see computeEndDirection. 0 (or omitted) means no constraint: there's
+   *  no parent, or the parent already looks bigger than the body and so
+   *  can't hide behind it (a satellite over its planet). */
+  lookBiasClearanceDeg?: number
   /** The nearest shared ancestor of the body just left and the one being
    *  flown to (see findContextBody) — Earth, when switching between the
    *  ISS and Hubble; the Sun, when switching between Earth and Mars; null
@@ -863,11 +896,26 @@ export function computeArrivalDirection(cameraPos: WorldVec, targetPos: WorldVec
  * Null/zero-length lookBias (nothing to bias toward — the star, a belt)
  * leaves the arrival direction untouched, exactly matching the old
  * always-preserve-current-direction behaviour.
+ *
+ * `clearanceDeg` (FocusTarget.lookBiasClearanceDeg) keeps the parent from
+ * being eclipsed. Looking back toward the parent was harmless while a
+ * fly-to framed the body small, but once 'body' framing filled 40% of the
+ * view (see BODY_VIEW_FILL) the Moon covered ~10° around the view axis —
+ * and with the camera arriving from roughly behind it, a 0.8 blend left
+ * Earth sitting behind the Moon, hidden. When the blended direction is
+ * closer than `clearanceDeg` to straight-away-from-the-parent, it's
+ * rotated out to exactly that angle, toward the side it already leaned
+ * (or the side the camera arrived from, or any side when both are dead
+ * on), so the parent appears beside the body. The parent is treated as
+ * far compared to the camera distance, which holds for any arrival
+ * framing: the angle between this direction and away-from-parent is then
+ * the parent's angle off the view axis on screen.
  */
 export function computeEndDirection(
   arrivalDirection: WorldVec,
   lookBias: WorldVec | null,
-  biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT
+  biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT,
+  clearanceDeg = 0
 ): WorldVec {
   if (!lookBias) return arrivalDirection
   const biasLen = lengthVec3(lookBias)
@@ -878,7 +926,25 @@ export function computeEndDirection(
     arrivalDirection[1] * (1 - biasWeight) + awayFromParent[1] * biasWeight,
     arrivalDirection[2] * (1 - biasWeight) + awayFromParent[2] * biasWeight,
   ]
-  return normalizeOr(blended, arrivalDirection)
+  const direction = normalizeOr(blended, arrivalDirection)
+  if (!(clearanceDeg > 0) || angleBetweenDeg(direction, awayFromParent) >= clearanceDeg) return direction
+  return rotateAwayFrom(awayFromParent, [direction, arrivalDirection], clearanceDeg)
+}
+
+/** The unit vector `angleDeg` from unit `axis`, on the side of the first
+ *  of `sides` that isn't parallel to it (any side when all are). */
+function rotateAwayFrom(axis: WorldVec, sides: readonly WorldVec[], angleDeg: number): WorldVec {
+  let side: WorldVec | null = null
+  for (const candidate of sides) {
+    const rejection = subtractVec3(candidate, scaleVec3(axis, dotVec3(candidate, axis)))
+    if (lengthVec3(rejection) > 1e-9) {
+      side = normalizeOr(rejection, axis)
+      break
+    }
+  }
+  const perpendicular = side ?? anyPerpendicularUnitVec3(axis)
+  const angle = (angleDeg * Math.PI) / 180
+  return addVec3(scaleVec3(axis, Math.cos(angle)), scaleVec3(perpendicular, Math.sin(angle)))
 }
 
 /** Where a new flight to `focus` should end up — camera position, look-at
@@ -896,7 +962,7 @@ export function computeFlightEndpoint(
   biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT
 ): { position: WorldVec; target: WorldVec; direction: WorldVec } {
   const arrivalDirection = computeArrivalDirection(currentCameraPos, currentTargetPos, fallbackDirection)
-  const direction = computeEndDirection(arrivalDirection, focus.lookBias, biasWeight)
+  const direction = computeEndDirection(arrivalDirection, focus.lookBias, biasWeight, focus.lookBiasClearanceDeg ?? 0)
   return { position: addVec3(focus.position, scaleVec3(direction, focus.distance)), target: focus.position, direction }
 }
 
@@ -1295,23 +1361,65 @@ export function distanceToFit(worldRadius: number, marginFactor = 2.2): number {
 }
 
 /**
+ * Camera distance at which a sphere of `worldRadius` fills `fill` of the
+ * view's height — its silhouette, not its bare radius, so the share holds
+ * even close in where perspective makes a sphere look bigger than r/d
+ * suggests. distanceToFit's margin convention can't express "fill 40% of
+ * the view" directly, and 'body' framing (see computeFocusForBody) is
+ * specified exactly that way. Same floor (minCameraDistanceForRadius, so a
+ * true-scale-tiny satellite stays at the float-precision floor rather
+ * than inside the near plane) and ceiling as distanceToFit. A fill outside
+ * (0, 1] falls back to BODY_VIEW_FILL.
+ */
+export function distanceToFillView(worldRadius: number, fill: number = BODY_VIEW_FILL): number {
+  const radius = Number.isNaN(worldRadius) ? 0 : Math.max(0, worldRadius)
+  const share = fill > 0 && fill <= 1 ? fill : BODY_VIEW_FILL
+  const halfFovRad = (VERTICAL_FOV_DEG * Math.PI) / 360
+  const raw = radius / Math.sin(Math.atan(share * Math.tan(halfFovRad)))
+  return Math.min(MAX_CAMERA_DISTANCE, Math.max(minCameraDistanceForRadius(radius), raw))
+}
+
+/**
  * Where to fly the camera for a selected body: centred on the body itself,
- * at a distance that fits every real LOCAL child (a body whose parentId is
- * this one AND that actually orbits it nearby — moons, stations, whatever's
- * genuinely close — see CelestialBody.coOrbitalWithParent) rather than a
- * fixed zoom level. A leaf body with nothing orbiting it just frames close
- * on itself. Uses the dataset's own parent/child links directly — no
- * geometric "what's nearby" heuristic needed, because this engine's bodies
- * already carry their real orbital relationship.
+ * at a distance chosen by `framing`:
+ *
+ * - `'body'` (the default — what a fresh selection arrives at): the body's
+ *   own diameter fills BODY_VIEW_FILL of the view, widened just enough to
+ *   keep a ring system in (RING_VIEW_FILL). Moons and stations are
+ *   deliberately ignored. Arriving used to always use the `'system'`
+ *   framing below, which framed a planet together with its whole moon
+ *   system — Jupiter's outer moons put Jupiter itself at a few pixels — so
+ *   planets arrived as small dots and real surface textures were barely
+ *   visible. The moon-system view is still one action away (selecting the
+ *   selected body again — see useSelectionNavigation).
+ * - `'system'`: a distance that fits every real LOCAL child (a body whose
+ *   parentId is this one AND that actually orbits it nearby — moons,
+ *   stations, whatever's genuinely close — see CelestialBody.
+ *   coOrbitalWithParent) rather than a fixed zoom level. A leaf body with
+ *   nothing orbiting it frames at 4x its own radius. Uses the dataset's
+ *   own parent/child links directly — no geometric "what's nearby"
+ *   heuristic needed, because this engine's bodies already carry their
+ *   real orbital relationship. computeFocusForSystem is this framing of
+ *   the star.
  *
  * A child with `coOrbitalWithParent: true` (a Lagrange-point station,
  * grouped under its reference planet for labelling but really orbiting the
  * star independently, millions of km away) is deliberately excluded from
- * this fit — including it would zoom a planet's own view out to
+ * the `'system'` fit — including it would zoom a planet's own view out to
  * interplanetary scale just to fit a station that was never actually
  * "nearby" in the first place, defeating the point of zooming to the planet
  * at all. It's still a real child for every other purpose (selection,
  * dropdown grouping, goDown) — only the camera-framing extent skips it.
+ *
+ * Both framings size from trueRadius, the same radius BodyShape renders at
+ * close range — never the pixel floor (see pixelFloor.ts), which is a
+ * screen-space visual aid only. A body loaded from a real model (modelUrl)
+ * is normalised to unit radius and scaled by that same radius (see
+ * BodyShapes.tsx), so it frames the same way as a placeholder sphere.
+ * A true-scale-tiny satellite (the ISS, Hubble) can't reach the fill
+ * target: the precision floor (minCameraDistanceForRadius) holds the
+ * camera further out, at the same distance it always arrived at (see
+ * bodyFramingDistance).
  *
  * `simDate` doesn't have to be "now" — OrbitalSystemScene deliberately
  * passes a date advanced by the coming flight's own duration's worth of
@@ -1333,9 +1441,37 @@ export function computeFocusForBody(
   body: CelestialBody,
   system: StarSystemData,
   simDate: Date,
-  previousBody: CelestialBody | null = null
+  previousBody: CelestialBody | null = null,
+  framing: BodyFraming = 'body'
 ): FocusTarget {
   const bodyPos = resolveWorldPosition(body, system.bodies, simDate)
+  const distance = framing === 'system' ? systemFramingDistance(body, bodyPos, system, simDate) : bodyFramingDistance(body)
+
+  const parent = body.parentId ? lookupBody(system.bodies, body.parentId) : undefined
+  const lookBias: WorldVec | null = parent ? subtractVec3(resolveWorldPosition(parent, system.bodies, simDate), bodyPos) : null
+  const lookBiasClearanceDeg = parent && lookBias ? parentClearanceDeg(body, distance, parent, lookBias) : 0
+
+  const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
+
+  return { position: bodyPos, distance, lookBias, lookBiasClearanceDeg, contextBody }
+}
+
+/** computeFocusForBody's `'body'` framing distance — see there.
+ *  distanceToFit(radius) is a lower bound that only ever binds for a body
+ *  below the precision floor (for anything bigger it's ~0.86x the fill
+ *  distance): there, arriving AT the hard floor would leave the zoom
+ *  slider no room to go closer, and made the Hubble → ISS hop turn faster
+ *  than the 3°/frame smoothness ceiling (see flightSmoothness.test.ts) —
+ *  distanceToFit keeps the satellite framing exactly what it was. */
+function bodyFramingDistance(body: CelestialBody): number {
+  const radius = trueRadius(body.radiusKm)
+  const ringOuterKm = ringOuterRadiusKm(body)
+  const ringDistance = ringOuterKm === null ? 0 : distanceToFillView(trueRadius(ringOuterKm), RING_VIEW_FILL)
+  return Math.max(distanceToFillView(radius), distanceToFit(radius), ringDistance)
+}
+
+/** computeFocusForBody's `'system'` framing distance — see there. */
+function systemFramingDistance(body: CelestialBody, bodyPos: WorldVec, system: StarSystemData, simDate: Date): number {
   const children = system.bodies.filter((b) => b.parentId === body.id && !b.coOrbitalWithParent)
 
   // Uses the actual rendered (hierarchically-compressed — see render.ts)
@@ -1363,13 +1499,28 @@ export function computeFocusForBody(
     const dist = Math.hypot(childPos[0] - bodyPos[0], childPos[1] - bodyPos[1], childPos[2] - bodyPos[2])
     maxExtent = Math.max(maxExtent, dist + trueRadius(child.radiusKm))
   }
+  return distanceToFit(maxExtent)
+}
 
-  const parent = body.parentId ? lookupBody(system.bodies, body.parentId) : undefined
-  const lookBias: WorldVec | null = parent ? subtractVec3(resolveWorldPosition(parent, system.bodies, simDate), bodyPos) : null
+/** Angular radius, in degrees, of a sphere of `radius` seen from `distance`
+ *  away (90 from inside it; 0 for no usable radius). */
+function angularRadiusDeg(radius: number, distance: number): number {
+  if (!(radius > 0)) return 0
+  if (distance <= radius) return 90
+  return (Math.asin(radius / distance) * 180) / Math.PI
+}
 
-  const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
-
-  return { position: bodyPos, distance: distanceToFit(maxExtent), lookBias, contextBody }
+/** FocusTarget.lookBiasClearanceDeg for `body` framed from `distance`: the
+ *  body's angular radius on screen, plus the parent's (as seen from the
+ *  body), plus a margin — so the two discs sit side by side. 0 when the
+ *  parent already looks at least as big as the body: it can't be hidden
+ *  then, and the body against its planet (the ISS over Earth) is exactly
+ *  the view lookBias is for. */
+function parentClearanceDeg(body: CelestialBody, distance: number, parent: CelestialBody, lookBias: WorldVec): number {
+  const bodyAngle = angularRadiusDeg(trueRadius(body.radiusKm), distance)
+  const parentAngle = angularRadiusDeg(trueRadius(parent.radiusKm), lengthVec3(lookBias))
+  if (parentAngle >= bodyAngle) return 0
+  return bodyAngle + parentAngle + LOOK_BIAS_CLEARANCE_MARGIN_DEG
 }
 
 /** Sample count for predictBodyTrajectory/safePredictFlightTarget over a
@@ -1544,8 +1695,9 @@ export function safePredictFlightTarget(
  * real extent compresses to single-digit world units rendered as an
  * indistinguishable cluster of overlapping labels near the centre of a
  * mostly-empty view. Reusing
- * computeFocusForBody on the star itself scales correctly to whatever
- * system is actually loaded.
+ * computeFocusForBody on the star itself, in its 'system' framing (the
+ * star's own 'body' framing would fill the view with the star alone),
+ * scales correctly to whatever system is actually loaded.
  */
 export function computeFocusForSystem(system: StarSystemData, simDate: Date): FocusTarget {
   // Identified by type, not by "has no parentId" — a body not anchored to
@@ -1554,7 +1706,7 @@ export function computeFocusForSystem(system: StarSystemData, simDate: Date): Fo
   // check alone doesn't reliably pick the star out among other bodies.
   const star = system.bodies.find((b) => b.type === 'star')
   if (!star) return { position: [0, 0, 0], distance: DEFAULT_CAMERA_DISTANCE, lookBias: null, contextBody: null }
-  return computeFocusForBody(star, system, simDate)
+  return computeFocusForBody(star, system, simDate, null, 'system')
 }
 
 /** Where to fly the camera for a selected belt: centred on its parent, at a

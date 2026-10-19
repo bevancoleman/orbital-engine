@@ -520,11 +520,16 @@ describe('flight-phase trajectory prediction (predictedTargetAt)', () => {
     // keep moving (following the real predicted trajectory) through the
     // LATE part of the flight, not settle onto one fixed point the
     // moment the front-loaded ease has mostly finished blending in.
+    //
+    // In its 'system' framing: arriving in the default 'body' framing puts
+    // the camera close enough to planetA that the same guard (correctly)
+    // falls back to the fixed endpoint at this speed too.
     const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['planetA'], CAMERA_ROUTE_START_DATE, {
       framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: 1,
       trackStepMs: 0,
       flightDaysPerSecond: DEFAULT_DAYS_PER_SECOND,
+      arrivalFraming: 'system',
     })
     const flight = frames.filter((f) => f.phase === 'flight')
     const late = flight.slice(-10)

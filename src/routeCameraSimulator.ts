@@ -33,6 +33,7 @@ import {
   trackingDelta,
   smoothTrajectory,
   adaptiveSmoothingRadius,
+  type BodyFraming,
   type FlightPacing,
   type FocusTarget,
 } from './camera'
@@ -169,6 +170,9 @@ export interface SimulateCameraRouteOptions {
   framesPerSecond?: number
   /** How flights are paced — see camera.ts's FlightPacing. */
   flightPacing?: FlightPacing
+  /** What each leg's arrival frames — see camera.ts's BodyFraming.
+   *  Defaults to 'body', the same as OrbitalSystemScene's own default. */
+  arrivalFraming?: BodyFraming
   trackSteps?: number
   trackStepMs?: number
   /** Playback rate (days/second) to assume was in effect at the moment
@@ -233,6 +237,7 @@ function resolveRouteOptions(options: SimulateCameraRouteOptions): ResolvedRoute
     samplesPerFlight: options.samplesPerFlight ?? null,
     framesPerSecond: options.framesPerSecond ?? 60,
     flightPacing: options.flightPacing ?? {},
+    arrivalFraming: options.arrivalFraming ?? 'body',
     trackSteps: options.trackSteps ?? 6,
     trackStepMs: options.trackStepMs ?? 30 * 60 * 1000,
     flightDaysPerSecond: options.flightDaysPerSecond ?? 0,
@@ -366,7 +371,13 @@ export function simulateCameraRoute(
     const legStartMs = trace.simMs
     const focus = planFocusFlight(
       (durationMs) =>
-        computeFocusForBody(targetBody, system, flightSampleDate(legStartMs, resolved.flightDaysPerSecond, 1, durationMs), trace.previousBody),
+        computeFocusForBody(
+          targetBody,
+          system,
+          flightSampleDate(legStartMs, resolved.flightDaysPerSecond, 1, durationMs),
+          trace.previousBody,
+          resolved.arrivalFraming
+        ),
       { position: trace.cameraPos, target: trace.target },
       resolved.flightPacing
     )

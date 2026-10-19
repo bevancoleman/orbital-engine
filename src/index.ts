@@ -66,12 +66,15 @@ export {
   nearPlaneForRadius,
   minCameraDistanceForRadius,
   distanceToFit,
+  distanceToFillView,
+  BODY_VIEW_FILL,
+  RING_VIEW_FILL,
   computeFocusForBody,
   computeFocusForSystem,
   computeFocusForBelt,
   DEFAULT_FLIGHT_PACING,
 } from './camera'
-export type { FocusTarget, FlightPacing } from './camera'
+export type { BodyFraming, FocusTarget, FlightPacing } from './camera'
 
 // Visibility / level of detail
 export { MAX_VISIBLE_SECONDARY, computeVisibleBodyIds, isAlwaysVisible } from './visibility'

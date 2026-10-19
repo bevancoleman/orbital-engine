@@ -3,6 +3,7 @@ import {
   DEFAULT_NEAR_PLANE,
   MAX_CAMERA_DISTANCE,
   MIN_CAMERA_DISTANCE,
+  RING_VIEW_FILL,
   computeArrivalDirection,
   computeColliderBodies,
   computeEndDirection,
@@ -13,6 +14,7 @@ import {
   computeSmoothedTrackedPosition,
   applyContextBulge,
   contextFitDistance,
+  distanceToFillView,
   distanceToFit,
   findContextBody,
   keepClearOfContextBody,
@@ -105,7 +107,7 @@ describe('distanceToFit', () => {
   })
 })
 
-describe('computeFocusForBody — excluding co-orbital companions from the fit', () => {
+describe("computeFocusForBody — excluding co-orbital companions from the 'system' fit", () => {
   // Mirrors the real Stanton case: Crusader has real nearby moons (close,
   // genuinely local) and a same-name-prefixed Lagrange station that's
   // grouped under it for labelling but actually orbits the star
@@ -146,17 +148,17 @@ describe('computeFocusForBody — excluding co-orbital companions from the fit',
   it('fits a real nearby moon into the selected planet\'s framing distance', () => {
     const system = stantonLikeSystem()
     const crusader = system.bodies.find((b) => b.id === 'crusader')!
-    const focus = computeFocusForBody(crusader, system, DATE)
+    const focus = computeFocusForBody(crusader, system, DATE, null, 'system')
     // A tight local moon system should frame far closer than the
     // interplanetary scale of the whole system.
-    const wholeSystemFocus = computeFocusForBody(system.bodies[0]!, system, DATE)
+    const wholeSystemFocus = computeFocusForBody(system.bodies[0]!, system, DATE, null, 'system')
     expect(focus.distance).toBeLessThan(wholeSystemFocus.distance)
   })
 
   it('does not zoom out to interplanetary scale to fit a co-orbital Lagrange station', () => {
     const system = stantonLikeSystem()
     const crusader = system.bodies.find((b) => b.id === 'crusader')!
-    const withLagrange = computeFocusForBody(crusader, system, DATE)
+    const withLagrange = computeFocusForBody(crusader, system, DATE, null, 'system')
 
     // Build the same system but with the Lagrange flag cleared, so the old
     // (pre-fix) behaviour is reproduced for comparison.
@@ -165,7 +167,7 @@ describe('computeFocusForBody — excluding co-orbital companions from the fit',
       bodies: system.bodies.map((b) => (b.id === 'cru-l5' ? { ...b, coOrbitalWithParent: false } : b)),
     }
     const crusaderNoFlag = withoutFlag.bodies.find((b) => b.id === 'crusader')!
-    const withoutExclusion = computeFocusForBody(crusaderNoFlag, withoutFlag, DATE)
+    const withoutExclusion = computeFocusForBody(crusaderNoFlag, withoutFlag, DATE, null, 'system')
 
     // Excluding the co-orbital station keeps the framing tight (driven by
     // Yela, the real nearby moon); including it would blow the distance out
@@ -191,7 +193,7 @@ describe('computeFocusForBody — excluding co-orbital companions from the fit',
       ],
     }
     const planet = system.bodies.find((b) => b.id === 'planet')!
-    const focus = computeFocusForBody(planet, system, DATE)
+    const focus = computeFocusForBody(planet, system, DATE, null, 'system')
     // With the co-orbital station excluded, nothing else orbits the planet
     // locally — the fit should fall back to just framing the planet itself.
     expect(focus.distance).toBeCloseTo(distanceToFit(trueRadius(planet.radiusKm) * 4), 5)
@@ -213,8 +215,8 @@ describe('computeFocusForBody — excluding co-orbital companions from the fit',
     }
     const crusaderWithMoon = farMoon.bodies.find((b) => b.id === 'crusader')!
     const crusaderWithoutMoon = withoutMoon.bodies.find((b) => b.id === 'crusader')!
-    const withMoon = computeFocusForBody(crusaderWithMoon, farMoon, DATE)
-    const withoutMoonFocus = computeFocusForBody(crusaderWithoutMoon, withoutMoon, DATE)
+    const withMoon = computeFocusForBody(crusaderWithMoon, farMoon, DATE, null, 'system')
+    const withoutMoonFocus = computeFocusForBody(crusaderWithoutMoon, withoutMoon, DATE, null, 'system')
     expect(withMoon.distance).toBeGreaterThan(withoutMoonFocus.distance)
   })
 })
@@ -1166,9 +1168,12 @@ describe('computeFocusForBody — ring systems', () => {
   it('frames the whole ring system when it reaches past the body\'s own framing margin', () => {
     const bare = ringedSystem(undefined)
     const ringed = ringedSystem([{ innerRadiusKm: 20_000, outerRadiusKm: 80_000 }])
-    const bareFocus = computeFocusForBody(bare.bodies[1]!, bare, DATE)
-    const ringedFocus = computeFocusForBody(ringed.bodies[1]!, ringed, DATE)
-    expect(ringedFocus.distance).toBeGreaterThan(bareFocus.distance)
-    expect(ringedFocus.distance).toBeGreaterThanOrEqual(distanceToFit(trueRadius(80_000)))
+    for (const framing of ['body', 'system'] as const) {
+      const bareFocus = computeFocusForBody(bare.bodies[1]!, bare, DATE, null, framing)
+      const ringedFocus = computeFocusForBody(ringed.bodies[1]!, ringed, DATE, null, framing)
+      expect(ringedFocus.distance).toBeGreaterThan(bareFocus.distance)
+    }
+    expect(computeFocusForBody(ringed.bodies[1]!, ringed, DATE, null, 'system').distance).toBeGreaterThanOrEqual(distanceToFit(trueRadius(80_000)))
+    expect(computeFocusForBody(ringed.bodies[1]!, ringed, DATE).distance).toBeCloseTo(distanceToFillView(trueRadius(80_000), RING_VIEW_FILL), 9)
   })
 })

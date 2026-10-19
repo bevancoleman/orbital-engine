@@ -14,6 +14,7 @@ import {
   computeFocusForBody,
   flightDurationMs,
   sampleFlightFrame,
+  type BodyFraming,
   type FlightEndpoints,
 } from '../camera'
 import { resolveWorldPosition, type WorldVec } from '../render'
@@ -62,9 +63,10 @@ function flyFrames(flight: FlightEndpoints): FlightTrace {
 }
 
 /** Flies the Solar System route `ids` in order from a fresh default view
- *  of the first body, returning each leg keyed "from→to". */
-function flyRoute(ids: string[]): Map<string, FlightTrace & { flight: FlightEndpoints }> {
-  const first = computeFocusForBody(body(ids[0]!), SOLAR_SYSTEM, DATE)
+ *  of the first body (in `startFraming`), returning each leg keyed
+ *  "from→to". Every later leg arrives in the default 'body' framing. */
+function flyRoute(ids: string[], startFraming: BodyFraming = 'body'): Map<string, FlightTrace & { flight: FlightEndpoints }> {
+  const first = computeFocusForBody(body(ids[0]!), SOLAR_SYSTEM, DATE, null, startFraming)
   let target = first.position
   let camera: WorldVec = [
     target[0] + DEFAULT_VIEW_DIRECTION[0] * first.distance,
@@ -165,8 +167,10 @@ describe('fly-to smoothness on real Solar System routes', () => {
     expect(assertDestinationStaysInView(legs.get(key)!)).toBeGreaterThan(1 / 3)
   })
 
+  // Earth's 'system' framing has the Moon in it; its 'body' framing (what
+  // arriving at Earth gives) is too close to — see computeFocusForBody.
   it('keeps the destination in view the whole way for a dive toward what\'s already ahead', () => {
-    expect(assertDestinationStaysInView(legs.get('earth→moon')!)).toBe(1)
+    expect(assertDestinationStaysInView(flyRoute(['earth', 'moon'], 'system').get('earth→moon')!)).toBe(1)
     expect(assertDestinationStaysInView(legs.get('moon→iss')!)).toBe(1)
   })
 
@@ -227,6 +231,42 @@ describe('fly-to smoothness on real Solar System routes', () => {
     it('is smooth in both directions', () => {
       for (const trip of trips) assertSmooth(trip)
     })
+  })
+})
+
+/** Arrives at `id` in `from` framing, then flies to its `to` framing —
+ *  the flight selecting an already-selected body makes (see
+ *  useSelectionNavigation): a pure zoom about the body, no pan. */
+function flyFramingToggle(id: string, from: BodyFraming, to: BodyFraming): FlightTrace {
+  const start = computeFocusForBody(body(id), SOLAR_SYSTEM, DATE, null, from)
+  const startEnd = computeFlightEndpoint(
+    [start.position[0], start.position[1] + 1, start.position[2] + 2],
+    start.position,
+    start,
+    DEFAULT_VIEW_DIRECTION
+  )
+  const focus = computeFocusForBody(body(id), SOLAR_SYSTEM, DATE, null, to)
+  const end = computeFlightEndpoint(startEnd.position, startEnd.target, focus, DEFAULT_VIEW_DIRECTION)
+  return flyFrames({
+    startPosition: startEnd.position,
+    startTarget: startEnd.target,
+    endPosition: end.position,
+    endTarget: end.target,
+    contextBody: null,
+    predictedTargetAt: null,
+  })
+}
+
+describe('toggling a body between its body and system framings', () => {
+  it.each(['earth', 'jupiter', 'saturn', 'moon'])('%s: zooms out and back in smoothly, keeping the body centred', (id) => {
+    for (const [from, to] of [
+      ['body', 'system'],
+      ['system', 'body'],
+    ] as const) {
+      const trace = flyFramingToggle(id, from, to)
+      assertSmooth(trace)
+      for (const frame of trace.frames) expect(destinationAngle(frame, trace.destination)).toBeLessThan(1e-3)
+    }
   })
 })
 
