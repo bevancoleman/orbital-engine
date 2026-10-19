@@ -1,0 +1,15 @@
+{
+  "//": "Consumer-side typecheck for the min-peers CI job (see consumer.tsx). skipLibCheck stays off so orbital-engine's own .d.ts files are checked against the minimum peers' types; checkJs stays off.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "types": []
+  },
+  "files": ["consumer.tsx"]
+}
