@@ -80,7 +80,11 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   const resolved = resolveSelection(selection, index)
   const { selectedBody, selectedBelt } = resolved
 
-  const targetDate = (durationMs: number): Date => flightTargetDate(clock.simDate, clock.playing, clock.daysPerSecond, durationMs)
+  // From the AUTHORITATIVE time (clock.now()), not the UI's simDate state,
+  // which can be up to a commit interval (~100ms) behind while playing —
+  // at speed, a fast orbiter covers many framing distances in that gap,
+  // and the prediction would aim the flight at where it was, not is.
+  const targetDate = (durationMs: number): Date => flightTargetDate(clock.now(), clock.playing, clock.daysPerSecond, durationMs)
 
   // Plans the flight's duration from the live camera pose first, then
   // predicts the arrival for exactly that duration — see planFocusFlight.
@@ -101,7 +105,7 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
     return planned((durationMs) => {
       const target = computeFocusForBody(body, system, targetDate(durationMs), previousBody, bodyFraming)
       const predictedTargetAt = clock.playing
-        ? (safePredictFlightTarget(body, system, clock.simDate, clock.daysPerSecond, target.distance, durationMs) ?? undefined)
+        ? (safePredictFlightTarget(body, system, clock.now(), clock.daysPerSecond, target.distance, durationMs) ?? undefined)
         : undefined
       return { ...target, predictedTargetAt }
     })

@@ -8,6 +8,7 @@ import {
   litFractionAt,
   sampleFlight,
   sampleFor,
+  sampleLabelTrack,
 } from './support/frameSampler'
 import {
   flightCount,
@@ -633,6 +634,41 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
       await page.mouse.up()
     })
     await expect(sceneRoot(page)).toHaveAttribute('data-framing', 'body')
+    expect(errors).toEqual([])
+  })
+  test('while time plays, moving bodies move on every animation frame, not in 100ms steps', async ({ page }) => {
+    // Regression test for smooth playback: positions used to be derived in
+    // React render from the simulated date, which was only committed ~10x a
+    // second, so everything moving — and the camera tracking it — moved in
+    // 100ms steps, standing still on the frames in between (at a frame
+    // rate just over 10fps, every other frame). The simulated time is now
+    // advanced, and every position resolved, every frame (see
+    // framePositions.ts). Tracking Earth at maximum speed, zoomed out far
+    // enough to see the Moon go round it, the Moon has to move on screen on
+    // (nearly) every frame.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'Earth')
+    })
+    await setRangeValue(page.locator('input[type=range][title^="Zoom"]'), 500)
+    await setMaxSpeed(page)
+    await play(page)
+
+    const track = await sampleLabelTrack(page, 'Moon', 2000)
+    const pairs = track.slice(1).map((s, i) => ({ prev: track[i]!, next: s }))
+    const located = pairs.filter(({ prev, next }) => prev.x !== null && next.x !== null)
+    const moved = located.filter(({ prev, next }) => Math.hypot(next.x! - prev.x!, next.y! - prev.y!) > 0.01)
+    const intervals = pairs.map(({ prev, next }) => next.t - prev.t).sort((a, b) => a - b)
+    const detail = `${moved.length}/${located.length} moved; frame intervals (ms): ${intervals.map((v) => v.toFixed(0)).join(',')}`
+    // Only meaningful while frames come faster than the old 100ms steps —
+    // slower than that, every frame carried a step anyway, so there is
+    // nothing to tell apart. A software-rendered canvas manages ~12fps on
+    // its own but drops below 10 when many test workers share the CPU;
+    // skipped (not passed) then, and reported as such. CI runs one worker.
+    test.skip(intervals[Math.floor(intervals.length / 2)]! >= 95, `frames too slow to tell per-frame motion from 100ms steps — ${detail}`)
+    expect(located.length, detail).toBeGreaterThan(10)
+    expect(moved.length / located.length, detail).toBeGreaterThan(0.9)
     expect(errors).toEqual([])
   })
 })

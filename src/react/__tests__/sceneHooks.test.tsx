@@ -33,10 +33,21 @@ describe('useSimulationClock', () => {
     expect(hook.current.daysPerSecond).toBe(MAX_DAYS_PER_SECOND)
     const start = hook.current.simDate.getTime()
     const advance = hook.current.advance
+    // Advancing moves the authoritative time at once, without a render…
     act(() => hook.current.advance(1000))
-    expect(hook.current.simDate.getTime()).toBe(start + 1000)
+    expect(hook.current.simTimeRef.current).toBe(start + 1000)
     expect(hook.current.simDateRef.current.getTime()).toBe(start + 1000)
+    expect(hook.current.now().getTime()).toBe(start + 1000)
+    expect(hook.current.simDate.getTime()).toBe(start)
+    // …and the UI's date catches up when it's committed.
+    act(() => hook.current.commit())
+    expect(hook.current.simDate.getTime()).toBe(start + 1000)
     expect(hook.current.advance).toBe(advance)
+    // Pausing commits too, so the paused UI shows exactly where time stopped.
+    act(() => hook.current.advance(500))
+    act(() => hook.current.setPlaying(false))
+    expect(hook.current.playing).toBe(false)
+    expect(hook.current.simDate.getTime()).toBe(start + 1500)
     act(() => hook.current.setDaysPerSecond(-5))
     expect(hook.current.daysPerSecond).toBeGreaterThan(0)
     hook.unmount()
@@ -97,12 +108,15 @@ describe('useSelectionNavigation', () => {
       index,
       clock: {
         simDate: new Date('2026-01-01T00:00:00Z'),
+        simTimeRef: { current: Date.parse('2026-01-01T00:00:00Z') },
         simDateRef: { current: new Date('2026-01-01T00:00:00Z') },
+        now: () => new Date('2026-01-01T00:00:00Z'),
         playing: false,
         daysPerSecond: 1,
         setPlaying: jest.fn(),
         setDaysPerSecond: jest.fn(),
         advance: jest.fn(),
+        commit: jest.fn(),
       },
       log: { recordAction, recordDebounced: jest.fn(), startSession: jest.fn() },
       onSelectBody,

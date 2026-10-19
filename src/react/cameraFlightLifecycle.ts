@@ -402,18 +402,20 @@ export function advanceCameraFrame(
 /**
  * The viewing distance tracking smoothing should assume (see camera.ts's
  * computeSmoothedTrackedPosition, which shrinks its window — down to exact
- * tracking — as this gets smaller): the smaller of the camera distance
- * CameraRig last reported and the current focus's own framing distance.
+ * tracking — as this gets smaller): the smaller of the camera distance the
+ * caller measured and the current focus's own framing distance.
  *
- * Why not the reported distance alone (a real bug, found by the e2e frame
- * sampler): that's React state, committed a frame or more after CameraRig
- * measures it, and only on a >2% change. On the frame a flight lands it
- * still holds a mid-flight distance many times the framing distance, so
- * the smoothing window stayed wide open for a true-scale close orbiter
- * and the tracked point landed off the body — the ISS flashed off-centre
- * right after arriving, until the distance caught up. The focus distance
- * is exactly where the flight is taking the camera, so it's never stale
- * at landing. Erring small is the safe direction: at worst a user who has
+ * Why not the measured distance alone (a real bug, found by the e2e frame
+ * sampler): it used to be the React-state distance CameraRig reported, a
+ * frame or more behind and only on a >2% change, which on the frame a
+ * flight lands still held a mid-flight distance many times the framing
+ * distance — so the smoothing window stayed wide open for a true-scale
+ * close orbiter and the tracked point landed off the body (the ISS flashed
+ * off-centre right after arriving). CameraRig now passes the LIVE distance,
+ * but measured before this frame's flight step, so on the landing frame
+ * it's still the previous frame's in-flight value; the focus distance is
+ * exactly where the flight is taking the camera, so it's never stale at
+ * landing. Erring small is the safe direction: at worst a user who has
  * zoomed out past the framing distance gets slightly less smoothing.
  */
 export function trackingViewingDistance(reportedDistance: number, focus: Pick<FocusTarget, 'distance'> | null): number {

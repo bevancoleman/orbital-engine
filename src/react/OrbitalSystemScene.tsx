@@ -8,8 +8,6 @@ import {
   DEFAULT_NEAR_PLANE,
   MAX_CAMERA_DISTANCE,
   VERTICAL_FOV_DEG,
-  computeColliderBodies,
-  computeSmoothedTrackedPosition,
   minCameraDistanceForRadius,
   nearPlaneForRadius,
   type BodyFraming,
@@ -24,7 +22,7 @@ import type { CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
 import { StarLight } from './StarLight'
 import { CameraRig } from './CameraRig'
-import { trackingViewingDistance, type CameraActivity } from './cameraFlightLifecycle'
+import type { CameraActivity } from './cameraFlightLifecycle'
 import { PerfStats, type RendererStats } from './PerfStats'
 import { DevPerfPanel } from './DevPerfPanel'
 import { BeltInfoPanel, BodyInfoPanel } from './InfoPanel'
@@ -32,6 +30,7 @@ import { TimeBar } from './TimeBar'
 import { TimeDriver } from './TimeDriver'
 import { Toolbar } from './Toolbar'
 import { createSceneInteractionStore } from './sceneInteractionStore'
+import { createFramePositions, liveColliderBodies } from './framePositions'
 import { buildSystemIndex } from './selectionNavigation'
 import { useActionLog } from './useActionLog'
 import { useSelectionNavigation } from './useSelectionNavigation'
@@ -264,38 +263,24 @@ export function OrbitalSystemScene({
   // (see CameraRig's minDistance prop) — shared so the slider's displayed
   // position always agrees with what range [0, 1] actually spans.
   const zoomSliderMinDistance = minCameraDistanceForRadius(selectedBodyRadius)
-  // The selected body's world position, recomputed every time simDate
-  // advances — see CameraRig's trackedPosition prop for why this exists
-  // (a real orbiting body doesn't stay where it was when first selected).
-  // Routed through computeSmoothedTrackedPosition rather than a single raw
-  // resolveWorldPosition sample — see that function's own comment: a body
-  // whose own PARENT is also moving (a moon of an orbiting planet) can
-  // trace a genuinely epicyclic path that a plain per-frame backward
-  // difference tracks jerkily, and smoothing there is safe to apply
-  // unconditionally (not behind a toggle) because it already falls back to
-  // exact, unsmoothed tracking on its own whenever smoothing would risk
-  // lagging the target out of frame (a true-scale close orbiter) — the
-  // same adaptive-fallback pattern safePredictFlightTarget uses for the
-  // flight side (see useSelectionNavigation). That fallback check is
-  // measured against trackingViewingDistance — the live camera distance
-  // CameraRig reports, capped by the focus's own framing distance, since
-  // the reported value lags behind a landing flight (see that function).
-  const trackedPosition = selectedBody
-    ? computeSmoothedTrackedPosition(
-        selectedBody,
-        system,
-        clock.simDate,
-        clock.daysPerSecond,
-        trackingViewingDistance(cameraDistance, nav.focus)
-      )
-    : null
-  // Every body, fed to CameraRig as invisible collision proxies (see
-  // camera.ts's computeColliderBodies) — unfiltered; CameraRig itself
-  // decides which of these are active colliders at any given moment (it
-  // needs to exclude not just whatever's currently focused, but also
-  // whatever was JUST deselected for as long as the camera is still near
-  // it — see that file's own comment on the jump this fixes).
-  const colliderBodies = useMemo(() => computeColliderBodies(system, clock.simDate), [system, clock.simDate])
+  // Every body's position at the CURRENT FRAME's simulated time, resolved
+  // every frame by TimeDriver into arrays that are updated in place — see
+  // framePositions.ts for why (smooth playback). One per system, created
+  // at the current authoritative time.
+  const frame = useMemo(
+    () => createFramePositions(system, clock.simTimeRef.current),
+    // simTimeRef is a stable ref; only a new system needs a new frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [system]
+  )
+  // Every body, fed to CameraRig as invisible collision proxies — with
+  // live positions (see liveColliderBodies), so built once per system, not
+  // per tick. Unfiltered; CameraRig itself decides which of these are
+  // active colliders at any given moment (it needs to exclude not just
+  // whatever's currently focused, but also whatever was JUST deselected
+  // for as long as the camera is still near it — see that file's own
+  // comment on the jump this fixes).
+  const colliderBodies = useMemo(() => liveColliderBodies(system, frame), [system, frame])
   // The body the camera is centred on right now — CameraRig excludes this
   // (and, transiently, whatever it's flying away FROM) from colliderBodies
   // so the camera can actually get close to/inside it at true scale. A
@@ -387,7 +372,7 @@ export function OrbitalSystemScene({
             // Real day/night shading, from the system's actual star
             // position — see StarLight's own comment for the reasoning
             // and the star-less-system fallback.
-            <StarLight system={system} simDate={clock.simDate} />
+            <StarLight system={system} frame={frame} />
           ) : (
             /* A single fixed-direction light so lit bodies (planets/moons/
                asteroids/stations — see BodyShape) read as shaded 3D spheres
@@ -397,12 +382,22 @@ export function OrbitalSystemScene({
                legibility aid, not a claim about real lighting direction. */
             <directionalLight position={[40, 60, 30]} intensity={1.1} />
           )}
-          {hasOrbitalMotion && <TimeDriver playing={clock.playing} daysPerSecond={clock.daysPerSecond} onTick={clock.advance} />}
+          <TimeDriver
+            // A system with no orbital motion has nothing to play (its
+            // controls are hidden — see hasOrbitalMotion), so its time
+            // stays put whatever `playing` says.
+            playing={hasOrbitalMotion && clock.playing}
+            daysPerSecond={clock.daysPerSecond}
+            simTimeRef={clock.simTimeRef}
+            advance={clock.advance}
+            commit={clock.commit}
+            frame={frame}
+          />
           <SceneContent
             // A fresh subtree per system — see SceneContent's own comment.
             key={system.id}
             system={system}
-            simDate={clock.simDate}
+            frame={frame}
             selectedId={selectedBody?.id ?? null}
             cameraDistance={cameraDistance}
             onSelect={nav.selectBody}
@@ -411,7 +406,10 @@ export function OrbitalSystemScene({
           />
           <CameraRig
             focus={nav.focus}
-            trackedPosition={trackedPosition}
+            trackedBody={selectedBody}
+            system={system}
+            frame={frame}
+            daysPerSecond={clock.daysPerSecond}
             colliderBodies={colliderBodies}
             focusedId={focusedBodyId}
             manualDistance={manualZoomDistanceRef}

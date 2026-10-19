@@ -5,12 +5,15 @@ import * as THREE from 'three'
 import {
   DEFAULT_VIEW_DIRECTION,
   MAX_CAMERA_DISTANCE,
+  computeSmoothedTrackedPosition,
   type CameraObstacle,
   type CameraPose,
   type FlightPacing,
   type FocusTarget,
 } from '../camera'
 import type { WorldVec } from '../render'
+import type { CelestialBody, StarSystemData } from '../types'
+import type { FramePositions } from './framePositions'
 import {
   acknowledgeNullFocus,
   advanceCameraFrame,
@@ -21,6 +24,7 @@ import {
   interruptFlight,
   releaseClearedColliders,
   sameCameraActivity,
+  trackingViewingDistance,
   type CameraActivity,
 } from './cameraFlightLifecycle'
 
@@ -216,7 +220,10 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  on the body. Panning still works while paused.) */
 export function CameraRig({
   focus,
-  trackedPosition,
+  trackedBody,
+  system,
+  frame,
+  daysPerSecond,
   colliderBodies,
   focusedId,
   manualDistance,
@@ -228,16 +235,28 @@ export function CameraRig({
   cameraPose,
 }: {
   focus: FocusTarget | null
-  /** The currently-selected body's LIVE world position — recomputed by
-   *  OrbitalSystemScene every time simDate advances — or null when nothing
-   *  real is selected (a belt, or nothing at all). A body with real orbital
-   *  motion (see CelestialBody.orbit) keeps moving after `focus` is
-   *  computed (a one-time snapshot), including while a flight is still in
-   *  progress or after it's long since settled — see the tracking logic in
-   *  useFrame below for how this keeps the camera locked on regardless. */
-  trackedPosition: readonly [number, number, number] | null
-  /** Every body's current position/radius (see camera.ts's
-   *  computeColliderBodies), UNFILTERED — turned into invisible proxy
+  /** The currently-selected body, or null when nothing real is selected
+   *  (a belt, or nothing at all). A body with real orbital motion (see
+   *  CelestialBody.orbit) keeps moving after `focus` is computed (a
+   *  one-time snapshot), including while a flight is still in progress or
+   *  after it's long since settled — see the tracking logic in useFrame
+   *  below for how this keeps the camera locked on regardless. Its
+   *  position is resolved HERE, every frame, at this frame's simulated
+   *  time (`frame`): it used to arrive as a prop recomputed only when the
+   *  React `simDate` state ticked (~10x a second), so the tracking camera
+   *  moved in visible 100ms steps along with everything else. */
+  trackedBody: CelestialBody | null
+  system: StarSystemData
+  /** This frame's simulated time and positions — see framePositions.ts. */
+  frame: FramePositions
+  /** Playback speed — tracking smoothing's sample spacing (see
+   *  computeSmoothedTrackedPosition). Deliberately NOT zeroed while paused:
+   *  that would shift the smoothed point (by up to its lag allowance) the
+   *  moment playback pauses. */
+  daysPerSecond: number
+  /** Every body's position/radius (see framePositions.ts's
+   *  liveColliderBodies — the positions are live arrays, current every
+   *  frame), UNFILTERED — turned into invisible proxy
    *  spheres below; which of them are actually active colliders at any
    *  given moment is this component's own call (see excludedColliderIds
    *  below), not something the caller decides. */
@@ -336,13 +355,35 @@ export function CameraRig({
   useFrame(() => {
     const controls = controlsRef.current
     if (!controls) return
-    const tracked: WorldVec | null = trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
+    // The selected body's position at THIS frame's simulated time, routed
+    // through computeSmoothedTrackedPosition rather than a single raw
+    // sample — see that function's own comment: a body whose own PARENT is
+    // also moving (a moon of an orbiting planet) can trace a genuinely
+    // epicyclic path that a plain per-frame backward difference tracks
+    // jerkily, and smoothing there is safe to apply unconditionally (not
+    // behind a toggle) because it already falls back to exact, unsmoothed
+    // tracking on its own whenever smoothing would risk lagging the target
+    // out of frame (a true-scale close orbiter) — the same adaptive-
+    // fallback pattern safePredictFlightTarget uses for the flight side
+    // (see useSelectionNavigation). That fallback is measured against
+    // trackingViewingDistance: the LIVE camera distance, capped by the
+    // focus's own framing distance, since mid-flight the live distance is
+    // still far wider than where the flight is landing (see that function).
+    const tracked: WorldVec | null = trackedBody
+      ? computeSmoothedTrackedPosition(
+          trackedBody,
+          system,
+          frame.date,
+          daysPerSecond,
+          trackingViewingDistance(controls.distance, focus)
+        )
+      : null
 
     let lifecycle = flightLifecycleRef.current
 
     // Starts a new flight the instant `focus` changes — inline here, not
     // in a separate useEffect, and checked FIRST, before anything below
-    // reads trackedPosition. See this file's header comment (fifth bug,
+    // reads the tracked position. See this file's header comment (fifth bug,
     // a real, observed one, confirmed by direct instrumentation): a
     // useEffect is a PASSIVE effect, deferred relative to R3F's own
     // requestAnimationFrame-driven loop, with no guarantee it flushes

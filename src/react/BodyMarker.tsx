@@ -13,6 +13,7 @@ import { ndcToScreenPx } from './screenProjection'
 import { BODY_FLAG_HOVERED, BODY_FLAG_LABEL, BODY_FLAG_VISIBLE, type SceneInteractionStore } from './sceneInteractionStore'
 import { useBodyInteractionFlags } from './useSceneInteraction'
 import { useLatestRef } from './useStableCallback'
+import { FOLLOW_PRIORITY } from './useFollowPosition'
 
 // How long a body takes to grow in / shrink out when it crosses in or out
 // of the visible set (see ProximitySelector's screen-space thinning and
@@ -31,6 +32,9 @@ export function BodyMarker({
   onSelect,
 }: {
   body: CelestialBody
+  /** Live — updated in place every frame (see framePositions.ts) and
+   *  copied onto this body's group every frame below, not through a React
+   *  prop, so the body moves smoothly while time plays. */
   position: [number, number, number]
   /** Precomputed by SceneContent via trueRadius (scale.ts), floored to a
    *  minimum on-screen pixel size via renderRadius (pixelFloor.ts) so a
@@ -96,13 +100,16 @@ export function BodyMarker({
     radiusRef.current = radius
   }, [radius])
 
+  // FOLLOW_PRIORITY: before this body's label projects the group's world
+  // position this frame — see useFollowPosition.ts.
   useFrame((_, delta) => {
     scaleRef.current = stepToward(scaleRef.current, targetScale, delta / VISIBILITY_FADE_SECONDS)
     if (groupRef.current) {
+      groupRef.current.position.set(position[0], position[1], position[2])
       groupRef.current.scale.setScalar(Math.max(scaleRef.current, 0.0001))
       groupRef.current.visible = scaleRef.current > 0.001
     }
-  })
+  }, FOLLOW_PRIORITY)
 
   const detailSize = apparentSize(radius, cameraDistance)
 

@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals'
 import { AU_KM, beltExtentText, bodyRadiusText, bodyTypeLabel, coOrbitalText, formatAu } from '../infoPanelText'
 import { describeDataWarning } from '../dataWarningText'
-import { MS_PER_DAY, flightTargetDate, simulatedAdvanceMs } from '../simulationTime'
+import { MS_PER_DAY, TICK_INTERVAL_SECONDS, flightTargetDate, simulatedAdvanceMs, stepPlayback } from '../simulationTime'
 import { createKeyedDebouncer } from '../keyedDebouncer'
 import type { BeltRegion, CelestialBody } from '../../types'
 import type { SystemDataWarning } from '../../validateSystemData'
@@ -136,5 +136,30 @@ describe('createKeyedDebouncer', () => {
     jest.advanceTimersByTime(1000)
     expect(run).not.toHaveBeenCalled()
     expect(debouncer.pendingCount).toBe(0)
+  })
+})
+
+describe('stepPlayback', () => {
+  it('advances the simulated time by every frame’s own delta', () => {
+    expect(stepPlayback(0, 1 / 60, 2).advanceMs).toBeCloseTo((2 * MS_PER_DAY) / 60)
+    expect(stepPlayback(0.05, 0.016, 1).advanceMs).toBeCloseTo(0.016 * MS_PER_DAY)
+  })
+
+  it('commits to React state only once per tick interval of real time, then restarts the interval', () => {
+    let accumulator = 0
+    let commits = 0
+    for (let frame = 0; frame < 60; frame++) {
+      const step = stepPlayback(accumulator, 1 / 60, 1)
+      accumulator = step.accumulatorSeconds
+      if (step.commit) commits++
+    }
+    // A second of 60fps frames: about 1 / TICK_INTERVAL_SECONDS commits.
+    expect(commits).toBeGreaterThanOrEqual(Math.floor(1 / TICK_INTERVAL_SECONDS) - 1)
+    expect(commits).toBeLessThanOrEqual(Math.ceil(1 / TICK_INTERVAL_SECONDS))
+    expect(stepPlayback(0.09, 0.02, 1).commit).toBe(true)
+    expect(stepPlayback(0.09, 0.02, 1).accumulatorSeconds).toBeCloseTo(0.01)
+    expect(stepPlayback(0.05, 0.02, 1)).toMatchObject({ commit: false })
+    // A long stall commits once and starts fresh, rather than owing a burst.
+    expect(stepPlayback(0, 5, 1)).toMatchObject({ commit: true, accumulatorSeconds: 0 })
   })
 })

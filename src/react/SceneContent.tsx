@@ -1,6 +1,6 @@
 import { memo, useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
-import { resolveAllWorldPositions, type WorldVec } from '../render'
+import type { WorldVec } from '../render'
 import { trueRadius } from '../scale'
 import { renderRadius } from '../pixelFloor'
 import { computeVisibleBodyIds, isAlwaysVisible } from '../visibility'
@@ -15,12 +15,18 @@ import { NON_ORBITING_MARKER_TYPES } from './bodyTypeStyles'
 import { propsEqualWithVectors } from './memoEquality'
 import { BODY_FLAG_VISIBLE, type SceneInteractionStore } from './sceneInteractionStore'
 import { useBodyInteractionFlags } from './useSceneInteraction'
+import type { FramePositions } from './framePositions'
 
 const ORIGIN: WorldVec = [0, 0, 0]
 
 interface SceneContentProps {
   system: StarSystemData
-  simDate: Date
+  /** Every body's position at this frame's simulated time, updated in
+   *  place every frame by TimeDriver — see framePositions.ts. Components
+   *  below hold a body's array and apply it to their object3D each frame
+   *  (useFollowPosition), so motion is smooth while this component itself
+   *  only re-renders when what's shown changes, not as time passes. */
+  frame: FramePositions
   selectedId: string | null
   cameraDistance: number
   /** Must be referentially stable (see OrbitalSystemScene) — every
@@ -43,9 +49,17 @@ interface SceneContentProps {
  * ProximitySelector's per-frame bookkeeping inside it — from scratch
  * instead of carrying the previous system's last frame over.
  */
-export function SceneContent({ system, simDate, selectedId, cameraDistance, onSelect, interaction, routePreview }: SceneContentProps) {
+export const SceneContent = memo(function SceneContent({
+  system,
+  frame,
+  selectedId,
+  cameraDistance,
+  onSelect,
+  interaction,
+  routePreview,
+}: SceneContentProps) {
   const viewportHeight = useThree((s) => s.size.height)
-  const positions = useMemo(() => resolveAllWorldPositions(system, simDate), [system, simDate])
+  const positions = frame.positions
   // Rank-and-cap eligibility (see computeVisibleBodyIds/visibility.ts) —
   // the candidate POOL for proximity selection, labels, and the further
   // per-frame screen-space thinning below, not yet the final rendered set
@@ -96,10 +110,10 @@ export function SceneContent({ system, simDate, selectedId, cameraDistance, onSe
           the one actually picked — always renders on top of it where the
           two would otherwise overlap. */}
       {routePreview?.alternateIds && (
-        <RoutePreviewLine waypointIds={routePreview.alternateIds} positions={positions} color="#a855f7" dashed />
+        <RoutePreviewLine waypointIds={routePreview.alternateIds} frame={frame} color="#a855f7" dashed />
       )}
       {routePreview?.primaryIds && (
-        <RoutePreviewLine waypointIds={routePreview.primaryIds} positions={positions} color="#22d3ee" />
+        <RoutePreviewLine waypointIds={routePreview.primaryIds} frame={frame} color="#22d3ee" />
       )}
       {system.bodies.map((body) => {
         const pos = positions.get(body.id)
@@ -128,20 +142,21 @@ export function SceneContent({ system, simDate, selectedId, cameraDistance, onSe
                 population only a narrow arc, so all three would look
                 actively misleading here. */}
             {!belt.coOrbital && beltShape(belt) === 'ring' && <BeltGlowRing belt={belt} parentWorldPos={parentWorldPos} />}
-            <BeltPoints belt={belt} system={system} simDate={simDate} parentWorldPos={parentWorldPos} />
+            <BeltPoints belt={belt} system={system} frame={frame} parentWorldPos={parentWorldPos} />
             <BeltSites belt={belt} parentWorldPos={parentWorldPos} />
           </group>
         )
       })}
     </>
   )
-}
+})
 
 /**
  * One body's orbit line, reference ring and marker. Memoized with a
  * vector-aware comparator (see memoEquality.ts): SceneContent re-renders
- * on every simulation tick and zoom step, but most bodies' props are
- * unchanged by most of those (paused time, a fixed-position system), and
+ * on every zoom step and selection change, but most bodies' props are
+ * unchanged by most of those, positions are live arrays applied per frame
+ * rather than props that change (see framePositions.ts), and
  * hover/visibility changes no longer reach this level at all — they're
  * read per body from the interaction store.
  */

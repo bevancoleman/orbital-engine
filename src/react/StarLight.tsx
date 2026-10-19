@@ -1,6 +1,8 @@
-import { useMemo } from 'react'
-import { resolveWorldPosition } from '../render'
+import { useMemo, useRef } from 'react'
+import type * as THREE from 'three'
 import type { StarSystemData } from '../types'
+import type { FramePositions } from './framePositions'
+import { useFollowPosition } from './useFollowPosition'
 
 /**
  * A point light at the system's actual star position — every other body
@@ -21,18 +23,27 @@ import type { StarSystemData } from '../types'
  */
 export function StarLight({
   system,
-  simDate,
+  frame,
   intensity = 2.2,
 }: {
   system: StarSystemData
-  simDate: Date
+  /** Live positions — the light follows the star every frame. */
+  frame: FramePositions
   intensity?: number
 }) {
   const star = useMemo(() => system.bodies.find((b) => b.type === 'star'), [system])
   if (!star) return null
-  const position = resolveWorldPosition(star, system.bodies, simDate)
+  return <StarPointLight position={frame.positions.get(star.id) ?? ORIGIN} intensity={intensity} />
+}
+
+const ORIGIN: [number, number, number] = [0, 0, 0]
+
+function StarPointLight({ position, intensity }: { position: [number, number, number]; intensity: number }) {
+  const lightRef = useRef<THREE.PointLight>(null)
+  useFollowPosition(lightRef, position)
   return (
     <pointLight
+      ref={lightRef}
       position={position}
       intensity={intensity}
       // No physical falloff (decay=0, i.e. constant intensity with

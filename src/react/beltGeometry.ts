@@ -58,3 +58,17 @@ export function syntheticBeltOffsets(belt: BeltRegion, shape: Float32Array, refe
   }
   return out
 }
+
+/**
+ * The rotation about the world Y axis (three.js `rotation.y`) that turns a
+ * belt's synthetic scatter built at reference angle 0 into the same
+ * scatter at `referenceAngle` — what lets a co-orbital belt follow its
+ * reference body by rotating its group every frame instead of rebuilding
+ * its buffer (see BeltPoints). The scatter's angle is measured in the
+ * parent's orbital x/y plane, which compressVec maps to world x/z (orbital
+ * z becomes world y); a turn of +a in that plane is a turn of -a about
+ * world Y. Compression is radial, so it commutes with the rotation.
+ */
+export function coOrbitalRotationY(referenceAngle: number): number {
+  return -referenceAngle
+}

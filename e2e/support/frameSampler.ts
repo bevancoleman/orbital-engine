@@ -212,3 +212,46 @@ export function describeSamples(samples: FrameSample[]): string {
     })
     .join('\n')
 }
+
+export interface LabelTrackSample {
+  /** requestAnimationFrame timestamp, ms. */
+  t: number
+  /** The label's centre in CSS px, or null when it isn't on screen. */
+  x: number | null
+  y: number | null
+}
+
+/**
+ * Where `bodyName`'s label is on every animation frame for `durationMs` —
+ * label positions only, no WebGL pixel reads: a readPixels stalls the GPU
+ * pipeline every frame and on a software-rendered canvas roughly halves
+ * the frame rate, which would hide exactly the per-frame-vs-100ms
+ * difference some tests measure. Labels are positioned from the same
+ * per-frame body positions the meshes are drawn from (see BodyLabel).
+ */
+export async function sampleLabelTrack(page: Page, bodyName: string, durationMs: number): Promise<LabelTrackSample[]> {
+  return page.evaluate(
+    ({ bodyName, durationMs }) =>
+      new Promise<LabelTrackSample[]>((resolve) => {
+        const samples: LabelTrackSample[] = []
+        let start: number | null = null
+        const tick = (t: number): void => {
+          start ??= t
+          let x: number | null = null
+          let y: number | null = null
+          for (const el of document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]')) {
+            if (el.textContent !== bodyName) continue
+            const rect = el.getBoundingClientRect()
+            if (rect.width === 0) continue
+            x = rect.left + rect.width / 2
+            y = rect.top + rect.height / 2
+          }
+          samples.push({ t, x, y })
+          if (t - start < durationMs) requestAnimationFrame(tick)
+          else resolve(samples)
+        }
+        requestAnimationFrame(tick)
+      }),
+    { bodyName, durationMs }
+  )
+}
