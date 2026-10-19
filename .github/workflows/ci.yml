@@ -111,6 +111,11 @@ jobs:
       # ignored, its `prepare` doesn't rebuild dist/ a second time.
       - run: npm ci --ignore-scripts --prefix examples/basic
       - run: npm ci --ignore-scripts --prefix examples/with-models
+      # e2e runs against production builds served by `vite preview` (see
+      # playwright.config.ts), so build both examples first. GITHUB_PAGES
+      # stays unset: base '/', matching the root URLs the specs use.
+      - run: npm run build --prefix examples/basic
+      - run: npm run build --prefix examples/with-models
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
       - name: Upload Playwright report and traces

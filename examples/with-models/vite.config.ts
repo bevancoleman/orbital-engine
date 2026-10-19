@@ -9,4 +9,5 @@ export default defineConfig({
     dedupe: ['react', 'react-dom', 'three', '@react-three/fiber', '@react-three/drei'],
   },
   server: { port: 5174, strictPort: true },
+  preview: { port: 5174, strictPort: true },
 })

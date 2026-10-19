@@ -1,5 +1,25 @@
 import { defineConfig, devices } from '@playwright/test'
 
+// Ports are fixed (and strict) in each example's vite.config.ts for both
+// `vite` and `vite preview`; the specs hardcode the same URLs.
+const EXAMPLES = [
+  { dir: 'basic', port: 5173 },
+  { dir: 'with-models', port: 5174 },
+] as const
+
+// CI tests what actually ships: a production `vite build` served by
+// `vite preview` (minified, production React, assets out of dist/ rather
+// than vite's on-the-fly transforms). The e2e job in ci.yml runs the
+// builds as explicit steps, so here CI only starts `vite preview`.
+// Locally the dev server stays the default: it starts instantly and
+// `reuseExistingServer` picks up one you already have running.
+// E2E_PREVIEW=1 reproduces the CI setup locally, building first.
+function serverCommand(): string {
+  if (process.env.CI) return 'npm run preview'
+  if (process.env.E2E_PREVIEW) return 'npm run build && npm run preview'
+  return 'npm run dev'
+}
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -30,20 +50,17 @@ export default defineConfig({
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
-  webServer: [
-    {
-      command: 'npm run dev',
-      cwd: './examples/basic',
-      url: 'http://localhost:5173',
-      reuseExistingServer: !process.env.CI,
-      timeout: 60_000,
-    },
-    {
-      command: 'npm run dev',
-      cwd: './examples/with-models',
-      url: 'http://localhost:5174',
-      reuseExistingServer: !process.env.CI,
-      timeout: 60_000,
-    },
-  ],
+  webServer: EXAMPLES.map(({ dir, port }) => ({
+    command: serverCommand(),
+    cwd: `./examples/${dir}`,
+    url: `http://localhost:${port}`,
+    reuseExistingServer: !process.env.CI,
+    // Room for E2E_PREVIEW's build step; dev and plain preview take ~1s.
+    timeout: 120_000,
+    // An empty GITHUB_PAGES keeps vite's `base` at '/' (see each example's
+    // vite.config.ts), so BASE_URL, which examples/with-models builds its
+    // asset URLs from, matches the root URLs the specs navigate to. The CI
+    // build steps run without it too (see the e2e job in ci.yml).
+    env: { GITHUB_PAGES: '' },
+  })),
 })

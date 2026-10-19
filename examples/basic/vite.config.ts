@@ -16,5 +16,8 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom', 'three', '@react-three/fiber', '@react-three/drei'],
   },
+  // preview shares the dev port so e2e (dev locally, preview on CI — see
+  // playwright.config.ts) hits the same URL either way.
   server: { port: 5173, strictPort: true },
+  preview: { port: 5173, strictPort: true },
 })
