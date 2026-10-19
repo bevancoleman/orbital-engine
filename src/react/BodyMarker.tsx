@@ -1,6 +1,5 @@
-import { memo, useLayoutEffect, useRef, type ComponentRef, type RefObject } from 'react'
-import { useFrame } from '@react-three/fiber'
-import { Html } from '@react-three/drei'
+import { memo, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { VERTICAL_FOV_DEG } from '../camera'
 import { apparentSize } from '../levelOfDetail'
@@ -9,9 +8,11 @@ import { BodyShape } from './BodyShapes'
 import { BodyRings } from './BodyRings'
 import { BODY_TYPE_COLOR_FALLBACK } from './bodyTypeStyles'
 import { stepToward } from './animation'
-import { bodyLabelStyle, labelOffsetPx, projectedRadiusPx } from './labelLayout'
+import { LABEL_BASE_OFFSET_PX, bodyLabelStyle, labelOffsetPx, labelZIndex, projectedRadiusPx } from './labelLayout'
+import { ndcToScreenPx } from './screenProjection'
 import { BODY_FLAG_HOVERED, BODY_FLAG_LABEL, BODY_FLAG_VISIBLE, type SceneInteractionStore } from './sceneInteractionStore'
 import { useBodyInteractionFlags } from './useSceneInteraction'
+import { useLatestRef } from './useStableCallback'
 
 // How long a body takes to grow in / shrink out when it crosses in or out
 // of the visible set (see ProximitySelector's screen-space thinning and
@@ -134,16 +135,41 @@ export function BodyMarker({
 }
 
 /**
- * A body's clickable HTML name label. Memoized and fed only stable/
- * primitive props, because drei's <Html> re-renders its own separate React
- * root on every render of its parent — previously every zoom frame for
- * every labelled body.
+ * A body's clickable HTML name label — a plain DOM element this component
+ * creates, positions and styles itself, appended to the same element R3F
+ * takes its pointer events from (the canvas's wrapper), rather than a
+ * drei <Html>.
  *
- * The vertical offset is applied to the INNER div (and updated directly
- * from useFrame, see labelOffsetPx), not via <Html>'s own `style` — an
- * inline `transform` there replaced the `translate(-50%, -50%)` that
- * `center` relies on, which is why labels used to hang off to the right
- * of their body instead of sitting centred over it.
+ * Real, reported bug this fixes: "a selected body's label sometimes
+ * disappears for a few frames right after a fly-to lands." drei's <Html>
+ * renders its content into a SEPARATE React root (createRoot + render),
+ * and that root's render() is SCHEDULED, not synchronous — so a label that
+ * mounted when its body was selected (one that wasn't already showing,
+ * e.g. the Moon's, decluttered away by Earth's until the Moon was picked)
+ * existed as an empty wrapper until the scheduler got round to that root.
+ * Measured with the e2e frame sampler: 2-7 frames after the flight had
+ * already started, and on a loaded machine — where a flight is only a
+ * handful of slow frames — after it had landed, which is exactly when it
+ * was noticed. Creating the element here, in this component's own layout
+ * effect, puts it in the DOM in the same commit that selects the body and
+ * starts the flight (CameraRig reads the new focus from that commit too),
+ * so there's no frame where the selection exists and its label doesn't.
+ * Every later change — position, style, visibility — is an imperative
+ * write in the same frame as well.
+ *
+ * It also drops one React root (and its re-render) per visible label. The
+ * label is still only mounted while it should show (see BodyMarker), so
+ * nothing about which labels draw has changed.
+ *
+ * The vertical offset (labelOffsetPx, from the body's projected radius)
+ * is applied to the inner text element, separately from the wrapper's
+ * centring translate — an inline transform on the wrapper used to replace
+ * the `translate(-50%, -50%)` centring, which is why labels used to hang
+ * off to the right of their body instead of sitting centred over it.
+ *
+ * Hidden (display: none) while its body is behind the camera, the same
+ * rule <Html> used — whose check only re-ran when the projected position
+ * moved by more than a small epsilon; this one runs every frame.
  *
  * aria-hidden: this is a pointer-only shortcut. The toolbar's object
  * dropdown is the keyboard/screen-reader way to select the same bodies, so
@@ -166,40 +192,109 @@ const BodyLabel = memo(function BodyLabel({
   radiusRef: RefObject<number>
 }) {
   const anchorRef = useRef<THREE.Group>(null)
-  const textRef = useRef<ComponentRef<'div'>>(null)
-  const appliedOffset = useRef<number | null>(null)
-  const worldPosition = useRef(new THREE.Vector3())
+  const gl = useThree((s) => s.gl)
+  const connected = useThree((s) => s.events.connected) as unknown
+  const [elements] = useState(createLabelElements)
+  const applied = useRef({ offset: NaN, x: NaN, y: NaN, zIndex: NaN, shown: true })
+  const scratch = useRef({ world: new THREE.Vector3(), view: new THREE.Vector3() })
+  const onSelectRef = useLatestRef(onSelect)
+  const bodyRef = useLatestRef(body)
+
+  useLayoutEffect(() => {
+    const target = connected instanceof window.HTMLElement ? connected : gl.domElement.parentElement
+    if (!target) return
+    const { wrapper, text } = elements
+    const id = body.id
+    const handleClick = (event: InstanceType<typeof window.MouseEvent>): void => {
+      // Keeps the click from also reaching R3F's own listener on the
+      // wrapper, whose onPointerMissed would select the proximity hover
+      // target as well (see OrbitalSystemScene's handleCanvasClick).
+      event.stopPropagation()
+      onSelectRef.current(bodyRef.current)
+    }
+    const handleEnter = (): void => interaction.setLabelHoverId(id)
+    const handleLeave = (): void => interaction.clearLabelHoverId(id)
+    text.addEventListener('click', handleClick)
+    text.addEventListener('mouseenter', handleEnter)
+    text.addEventListener('mouseleave', handleLeave)
+    target.appendChild(wrapper)
+    return () => {
+      text.removeEventListener('click', handleClick)
+      text.removeEventListener('mouseenter', handleEnter)
+      text.removeEventListener('mouseleave', handleLeave)
+      interaction.clearLabelHoverId(id)
+      wrapper.remove()
+    }
+  }, [connected, gl, elements, body.id, interaction, onSelectRef, bodyRef])
+
+  useLayoutEffect(() => {
+    elements.text.textContent = body.name
+  }, [elements, body.name])
+
+  useLayoutEffect(() => {
+    for (const [name, value] of Object.entries(bodyLabelStyle(selected, hovered))) elements.text.style.setProperty(name, value)
+  }, [elements, selected, hovered])
 
   useFrame(({ camera, size }) => {
     const anchor = anchorRef.current
-    const text = textRef.current
-    if (!anchor || !text) return
-    anchor.getWorldPosition(worldPosition.current)
-    const distance = camera.position.distanceTo(worldPosition.current)
-    const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : VERTICAL_FOV_DEG
-    const offset = Math.round(labelOffsetPx(projectedRadiusPx(radiusRef.current, distance, fov, size.height)))
-    if (offset === appliedOffset.current) return
-    appliedOffset.current = offset
-    text.style.transform = `translateY(${-offset}px)`
+    if (!anchor) return
+    const { world, view } = scratch.current
+    const last = applied.current
+    anchor.getWorldPosition(world)
+    camera.updateMatrixWorld()
+    const shown = view.copy(world).applyMatrix4(camera.matrixWorldInverse).z < 0
+    if (shown !== last.shown) {
+      last.shown = shown
+      elements.wrapper.style.display = shown ? '' : 'none'
+    }
+    if (!shown) return
+    const distance = camera.position.distanceTo(world)
+    const perspective = camera instanceof THREE.PerspectiveCamera ? camera : null
+    applyLabelPlacement(elements, last, {
+      screen: ndcToScreenPx(world.project(camera), size),
+      zIndex: labelZIndex(distance, camera.near, camera.far),
+      offset: Math.round(labelOffsetPx(projectedRadiusPx(radiusRef.current, distance, perspective?.fov ?? VERTICAL_FOV_DEG, size.height))),
+    })
   })
 
-  return (
-    <group ref={anchorRef}>
-      <Html center>
-        <div
-          ref={textRef}
-          aria-hidden
-          onClick={(e) => {
-            e.stopPropagation()
-            onSelect(body)
-          }}
-          onMouseEnter={() => interaction.setLabelHoverId(body.id)}
-          onMouseLeave={() => interaction.clearLabelHoverId(body.id)}
-          style={bodyLabelStyle(selected, hovered)}
-        >
-          {body.name}
-        </div>
-      </Html>
-    </group>
-  )
+  return <group ref={anchorRef} />
 })
+
+interface LabelElements {
+  wrapper: InstanceType<typeof window.HTMLDivElement>
+  text: InstanceType<typeof window.HTMLDivElement>
+}
+
+function createLabelElements(): LabelElements {
+  const wrapper = document.createElement('div')
+  wrapper.style.cssText = 'position:absolute;top:0;left:0;transform-origin:0 0;'
+  const text = document.createElement('div')
+  text.setAttribute('aria-hidden', 'true')
+  text.style.transform = `translateY(${-LABEL_BASE_OFFSET_PX}px)`
+  wrapper.appendChild(text)
+  return { wrapper, text }
+}
+
+/** Writes position, stacking and offset to the label's elements — each
+ *  only when it changed since the last frame, so a still label costs no
+ *  DOM writes. */
+function applyLabelPlacement(
+  elements: LabelElements,
+  last: { offset: number; x: number; y: number; zIndex: number },
+  next: { screen: { x: number; y: number }; zIndex: number; offset: number }
+): void {
+  const { x, y } = next.screen
+  if (x !== last.x || y !== last.y) {
+    last.x = x
+    last.y = y
+    elements.wrapper.style.transform = `translate3d(${x}px,${y}px,0) translate(-50%,-50%)`
+  }
+  if (next.zIndex !== last.zIndex) {
+    last.zIndex = next.zIndex
+    elements.wrapper.style.zIndex = String(next.zIndex)
+  }
+  if (next.offset !== last.offset) {
+    last.offset = next.offset
+    elements.text.style.transform = `translateY(${-next.offset}px)`
+  }
+}

@@ -8,7 +8,7 @@ import { setsEqual } from './setUtils'
  * It used to be root state, and every change (the hover target can change
  * on any frame the pointer moves; the visible sets on any frame the camera
  * does) re-rendered the whole scene: every BodyMarker, every orbit line,
- * every drei <Html> label root. With the store, each BodyMarker subscribes
+ * every label. With the store, each BodyMarker subscribes
  * to just its own three bits (see bodyInteractionFlags and
  * useBodyInteractionFlags) via useSyncExternalStore, so a hover change
  * re-renders the two bodies involved and nothing else. No new dependency —

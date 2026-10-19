@@ -555,4 +555,43 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     await expect(sceneRoot(page)).toHaveAttribute('data-camera-state', 'idle')
     expect(errors).toEqual([])
   })
+  for (const [from, to] of [
+    ['Earth', 'Moon'],
+    ['ISS', 'Hubble Space Telescope'],
+  ] as const) {
+    test(`the selected body's label exists from the flight's first frame and shows once it lands (${from} → ${to})`, async ({ page }) => {
+      // Regression test for a real, reported bug: a selected body's label
+      // sometimes vanished for a few frames right after a fly-to landed.
+      // Labels used to be drei <Html> elements, which render their content
+      // through a SEPARATE React root whose render() is scheduled, not
+      // synchronous — so a label that wasn't already showing (here: the
+      // destination's, decluttered away by its neighbour's before the
+      // selection) only appeared once the scheduler got round to that
+      // root: measured at 2-7 frames after the flight had started, and on
+      // a loaded machine (few, slow frames per flight) after it had landed.
+      // A throttled CPU stands in for that machine. See BodyLabel.
+      const errors = trackErrors(page)
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 })
+      await gotoScene(page, URL)
+      await flyAndSettle(page, async () => {
+        await select(page, from)
+      })
+
+      const flight = await sampleFlight(page, async () => {
+        await select(page, to)
+      }, { bodyName: to })
+      const firstFlying = flight.findIndex((s) => s.cameraState === 'flying')
+      expect(firstFlying, describeSamples(flight)).toBeGreaterThanOrEqual(0)
+      // In the DOM on every frame of the flight — it can still be hidden
+      // mid-flight while the body is behind the camera, so only existence
+      // is checked there…
+      for (const sample of flight.slice(firstFlying)) expect(sample.bodyLabelMounted, describeSamples(flight)).toBe(true)
+      // …and on screen on every frame from the landing on.
+      const landing = flight.findIndex((s, i) => i > firstFlying && s.cameraState !== 'flying')
+      const landed = [...flight.slice(landing), ...(await sampleFor(page, 500, { bodyName: to }))]
+      for (const sample of landed) expect(sample.body, describeSamples(landed)).not.toBeNull()
+      expect(errors).toEqual([])
+    })
+  }
 })

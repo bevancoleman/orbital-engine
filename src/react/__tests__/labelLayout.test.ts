@@ -3,6 +3,7 @@ import {
   LABEL_MAX_RADIUS_OFFSET_PX,
   bodyLabelStyle,
   labelOffsetPx,
+  labelZIndex,
   projectedRadiusPx,
 } from '../labelLayout'
 
@@ -39,20 +40,43 @@ describe('labelOffsetPx', () => {
 })
 
 describe('bodyLabelStyle', () => {
-  it('returns the same object for the same state (so drei <Html> content stays referentially stable)', () => {
+  it('returns the same object for the same state (so applying it can skip unchanged states)', () => {
     expect(bodyLabelStyle(false, false)).toBe(bodyLabelStyle(false, false))
     expect(bodyLabelStyle(true, false)).toBe(bodyLabelStyle(true, true))
   })
 
   it('reserves colour and weight changes for selected/hovered', () => {
-    expect(bodyLabelStyle(false, false)).toMatchObject({ color: '#cbd5e1', fontWeight: 400 })
-    expect(bodyLabelStyle(false, true)).toMatchObject({ color: '#22d3ee', fontWeight: 700 })
-    expect(bodyLabelStyle(true, false)).toMatchObject({ color: '#ffffff', fontWeight: 700 })
+    expect(bodyLabelStyle(false, false)).toMatchObject({ color: '#cbd5e1', 'font-weight': '400' })
+    expect(bodyLabelStyle(false, true)).toMatchObject({ color: '#22d3ee', 'font-weight': '700' })
+    expect(bodyLabelStyle(true, false)).toMatchObject({ color: '#ffffff', 'font-weight': '700' })
   })
 
   it('is never text-selectable and always clickable', () => {
     for (const style of [bodyLabelStyle(false, false), bodyLabelStyle(true, false), bodyLabelStyle(false, true)]) {
-      expect(style).toMatchObject({ userSelect: 'none', pointerEvents: 'auto', cursor: 'pointer' })
+      expect(style).toMatchObject({ 'user-select': 'none', 'pointer-events': 'auto', cursor: 'pointer' })
     }
+  })
+
+  it('uses only CSS property names and string values, so it can be applied with style.setProperty', () => {
+    for (const [name, value] of Object.entries(bodyLabelStyle(false, false))) {
+      expect(name).toMatch(/^-?[a-z-]+$/)
+      expect(typeof value).toBe('string')
+    }
+  })
+})
+
+describe('labelZIndex', () => {
+  it('stacks nearer labels above farther ones, within [0, LABEL_Z_INDEX_MAX]', () => {
+    const near = labelZIndex(1, 0.01, 1000)
+    const far = labelZIndex(500, 0.01, 1000)
+    expect(near).toBeGreaterThan(far)
+    expect(labelZIndex(0.01, 0.01, 1000)).toBeLessThanOrEqual(16777271)
+    expect(labelZIndex(1000, 0.01, 1000)).toBe(0)
+  })
+
+  it('clamps distances outside the depth range and survives a degenerate range', () => {
+    expect(labelZIndex(5000, 0.01, 1000)).toBe(0)
+    expect(labelZIndex(-1, 0.01, 1000)).toBe(labelZIndex(0.01, 0.01, 1000))
+    expect(labelZIndex(1, 1, 1)).toBe(0)
   })
 })
