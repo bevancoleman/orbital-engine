@@ -53,6 +53,14 @@ jobs:
       # or used anywhere in this job.
       id-token: write
       contents: read
+      # Read-only: list this repo's artifacts to find a "staged" marker (see
+      # the check step below).
+      actions: read
+    env:
+      # One artifact per staged version, uploaded right after a successful
+      # `npm stage publish`. Its existence is how later runs know the
+      # version is staged and waiting for approval.
+      MARKER_PREFIX: npm-staged-orbital-engine-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -65,21 +73,23 @@ jobs:
       # a bad npm release can't land in the one job holding id-token: write;
       # 12.1.0 is the version that staged 1.4.0 successfully.
       - run: npm install -g npm@12.1.0
-      # No dependency lifecycle scripts while the OIDC token is reachable;
-      # dist/ is built explicitly instead of via `prepare`.
-      - run: npm ci --ignore-scripts
-      - run: npm run build
-      - name: Stage publish if this version isn't on npm yet
+      - name: Decide whether this version needs staging
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           LOCAL_VERSION=$(node -p "require('./package.json').version")
-          # Ask for this exact version — plain `npm view orbital-engine
-          # version` reports `latest`, which differs from LOCAL_VERSION
-          # whenever a dist-tag or older release is involved. Only a 404
-          # means "not published"; any other registry error fails the job
-          # rather than being mistaken for "go ahead and stage".
+          echo "version=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
+
+          # 1. Already published? Ask for this exact version — plain `npm
+          # view orbital-engine version` reports `latest`, which differs
+          # from LOCAL_VERSION whenever a dist-tag or older release is
+          # involved. Only a 404 means "not published"; any other registry
+          # error fails the job rather than being mistaken for "go ahead".
           if VIEW_OUTPUT=$(npm view "orbital-engine@$LOCAL_VERSION" version 2>&1); then
             if [ "$VIEW_OUTPUT" = "$LOCAL_VERSION" ]; then
               echo "orbital-engine@$LOCAL_VERSION is already published — nothing to do."
+              echo "stage=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "Unexpected npm view output: $VIEW_OUTPUT" >&2
@@ -89,5 +99,68 @@ jobs:
             echo "$VIEW_OUTPUT" >&2
             exit 1
           fi
-          echo "Staging orbital-engine@$LOCAL_VERSION (needs maintainer 2FA approval — npmjs.com or 'npm stage list'/'npm stage approve <id>')."
-          npm stage publish
+
+          # 2. Already staged, waiting for approval? npm itself can't tell
+          # us here: `npm stage list` needs an authenticated user, and the
+          # OIDC token npm mints for a trusted publisher is only accepted
+          # by `npm publish` / `npm stage publish` ("Shortlived tokens
+          # cannot run npm stage subcommands", `npm help stage`, npm
+          # 12.1.0); unauthenticated it's a 401. So this repo keeps its own
+          # record: the marker artifact uploaded after each successful
+          # stage. Only markers from runs on this repo's own main branch
+          # count, so a fork PR can't upload one to suppress a release.
+          # Any API failure or unexpected output fails the job — a missed
+          # marker would mean staging the same version twice.
+          MARKER="$MARKER_PREFIX$LOCAL_VERSION"
+          if ! MARKERS=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/artifacts" \
+              -f name="$MARKER" -f per_page=100 \
+              --jq '[.artifacts[] | select(.expired == false
+                       and .workflow_run.head_branch == "main"
+                       and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length'); then
+            echo "Couldn't list artifacts to check for a staged marker — refusing to guess." >&2
+            exit 1
+          fi
+          case "$MARKERS" in
+            0)
+              echo "orbital-engine@$LOCAL_VERSION is neither published nor staged — staging it."
+              echo "stage=true" >> "$GITHUB_OUTPUT"
+              ;;
+            ''|*[!0-9]*)
+              echo "Unexpected marker count '$MARKERS' — refusing to guess." >&2
+              exit 1
+              ;;
+            *)
+              echo "orbital-engine@$LOCAL_VERSION is already staged ($MARKER) and waiting for maintainer approval — nothing to do."
+              echo "To re-stage it (e.g. after rejecting it), delete that artifact; see CONTRIBUTING.md."
+              echo "stage=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+      # No dependency lifecycle scripts while the OIDC token is reachable;
+      # dist/ is built explicitly instead of via `prepare`.
+      - if: steps.check.outputs.stage == 'true'
+        run: npm ci --ignore-scripts
+      - if: steps.check.outputs.stage == 'true'
+        run: npm run build
+      - name: Stage publish
+        if: steps.check.outputs.stage == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          echo "Staging orbital-engine@$VERSION (needs maintainer 2FA approval — npmjs.com or 'npm stage list'/'npm stage approve <id>')."
+          mkdir -p "$RUNNER_TEMP/staged"
+          set -o pipefail
+          npm stage publish 2>&1 | tee "$RUNNER_TEMP/staged/npm-stage-publish.log"
+      # If this upload fails after a successful stage, the next push to main
+      # tries to stage the same version again. Whether the registry refuses
+      # a second stage of one version is undocumented (unverified); if this
+      # step fails, check `npm stage list` before the next push to main.
+      - name: Record the staged version
+        if: steps.check.outputs.stage == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.MARKER_PREFIX }}${{ steps.check.outputs.version }}
+          path: ${{ runner.temp }}/staged/
+          if-no-files-found: error
+          # GitHub's default maximum. A version left unapproved longer than
+          # this loses its marker and gets staged again on the next push.
+          retention-days: 90
