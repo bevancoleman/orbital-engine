@@ -267,7 +267,14 @@ interface LabelElements {
 
 function createLabelElements(): LabelElements {
   const wrapper = document.createElement('div')
-  wrapper.style.cssText = 'position:absolute;top:0;left:0;transform-origin:0 0;'
+  // pointer-events: none — only the text itself (pointer-events: auto, see
+  // bodyLabelStyle) is a target. The wrapper keeps the text's UNSHIFTED
+  // layout box, centred on the body, and as a target it swallowed the
+  // pointer right over the body: R3F reads the pointer from the event's
+  // offsetX/offsetY, relative to whatever element was hit, so hover (and
+  // what a click selects) went to the wrong place. drei's <Html> wrapper
+  // happened to be zero-sized, which is why this never showed before.
+  wrapper.style.cssText = 'position:absolute;top:0;left:0;transform-origin:0 0;pointer-events:none;'
   const text = document.createElement('div')
   text.setAttribute('aria-hidden', 'true')
   text.style.transform = `translateY(${-LABEL_BASE_OFFSET_PX}px)`
