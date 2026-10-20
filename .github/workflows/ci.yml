@@ -72,8 +72,14 @@ jobs:
       - run: npm run build
       - run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
       - name: Unit tests against the minimum peers
+        # --legacy-peer-deps: swapping fiber 8 in over this repo's lockfile
+        # makes npm re-resolve fiber 8's optional react-native/expo peers,
+        # whose latest releases want React 19.3 — an ERESOLVE for packages
+        # a web library never installs. check-installed.sh below still
+        # verifies the exact versions, and the consumer project further
+        # down installs the tarball with strict peer resolution.
         run: |
-          npm install --no-save --ignore-scripts --no-audit --no-fund \
+          npm install --no-save --ignore-scripts --no-audit --no-fund --legacy-peer-deps \
             $MIN_RENDER_PEERS react@18.3.1 react-dom@18.3.1 $MIN_PEER_TYPES
           bash .github/min-peers/check-installed.sh \
             $MIN_RENDER_PEERS react@18.3.1 react-dom@18.3.1 $MIN_PEER_TYPES
