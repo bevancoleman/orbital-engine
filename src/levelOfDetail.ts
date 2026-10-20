@@ -111,3 +111,7 @@ export function orbitDetailFor(size: number): number {
   const level = pickLevel(ORBIT_LEVELS, size)
   return level.segments
 }
+
+/** Every segment count orbitDetailFor returns, highest first — the GPU
+ *  orbit lines (OrbitLines.tsx) keep one batch per tier. */
+export const ORBIT_SEGMENT_TIERS: readonly number[] = ORBIT_LEVELS.map((level) => level.segments)

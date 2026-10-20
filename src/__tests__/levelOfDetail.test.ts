@@ -1,4 +1,4 @@
-import { apparentSize, icosahedronDetailFor, orbitDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
+import { ORBIT_SEGMENT_TIERS, apparentSize, icosahedronDetailFor, orbitDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
 
 describe('apparentSize', () => {
   it('is radius divided by camera distance', () => {
@@ -130,5 +130,12 @@ describe('detail levels — degenerate sizes', () => {
     expect(icosahedronDetailFor(size)).toBe(0)
     expect(torusDetailFor(size)).toEqual({ radialSegments: 8, tubularSegments: 16 })
     expect(orbitDetailFor(size)).toBe(48)
+  })
+})
+
+describe('ORBIT_SEGMENT_TIERS', () => {
+  it('lists every segment count orbitDetailFor can return, highest first', () => {
+    const seen = new Set([0, 0.001, 0.009, 0.01, 0.04, 0.05, 0.2, 0.3, 5].map(orbitDetailFor))
+    expect([...ORBIT_SEGMENT_TIERS]).toEqual([...seen].sort((a, b) => b - a))
   })
 })

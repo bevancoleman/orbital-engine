@@ -179,6 +179,21 @@ function fromPerifocal(axes: OrbitAxes, xOrb: number, yOrb: number): Vec3Km {
  * classical-element propagation — not specific to any one body.
  */
 export function positionAtTime(orbit: OrbitalElements, date: Date): Vec3Km {
+  const out = positionAtTimeInto(orbit, date, new Float64Array(3))
+  return { x: out[0]!, y: out[1]!, z: out[2]! }
+}
+
+/**
+ * positionAtTime as km x/y/z written into `out[0..2]` (and returned)
+ * instead of a new object — the same arithmetic in the same order, so
+ * bit-for-bit the same result. For the per-frame path (framePositions.ts
+ * resolves every body every frame), where a fresh vector per body per
+ * frame was most of what a large system allocated. A typed array rather
+ * than a reused {x, y, z}: an object's double fields can end up boxed
+ * (one heap number per write) once anything else gives objects of the
+ * same shape a non-double field, and an array of doubles can't.
+ */
+export function positionAtTimeInto<T extends Float64Array | number[]>(orbit: OrbitalElements, date: Date, out: T): T {
   const { semiMajorAxisKm: a, eccentricity: e } = orbit
 
   const elapsedDays = (date.getTime() - parseEpochMs(orbit.epoch)) / MS_PER_DAY
@@ -191,8 +206,23 @@ export function positionAtTime(orbit: OrbitalElements, date: Date): Vec3Km {
   const r = a * (1 - e * Math.cos(E))
 
   // Position in the orbital (perifocal) plane, then rotated into the
-  // reference frame (see orbitAxes).
-  return fromPerifocal(orbitAxes(orbit), r * Math.cos(trueAnomaly), r * Math.sin(trueAnomaly))
+  // reference frame (see orbitAxes) — fromPerifocal's sums, in place.
+  const { p, q } = orbitAxes(orbit)
+  const xOrb = r * Math.cos(trueAnomaly)
+  const yOrb = r * Math.sin(trueAnomaly)
+  out[0] = p.x * xOrb + q.x * yOrb
+  out[1] = p.y * xOrb + q.y * yOrb
+  out[2] = p.z * xOrb + q.z * yOrb
+  return out
+}
+
+/** An orbit's unit perifocal axes in the reference frame — P towards
+ *  periapsis, Q 90° ahead along the motion (see orbitAxes) — so a point
+ *  at eccentric anomaly E is a·(cos E − e)·P + b·sin E·Q. Copies; the
+ *  GPU orbit lines (OrbitLines.tsx) pack them once per orbit. */
+export function orbitPerifocalAxes(orbit: OrbitalElements): { p: Vec3Km; q: Vec3Km } {
+  const { p, q } = orbitAxes(orbit)
+  return { p: { ...p }, q: { ...q } }
 }
 
 // How many raw points to walk the ellipse's own auxiliary circle at (see
@@ -237,15 +267,44 @@ const ARC_LENGTH_OVERSAMPLE = 4000
  * proportions exactly.
  */
 export function orbitPath(orbit: OrbitalElements, segments = 128): Vec3Km[] {
-  // A non-finite or < 1 segment count used to divide by zero (or loop
-  // forever on Infinity) and hand NaN points to the camera's bounds math.
-  const segmentCount = Number.isFinite(segments) ? Math.max(1, Math.floor(segments)) : 128
   const a = orbit.semiMajorAxisKm
   const table = unitArcLengthTable(orbit.eccentricity)
   const axes = orbitAxes(orbit)
-  const totalLength = table.cumLength[ARC_LENGTH_OVERSAMPLE]!
-
   const points: Vec3Km[] = []
+  walkEvenArcLength(table, segments, (k0, k1, frac) => {
+    const xOrb = a * (table.x[k0]! + (table.x[k1]! - table.x[k0]!) * frac)
+    const yOrb = a * (table.y[k0]! + (table.y[k1]! - table.y[k0]!) * frac)
+    points.push(fromPerifocal(axes, xOrb, yOrb))
+  })
+  return points
+}
+
+/**
+ * The eccentric anomaly at each of orbitPath's points — `segments + 1`
+ * values from 0 (periapsis) to 2π, evenly spaced by arc length around an
+ * ellipse of eccentricity `e`, by the same dense walk (see orbitPath's
+ * comment). The GPU orbit lines (OrbitLines.tsx) build their shared
+ * parameter table from these: the vertex shader evaluates the ellipse at
+ * each E exactly, so the line keeps orbitPath's even spacing without a
+ * per-orbit vertex buffer.
+ */
+export function arcLengthEccentricAnomalies(e: number, segments: number): Float64Array {
+  const table = unitArcLengthTable(e)
+  const anomalies: number[] = []
+  walkEvenArcLength(table, segments, (k0, _k1, frac) => {
+    anomalies.push((TWO_PI * (k0 + frac)) / ARC_LENGTH_OVERSAMPLE)
+  })
+  return Float64Array.from(anomalies)
+}
+
+/** Resamples `table` at `segments` even steps of cumulative arc length,
+ *  calling `emit` with the raw segment straddling each target and how far
+ *  along it the target falls. */
+function walkEvenArcLength(table: ArcLengthTable, segments: number, emit: (k0: number, k1: number, frac: number) => void): void {
+  // A non-finite or < 1 segment count used to divide by zero (or loop
+  // forever on Infinity) and hand NaN points to the camera's bounds math.
+  const segmentCount = Number.isFinite(segments) ? Math.max(1, Math.floor(segments)) : 128
+  const totalLength = table.cumLength[ARC_LENGTH_OVERSAMPLE]!
   let searchFrom = 0 // cumLength is monotonic increasing and so is the target — walk forward, never restart
   for (let s = 0; s <= segmentCount; s++) {
     const targetLength = (s / segmentCount) * totalLength
@@ -254,12 +313,8 @@ export function orbitPath(orbit: OrbitalElements, segments = 128): Vec3Km[] {
     const k1 = Math.min(searchFrom + 1, ARC_LENGTH_OVERSAMPLE)
     const segStart = table.cumLength[searchFrom]!
     const segEnd = table.cumLength[k1]!
-    const segFrac = segEnd > segStart ? (targetLength - segStart) / (segEnd - segStart) : 0
-    const xOrb = a * (table.x[searchFrom]! + (table.x[k1]! - table.x[searchFrom]!) * segFrac)
-    const yOrb = a * (table.y[searchFrom]! + (table.y[k1]! - table.y[searchFrom]!) * segFrac)
-    points.push(fromPerifocal(axes, xOrb, yOrb))
+    emit(searchFrom, k1, segEnd > segStart ? (targetLength - segStart) / (segEnd - segStart) : 0)
   }
-  return points
 }
 
 interface ArcLengthTable {

@@ -1,4 +1,13 @@
-import { positionAtTime, orbitPath, solveEccentricAnomaly, parseEpochMs, epochHasTimeZone } from '../kepler'
+import {
+  arcLengthEccentricAnomalies,
+  positionAtTime,
+  positionAtTimeInto,
+  orbitPath,
+  orbitPerifocalAxes,
+  solveEccentricAnomaly,
+  parseEpochMs,
+  epochHasTimeZone,
+} from '../kepler'
 import { SOLAR_SYSTEM } from '../solarSystemData'
 import type { OrbitalElements } from '../types'
 import { PLANETS_AT_J2000, PLANETS_AT_2010, MOON_AT_J2000, ASTEROIDS_AT_EPOCH } from '../fixtures/referenceVectors'
@@ -351,5 +360,81 @@ describe('orbitPath — degenerate segment counts and caching', () => {
     orbit.inclinationDeg += 30
     const after = positionAtTime(orbit, new Date('2001-01-01T00:00:00Z'))
     expect(Math.abs(after.z - before.z)).toBeGreaterThan(1e6)
+  })
+})
+
+describe('positionAtTimeInto — the allocation-free form framePositions uses', () => {
+  const dates = [new Date('2000-01-01T12:00:00Z'), new Date('2031-07-14T03:00:00Z'), new Date('1987-02-02T00:00:00Z')]
+
+  it.each(SOLAR_SYSTEM.bodies.filter((b) => b.orbit).map((b) => b.id))('matches positionAtTime bit for bit for %s', (id) => {
+    const orbit = bodyOrbit(id)
+    const out = new Float64Array(3)
+    for (const date of dates) {
+      expect(positionAtTimeInto(orbit, date, out)).toBe(out)
+      const { x, y, z } = positionAtTime(orbit, date)
+      expect([...out]).toEqual([x, y, z])
+    }
+  })
+})
+
+describe('orbitPerifocalAxes', () => {
+  it.each(['earth', 'moon', 'halley', 'triton'])('gives %s unit, orthogonal P (to periapsis) and Q axes, matching orbitPath', (id) => {
+    const orbit = bodyOrbit(id)
+    const { p, q } = orbitPerifocalAxes(orbit)
+    expect(Math.hypot(p.x, p.y, p.z)).toBeCloseTo(1, 12)
+    expect(Math.hypot(q.x, q.y, q.z)).toBeCloseTo(1, 12)
+    expect(p.x * q.x + p.y * q.y + p.z * q.z).toBeCloseTo(0, 12)
+    // orbitPath starts at periapsis, a(1 - e) along P; a quarter of the
+    // way round in eccentric anomaly is (-ae, b) in (P, Q).
+    const first = orbitPath(orbit, 8)[0]!
+    const r = orbit.semiMajorAxisKm * (1 - orbit.eccentricity)
+    expect(first.x / r).toBeCloseTo(p.x, 9)
+    expect(first.y / r).toBeCloseTo(p.y, 9)
+    expect(first.z / r).toBeCloseTo(p.z, 9)
+  })
+})
+
+describe('arcLengthEccentricAnomalies — orbitPath\'s even-arc-length parameterisation, for the GPU', () => {
+  function ellipseGaps(e: number, anomalies: Float64Array): number[] {
+    const b = Math.sqrt(1 - e * e)
+    const gaps: number[] = []
+    for (let i = 1; i < anomalies.length; i++) {
+      const [e0, e1] = [anomalies[i - 1]!, anomalies[i]!]
+      gaps.push(Math.hypot(Math.cos(e1) - Math.cos(e0), b * (Math.sin(e1) - Math.sin(e0))))
+    }
+    return gaps
+  }
+
+  it('runs from periapsis (0) round to 2π, strictly increasing', () => {
+    const anomalies = arcLengthEccentricAnomalies(0.6, 64)
+    expect(anomalies.length).toBe(65)
+    expect(anomalies[0]).toBe(0)
+    expect(anomalies[64]).toBeCloseTo(2 * Math.PI, 12)
+    for (let i = 1; i < anomalies.length; i++) expect(anomalies[i]!).toBeGreaterThan(anomalies[i - 1]!)
+  })
+
+  it('is plain even steps in anomaly for a circle', () => {
+    const anomalies = arcLengthEccentricAnomalies(0, 16)
+    anomalies.forEach((value, i) => expect(value).toBeCloseTo((2 * Math.PI * i) / 16, 9))
+  })
+
+  it.each([0.2, 0.6, 0.967])('spaces points evenly by arc length at e = %s, where even anomaly steps would not', (e) => {
+    const gaps = ellipseGaps(e, arcLengthEccentricAnomalies(e, 512))
+    expect(Math.max(...gaps) / Math.min(...gaps)).toBeLessThan(1.01)
+  })
+
+  it('matches orbitPath\'s own points', () => {
+    const orbit = bodyOrbit('halley')
+    const anomalies = arcLengthEccentricAnomalies(orbit.eccentricity, 128)
+    const path = orbitPath(orbit, 128)
+    const { p, q } = orbitPerifocalAxes(orbit)
+    const a = orbit.semiMajorAxisKm
+    const b = a * Math.sqrt(1 - orbit.eccentricity ** 2)
+    for (const i of [0, 17, 64, 100, 128]) {
+      const E = anomalies[i]!
+      const [x, y] = [a * (Math.cos(E) - orbit.eccentricity), b * Math.sin(E)]
+      const expected = path[i]!
+      expect(Math.hypot(p.x * x + q.x * y - expected.x, p.y * x + q.y * y - expected.y, p.z * x + q.z * y - expected.z) / a).toBeLessThan(1e-6)
+    }
   })
 })

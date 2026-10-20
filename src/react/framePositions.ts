@@ -18,8 +18,8 @@
  * whose results it reproduces exactly.
  */
 import { lookupBody, resolveHierarchical } from '../hierarchy'
-import { positionAtTime } from '../kepler'
-import { compressVec, compressVecByRatio, orbitCompressionRatio, type WorldVec } from '../render'
+import { positionAtTimeInto } from '../kepler'
+import { compressVec, orbitCompressionRatio, type WorldVec } from '../render'
 import { trueRadius } from '../scale'
 import type { CameraObstacle } from '../camera'
 import type { OrbitalElements, StarSystemData } from '../types'
@@ -111,6 +111,11 @@ function planResolveOrder(system: StarSystemData, positions: Map<string, WorldVe
   return steps
 }
 
+// positionAtTimeInto's output (km x, y, z), reused by every step —
+// runStep allocates nothing, so resolving a 10,000-body system every frame
+// doesn't feed the garbage collector ~1MB a frame.
+const scratchKm = new Float64Array(3)
+
 function runStep(step: ResolveStep, date: Date): void {
   const { out, parent } = step
   if (step.atOrigin) {
@@ -120,9 +125,22 @@ function runStep(step: ResolveStep, date: Date): void {
     return
   }
   // The same arithmetic, in the same order, as render.ts's
-  // resolveWorldPosition — parent + compressed offset — so the result is
-  // bit-for-bit identical, not just close.
-  const [rx, ry, rz] = step.orbit ? compressVecByRatio(positionAtTime(step.orbit, date), step.ratio) : step.offset
+  // resolveWorldPosition — parent + compressed offset (compressVecByRatio's
+  // orbital → Y-up swap, inline) — so the result is bit-for-bit identical,
+  // not just close.
+  let rx: number
+  let ry: number
+  let rz: number
+  if (step.orbit) {
+    const km = positionAtTimeInto(step.orbit, date, scratchKm)
+    rx = km[0]! * step.ratio
+    ry = km[2]! * step.ratio
+    rz = km[1]! * step.ratio
+  } else {
+    rx = step.offset[0]
+    ry = step.offset[1]
+    rz = step.offset[2]
+  }
   const px = parent ? parent[0] : 0
   const py = parent ? parent[1] : 0
   const pz = parent ? parent[2] : 0
