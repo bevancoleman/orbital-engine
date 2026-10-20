@@ -21,6 +21,7 @@ import { validateSystemData } from '../validateSystemData'
 import type { CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
 import { RenderPass } from './RenderPass'
+import { createRenderFrame } from './floatingOrigin'
 import { StarLight } from './StarLight'
 import { CameraRig } from './CameraRig'
 import type { CameraActivity } from './cameraFlightLifecycle'
@@ -207,6 +208,9 @@ export function OrbitalSystemScene({
   const cameraPose = useRef<CameraPose | null>(null)
   // The scene's world-space content, rebased for drawing — see RenderPass.
   const worldRoot = useRef<THREE.Group>(null)
+  // This frame's world → render transform, computed by RenderPass and
+  // shared with the batches that write their own camera-relative buffers.
+  const [renderFrame] = useState(createRenderFrame)
   const nav = useSelectionNavigation({
     system,
     index,
@@ -415,6 +419,7 @@ export function OrbitalSystemScene({
               onSelect={nav.selectBody}
               interaction={interaction}
               routePreview={routePreview ?? null}
+              renderFrame={renderFrame}
             />
           </group>
           <CameraRig
@@ -433,7 +438,7 @@ export function OrbitalSystemScene({
             cameraPose={cameraPose}
           />
           {devMode && <PerfStats onUpdate={setRendererStats} />}
-          <RenderPass root={worldRoot} cameraPose={cameraPose} />
+          <RenderPass root={worldRoot} cameraPose={cameraPose} renderFrame={renderFrame} />
         </Canvas>
 
         {devMode && (

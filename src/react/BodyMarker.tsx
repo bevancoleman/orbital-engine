@@ -7,20 +7,13 @@ import type { CelestialBody } from '../types'
 import { BodyShape } from './BodyShapes'
 import { BodyRings } from './BodyRings'
 import { BODY_TYPE_COLOR_FALLBACK } from './bodyTypeStyles'
-import { stepToward } from './animation'
+import { VISIBILITY_FADE_SECONDS, stepToward } from './animation'
 import { LABEL_BASE_OFFSET_PX, bodyLabelStyle, labelOffsetPx, labelZIndex, projectedRadiusPx } from './labelLayout'
 import { ndcToScreenPx } from './screenProjection'
 import { BODY_FLAG_HOVERED, BODY_FLAG_LABEL, BODY_FLAG_VISIBLE, type SceneInteractionStore } from './sceneInteractionStore'
 import { useBodyInteractionFlags } from './useSceneInteraction'
 import { useLatestRef } from './useStableCallback'
 import { FOLLOW_PRIORITY } from './useFollowPosition'
-
-// How long a body takes to grow in / shrink out when it crosses in or out
-// of the visible set (see ProximitySelector's screen-space thinning and
-// computeVisibleBodyIds' rank-and-cap) — replaces what used to be an
-// instant pop the moment a hard distance cliff was crossed, which could
-// make a body vanish entirely from what looked like a trivial zoom change.
-const VISIBILITY_FADE_SECONDS = 0.3
 
 export function BodyMarker({
   body,
@@ -30,6 +23,7 @@ export function BodyMarker({
   selected,
   interaction,
   onSelect,
+  drawShape = true,
 }: {
   body: CelestialBody
   /** Live — updated in place every frame (see framePositions.ts) and
@@ -75,6 +69,10 @@ export function BodyMarker({
    *    position, not its label. */
   interaction: SceneInteractionStore
   onSelect: (body: CelestialBody) => void
+  /** False for a label-only marker: the body's shape is drawn by the
+   *  instanced small-body path (InstancedBodies) and only its label —
+   *  which needs a group following the body, like any other — is here. */
+  drawShape?: boolean
 }) {
   const flags = useBodyInteractionFlags(interaction, body.id)
   const hovered = (flags & BODY_FLAG_HOVERED) !== 0
@@ -120,13 +118,15 @@ export function BodyMarker({
 
   return (
     <group ref={groupRef} position={position} scale={Math.max(scaleRef.current, 0.0001)}>
-      <BodyShape body={body} radius={radius} color={color} detailSize={detailSize} />
+      {drawShape && <BodyShape body={body} radius={radius} color={color} detailSize={detailSize} />}
       {/* Rings are built at the body's UNIT radius and scaled here along
           with it — see BodyShape for why geometry never takes the
           (zoom-dependent) rendered radius directly. */}
-      <group scale={radius}>
-        <BodyRings body={body} radius={1} color={color} />
-      </group>
+      {drawShape && (
+        <group scale={radius}>
+          <BodyRings body={body} radius={1} color={color} />
+        </group>
+      )}
       {(showLabel || selected || hovered) && (
         <BodyLabel
           body={body}

@@ -4,6 +4,9 @@
  *
  *   npm run bench:scene                 → 2,000 and 10,000 bodies
  *   npm run bench:scene -- 5000         → just 5,000
+ *   npm run bench:scene -- 2000 --alloc-sites
+ *                                       → also where each allocation
+ *                                         figure's bytes come from
  *
  * Mounts the real SceneContent (bodies, orbit lines, ProximitySelector,
  * labels) under the real RenderPass in an R3F root driven by `advance`,
@@ -33,6 +36,7 @@
  * CJS build alongside it.
  */
 import { JSDOM } from 'jsdom'
+import { Session } from 'node:inspector/promises'
 import { PerformanceObserver } from 'node:perf_hooks'
 import { setImmediate } from 'node:timers'
 import type { ReactElement } from 'react'
@@ -41,7 +45,7 @@ import type { CameraPose } from '../src/camera'
 import type { StarSystemData } from '../src/types'
 
 const VIEWPORT = { width: 1600, height: 900 }
-const WARMUP_FRAMES = 30
+const WARMUP_FRAMES = 120
 const MEASURED_FRAMES = 120
 const ZOOM_STEPS = 20
 const SIM_MS_PER_FRAME = 6 * 3_600_000
@@ -56,6 +60,7 @@ const { createFramePositions } = await import('../src/react/framePositions')
 const { createSceneInteractionStore } = await import('../src/react/sceneInteractionStore')
 const { SceneContent } = await import('../src/react/SceneContent')
 const { RenderPass } = await import('../src/react/RenderPass')
+const { createRenderFrame } = await import('../src/react/floatingOrigin')
 const { VERTICAL_FOV_DEG } = await import('../src/camera')
 const { resolveAllWorldPositions } = await import('../src/render')
 const { computeVisibleBodyIds } = await import('../src/visibility')
@@ -179,14 +184,49 @@ function collect(): void {
   ;(globalThis as { gc?: () => void }).gc?.()
 }
 
-/** Bytes allocated per call of `run`, over `iterations` calls. */
-function allocationPer(iterations: number, run: (i: number) => void): string {
+const SHOW_ALLOCATION_SITES = process.argv.includes('--alloc-sites')
+
+interface SamplingNode {
+  callFrame: { functionName: string; url: string; lineNumber: number }
+  selfSize: number
+  children: SamplingNode[]
+}
+
+/** Bytes allocated per call of `run`, over `iterations` calls — with
+ *  --alloc-sites, also the top allocating functions (V8's sampling heap
+ *  profiler, counting objects already collected too). */
+async function allocationPer(label: string, iterations: number, run: (i: number) => void): Promise<string> {
+  const session = SHOW_ALLOCATION_SITES ? new Session() : null
+  if (session) {
+    session.connect()
+    await session.post('HeapProfiler.startSampling', { samplingInterval: 512, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true })
+  }
   collect()
   const gcBefore = gcCount
   const before = process.memoryUsage().heapUsed
   for (let i = 0; i < iterations; i++) run(i)
   const bytes = (process.memoryUsage().heapUsed - before) / iterations
+  if (session) {
+    const { profile } = (await session.post('HeapProfiler.stopSampling')) as { profile: { head: SamplingNode } }
+    session.disconnect()
+    printAllocationSites(label, profile.head, iterations)
+  }
   return `${Math.max(0, Math.round(bytes)).toLocaleString('en-US')} B${gcCount > gcBefore ? '*' : ''}`
+}
+
+function printAllocationSites(label: string, head: SamplingNode, iterations: number): void {
+  const bySite = new Map<string, number>()
+  const walk = (node: SamplingNode): void => {
+    const { functionName, url, lineNumber } = node.callFrame
+    const site = `${functionName || '(anonymous)'} ${url.split('/').pop()}:${lineNumber + 1}`
+    bySite.set(site, (bySite.get(site) ?? 0) + node.selfSize)
+    for (const child of node.children) walk(child)
+  }
+  walk(head)
+  process.stdout.write(`    allocation sites, ${label} (B/frame):\n`)
+  for (const [site, size] of [...bySite].sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+    process.stdout.write(`      ${Math.round(size / iterations).toLocaleString('en-US').padStart(9)}  ${site}\n`)
+  }
 }
 
 async function runScenario(system: StarSystemData, scenario: Scenario): Promise<Record<string, string | number>> {
@@ -214,6 +254,7 @@ async function runScenario(system: StarSystemData, scenario: Scenario): Promise<
   const worldRoot: { current: THREE.Group | null } = { current: null }
   const cameraPose: { current: CameraPose | null } = { current: scenario.pose }
   const onSelect = (): void => undefined
+  const renderFrame = createRenderFrame()
   const scene = (cameraDistance: number): ReactElement => (
     <>
       <group ref={worldRoot}>
@@ -225,9 +266,10 @@ async function runScenario(system: StarSystemData, scenario: Scenario): Promise<
           onSelect={onSelect}
           interaction={interaction}
           routePreview={null}
+          renderFrame={renderFrame}
         />
       </group>
-      <RenderPass root={worldRoot} cameraPose={cameraPose} />
+      <RenderPass root={worldRoot} cameraPose={cameraPose} renderFrame={renderFrame} />
     </>
   )
   root.render(scene(distance))
@@ -259,14 +301,14 @@ async function runScenario(system: StarSystemData, scenario: Scenario): Promise<
     positionTimes.push(t1 - t0)
     frameTimes.push(t2 - t1)
   }
-  const positionAlloc = allocationPer(MEASURED_FRAMES, () => {
+  const positionAlloc = await allocationPer('positions', MEASURED_FRAMES, () => {
     simTime += SIM_MS_PER_FRAME
     frame.update(simTime)
   })
   // Without the React flush: what the per-frame callbacks themselves
   // allocate (a frame whose store writes re-render React allocates for
   // that render too — measured by "frame ms", not here).
-  const frameAlloc = allocationPer(MEASURED_FRAMES, () => {
+  const frameAlloc = await allocationPer('frame', MEASURED_FRAMES, () => {
     now += 1000 / 60
     fiber.advance(now)
   })
@@ -352,7 +394,10 @@ function fmt(s: Stats): string {
   return `${s.mean.toFixed(2)} (p95 ${s.p95.toFixed(2)})`
 }
 
-const counts = process.argv.slice(2).map(Number).filter((n) => n > 0)
+const counts = process.argv
+  .slice(2)
+  .map(Number)
+  .filter((n) => n > 0)
 for (const bodyCount of counts.length > 0 ? counts : [2_000, 10_000]) {
   const system = createSyntheticSystem(bodyCount)
   const orbiting = system.bodies.filter((b) => b.orbit).length

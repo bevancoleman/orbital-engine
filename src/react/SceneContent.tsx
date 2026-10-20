@@ -7,14 +7,15 @@ import { computeVisibleBodyIds, isAlwaysVisible } from '../visibility'
 import { computeOrbitalDepth } from '../labelDeclutter'
 import { beltShape } from '../belts'
 import type { CelestialBody, StarSystemData } from '../types'
-import { OrbitPathLine, ReferenceOrbitRing, RoutePreviewLine } from './OrbitLines'
+import { OrbitLineBatch, RoutePreviewLine } from './OrbitLines'
 import { BeltGlowRing, BeltPoints, BeltSites } from './BeltRendering'
 import { BodyMarker } from './BodyMarker'
+import { InstancedBodies } from './InstancedBodies'
 import { ProximitySelector } from './ProximitySelector'
-import { NON_ORBITING_MARKER_TYPES } from './bodyTypeStyles'
 import { propsEqualWithVectors } from './memoEquality'
-import { BODY_FLAG_VISIBLE, type SceneInteractionStore } from './sceneInteractionStore'
-import { useBodyInteractionFlags } from './useSceneInteraction'
+import type { SceneInteractionStore } from './sceneInteractionStore'
+import { instanceShapeFor } from './smallBodyInstancing'
+import type { RenderFrame } from './floatingOrigin'
 import type { FramePositions } from './framePositions'
 
 const ORIGIN: WorldVec = [0, 0, 0]
@@ -41,6 +42,10 @@ interface SceneContentProps {
    *  alternate (if any) drawn dimmer/dashed alongside it to read as "also
    *  real, just not the one currently picked." Null when nothing's plotted. */
   routePreview: { primaryIds: string[]; alternateIds: string[] | null } | null
+  /** This frame's world → render transform (RenderPass computes it) — the
+   *  batched orbit lines and instanced small bodies write camera-relative
+   *  buffers from it; see floatingOrigin.ts. */
+  renderFrame: RenderFrame
 }
 
 /**
@@ -57,6 +62,7 @@ export const SceneContent = memo(function SceneContent({
   onSelect,
   interaction,
   routePreview,
+  renderFrame,
 }: SceneContentProps) {
   const viewportHeight = useThree((s) => s.size.height)
   const positions = frame.positions
@@ -98,6 +104,17 @@ export const SceneContent = memo(function SceneContent({
     [system, eligibleIds, positions, depthById, cameraDistance, viewportHeight]
   )
 
+  // Most bodies of a large system draw through the instanced small-body
+  // path (see smallBodyInstancing.ts); only the ones it can't reproduce —
+  // models, textures, rings, atmospheres, glow sprites — always get their
+  // own BodyMarker here.
+  const { fullPathBodies, instanceableBodies } = useMemo(() => {
+    const full: CelestialBody[] = []
+    const instanceable: CelestialBody[] = []
+    for (const body of system.bodies) (instanceShapeFor(body) ? instanceable : full).push(body)
+    return { fullPathBodies: full, instanceableBodies: instanceable }
+  }, [system])
+
   return (
     <>
       <ProximitySelector
@@ -115,7 +132,25 @@ export const SceneContent = memo(function SceneContent({
       {routePreview?.primaryIds && (
         <RoutePreviewLine waypointIds={routePreview.primaryIds} frame={frame} color="#22d3ee" />
       )}
-      {system.bodies.map((body) => {
+      {/* Every orbit and reference ring, a few draw calls in all. */}
+      <OrbitLineBatch
+        system={system}
+        frame={frame}
+        cameraDistance={cameraDistance}
+        selectedId={selectedId}
+        interaction={interaction}
+        renderFrame={renderFrame}
+      />
+      <InstancedBodies
+        bodies={instanceableBodies}
+        frame={frame}
+        cameraDistance={cameraDistance}
+        selectedId={selectedId}
+        interaction={interaction}
+        renderFrame={renderFrame}
+        onSelect={onSelect}
+      />
+      {fullPathBodies.map((body) => {
         const pos = positions.get(body.id)
         if (!pos) return null
         return (
@@ -123,7 +158,6 @@ export const SceneContent = memo(function SceneContent({
             key={body.id}
             body={body}
             position={pos}
-            parentWorldPos={(body.parentId && positions.get(body.parentId)) || ORIGIN}
             radius={renderRadius(trueRadius(body.radiusKm), cameraDistance, viewportHeight)}
             cameraDistance={cameraDistance}
             selected={selectedId === body.id}
@@ -152,56 +186,13 @@ export const SceneContent = memo(function SceneContent({
 })
 
 /**
- * One body's orbit line, reference ring and marker. Memoized with a
- * vector-aware comparator (see memoEquality.ts): SceneContent re-renders
- * on every zoom step and selection change, but most bodies' props are
- * unchanged by most of those, positions are live arrays applied per frame
- * rather than props that change (see framePositions.ts), and
- * hover/visibility changes no longer reach this level at all — they're
- * read per body from the interaction store.
+ * A full-path body's marker. Memoized with a vector-aware comparator (see
+ * memoEquality.ts): SceneContent re-renders on every zoom step and
+ * selection change, but most bodies' props are unchanged by most of those,
+ * positions are live arrays applied per frame rather than props that
+ * change (see framePositions.ts), and hover/visibility changes no longer
+ * reach this level at all — they're read per body from the interaction
+ * store. Orbit lines and reference rings are no longer per body (see
+ * OrbitLineBatch).
  */
-const BodyEntry = memo(function BodyEntry({
-  body,
-  position,
-  parentWorldPos,
-  radius,
-  cameraDistance,
-  selected,
-  interaction,
-  onSelect,
-}: {
-  body: CelestialBody
-  position: WorldVec
-  parentWorldPos: WorldVec
-  radius: number
-  cameraDistance: number
-  selected: boolean
-  interaction: SceneInteractionStore
-  onSelect: (body: CelestialBody) => void
-}) {
-  const bodyVisible = (useBodyInteractionFlags(interaction, body.id) & BODY_FLAG_VISIBLE) !== 0
-  // A ring for every station/jump point/nav marker would be unreadable
-  // clutter (a planet can have dozens) — reserved for genuine celestial
-  // bodies, the same scope the old 2D map's own orbit rings used.
-  const showsOrbitReference = !NON_ORBITING_MARKER_TYPES.has(body.type) && body.parentId
-  const orbitColor = body.color ?? '#64748b'
-  return (
-    <group>
-      {body.orbit && (
-        <OrbitPathLine body={body} color={orbitColor} parentWorldPos={parentWorldPos} cameraDistance={cameraDistance} />
-      )}
-      {!body.orbit && bodyVisible && showsOrbitReference && (
-        <ReferenceOrbitRing position={position} parentWorldPos={parentWorldPos} color={orbitColor} cameraDistance={cameraDistance} />
-      )}
-      <BodyMarker
-        body={body}
-        position={position}
-        radius={radius}
-        cameraDistance={cameraDistance}
-        selected={selected}
-        interaction={interaction}
-        onSelect={onSelect}
-      />
-    </group>
-  )
-}, propsEqualWithVectors)
+const BodyEntry = memo(BodyMarker, propsEqualWithVectors)

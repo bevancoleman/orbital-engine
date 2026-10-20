@@ -2,7 +2,7 @@ import { useMemo, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { CameraPose } from '../camera'
-import { renderTransformFor } from './floatingOrigin'
+import { RENDER_FRAME_PRIORITY, updateRenderFrame, type RenderFrame } from './floatingOrigin'
 
 /**
  * Takes over drawing the frame (a positive useFrame priority does that in
@@ -15,21 +15,33 @@ import { renderTransformFor } from './floatingOrigin'
  * ever sees world coordinates.
  *
  * `cameraPose` (CameraRig's live camera position and target) gives the
- * viewing distance the scene is normalized by.
+ * viewing distance the scene is normalized by. The transform is computed
+ * once, into `renderFrame`, a step before the draw
+ * (RENDER_FRAME_PRIORITY) — the batched small bodies and orbit lines,
+ * which sit outside `root` and write their own camera-relative buffers,
+ * read it in between (CAMERA_RELATIVE_PRIORITY), so they're drawn with
+ * exactly the transform everything else is.
  */
-export function RenderPass({ root, cameraPose }: { root: RefObject<THREE.Group | null>; cameraPose: RefObject<CameraPose | null> }) {
+export function RenderPass({
+  root,
+  cameraPose,
+  renderFrame,
+}: {
+  root: RefObject<THREE.Group | null>
+  cameraPose: RefObject<CameraPose | null>
+  renderFrame: RenderFrame
+}) {
   const saved = useMemo(() => ({ position: new THREE.Vector3(), near: 0, far: 0 }), [])
+  useFrame(({ camera }) => {
+    updateRenderFrame(renderFrame, camera.position, cameraPose.current)
+  }, RENDER_FRAME_PRIORITY)
   useFrame(({ gl, scene, camera }) => {
     const group = root.current
     if (!group) {
       gl.render(scene, camera)
       return
     }
-    const pose = cameraPose.current
-    const viewingDistance = pose
-      ? Math.hypot(pose.target[0] - camera.position.x, pose.target[1] - camera.position.y, pose.target[2] - camera.position.z)
-      : 1
-    const { origin, scale } = renderTransformFor([camera.position.x, camera.position.y, camera.position.z], viewingDistance)
+    const { origin, scale } = renderFrame
     const perspective = camera instanceof THREE.PerspectiveCamera ? camera : null
 
     saved.position.copy(camera.position)

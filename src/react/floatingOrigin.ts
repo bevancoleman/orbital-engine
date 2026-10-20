@@ -23,9 +23,26 @@
  * (its damping, a flight in progress and tracking's absolute anchor are
  * untouched), and nothing else needs to know.
  *
+ * Batched geometry (the instanced small bodies and the GPU orbit lines)
+ * is the one exception to "only the root group is rebased": one draw call
+ * holds thousands of objects, so there's no per-object float64 transform
+ * for three to compose. Those batches sit outside the root group, and
+ * write each object's camera-relative offset themselves every frame —
+ * subtracted in float64 here (writeCameraRelative) from the same
+ * transform RenderPass is about to draw with (the shared RenderFrame), so
+ * no large absolute number ever reaches the GPU for them either.
+ *
  * Pure maths here; RenderPass (in OrbitalSystemScene) applies it.
  */
+import type { CameraPose } from '../camera'
 import type { WorldVec } from '../render'
+
+/** useFrame priorities around the draw (all positive — after every
+ *  world-space callback, camera-controls included): RenderPass computes
+ *  this frame's RenderFrame, the batches write their camera-relative
+ *  buffers from it, then RenderPass draws (at 1). */
+export const RENDER_FRAME_PRIORITY = 0.5
+export const CAMERA_RELATIVE_PRIORITY = 0.75
 
 /** Near clip plane as a fraction of the viewing distance (camera to its
  *  target). With a logarithmic depth buffer the near plane only clips —
@@ -65,4 +82,39 @@ export function renderTransformFor(cameraPosition: WorldVec, viewingDistance: nu
 export function toRenderSpace(point: WorldVec, transform: RenderTransform): WorldVec {
   const { origin, scale } = transform
   return [(point[0] - origin[0]) * scale, (point[1] - origin[1]) * scale, (point[2] - origin[2]) * scale]
+}
+
+/** This frame's world → render transform, shared by RenderPass (which
+ *  draws with it) and the batches that write camera-relative buffers from
+ *  it (see this module's comment). Updated in place every frame. */
+export type RenderFrame = RenderTransform
+
+export function createRenderFrame(): RenderFrame {
+  return { origin: [0, 0, 0], scale: 1 }
+}
+
+/** The transform for this frame: the camera's position, normalized by its
+ *  distance to the target (CameraRig's live pose; a unit distance before
+ *  there is one). Writes into `frame` — no allocation. */
+export function updateRenderFrame(frame: RenderFrame, cameraPosition: { x: number; y: number; z: number }, pose: CameraPose | null): void {
+  const { x, y, z } = cameraPosition
+  const viewingDistance = pose ? Math.hypot(pose.target[0] - x, pose.target[1] - y, pose.target[2] - z) : 1
+  const distance = Number.isFinite(viewingDistance) && viewingDistance > 0 ? viewingDistance : 1
+  frame.origin[0] = x
+  frame.origin[1] = y
+  frame.origin[2] = z
+  frame.scale = 1 / Math.max(distance, MIN_NORMALIZING_DISTANCE)
+}
+
+/**
+ * Writes `point` (plus an optional small `local` offset from it) in render
+ * space into `out[at..at+2]`: the large world-space subtraction happens
+ * here in float64, so only the small, camera-relative result is rounded
+ * to float32 — see this module's comment.
+ */
+export function writeCameraRelative(out: Float32Array, at: number, point: WorldVec, transform: RenderTransform, local?: WorldVec): void {
+  const { origin, scale } = transform
+  out[at] = (point[0] - origin[0] + (local ? local[0] : 0)) * scale
+  out[at + 1] = (point[1] - origin[1] + (local ? local[1] : 0)) * scale
+  out[at + 2] = (point[2] - origin[2] + (local ? local[2] : 0)) * scale
 }

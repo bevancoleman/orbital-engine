@@ -1,129 +1,365 @@
-import { useMemo, useRef, type ComponentProps } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useLayoutEffect, useMemo, useRef, type ComponentProps } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
 import { Line } from '@react-three/drei'
-import type * as THREE from 'three'
-import { orbitPath } from '../kepler'
-import { compressVecByRatio, orbitCompressionRatio, type WorldVec } from '../render'
-import { compressDistance } from '../scale'
-import { apparentSize, orbitDetailFor } from '../levelOfDetail'
+import * as THREE from 'three'
+import { ORBIT_SEGMENT_TIERS } from '../levelOfDetail'
+import type { WorldVec } from '../render'
 import { routeSegments } from '../routeSegments'
-import type { CelestialBody } from '../types'
-import { polylineLength, referenceRingPoints, routeDashPattern, toLocalPoints } from './lineGeometry'
+import type { StarSystemData } from '../types'
+import { CAMERA_RELATIVE_PRIORITY, type RenderFrame } from './floatingOrigin'
+import { polylineLength, routeDashPattern, toLocalPoints } from './lineGeometry'
+import {
+  ORBIT_TABLE_COLUMNS,
+  ORBIT_TABLE_ROWS,
+  ORBIT_TABLE_SPAN,
+  assignOrbitTiers,
+  buildOrbitLineRecords,
+  buildOrbitParameterTable,
+  orbitLineStyle,
+  writeOrbitCentres,
+  writeOrbitInstance,
+  type OrbitInstanceArrays,
+  type OrbitLineRecord,
+} from './orbitBatch'
 import type { FramePositions } from './framePositions'
-import { FOLLOW_PRIORITY, useFollowPosition } from './useFollowPosition'
-
-export function OrbitPathLine({
-  body,
-  color,
-  parentWorldPos,
-  cameraDistance,
-}: {
-  body: CelestialBody
-  color: string
-  /** Live (see framePositions.ts) — followed every frame. */
-  parentWorldPos: WorldVec
-  /** Drives how many points the path samples — see orbitDetailFor. */
-  cameraDistance: number
-}) {
-  const groupRef = useRef<THREE.Group>(null)
-  useFollowPosition(groupRef, parentWorldPos)
-  const orbit = body.orbit
-  // The ring's own world-space scale (its semi-major axis, compressed) is
-  // what apparentSize needs here — this is a large loop the camera views
-  // from outside, not a solid body the camera zooms into, so "large
-  // apparent size" means the ring's curve spans a lot of the view, exactly
-  // when a fixed segment count starts showing as visible straight facets
-  // rather than a smooth curve (see orbitDetailFor).
-  //
-  // Computed OUTSIDE the memo below, and the memo keyed on the resulting
-  // tier rather than on cameraDistance itself: cameraDistance changes on
-  // every zoom frame, and keying on it rebuilt every orbit line in the
-  // system on each of those frames even though the segment count only
-  // changes at a handful of tier boundaries.
-  const segments = orbit ? orbitDetailFor(apparentSize(compressDistance(orbit.semiMajorAxisKm), cameraDistance)) : 0
-  const points = useMemo(() => {
-    if (!orbit) return null
-    // Every sampled point compresses by the SAME ratio (the orbit's own,
-    // fixed by its semi-major axis — see orbitCompressionRatio), not each
-    // one independently by its own instantaneous radius (compressVec) —
-    // periapsis and apoapsis sit at different true radii for any real
-    // eccentricity, and compressDistance is a log curve, not linear, so
-    // per-point ratios visibly warp the ellipse into the wrong shape. This
-    // is also exactly the ratio resolveWorldPosition now uses for this
-    // same body's own live position, so the moving marker stays on this
-    // line instead of drifting off it.
-    //
-    // Points stay PARENT-RELATIVE here — the parent's own (potentially
-    // large) offset is applied via the wrapping <group> below, not baked
-    // into each vertex. A real, observed bug this fixes: baking the
-    // absolute position into the Float32Array vertex buffer this <Line>
-    // ultimately builds wastes almost all of float32's ~7 significant
-    // digits on the shared large offset (e.g. Earth's own ~31-unit
-    // distance from the star), leaving almost none for the orbit's actual
-    // shape — for a tight, low-altitude orbit like the ISS's, this showed
-    // up as visible jittering/faceting that changed frame to frame as the
-    // camera moved. THREE.Object3D positions (regular JS numbers, i.e.
-    // double precision, composed via CPU-side Matrix4 math) don't have
-    // this problem — only converting to float32 for the final GPU upload,
-    // by which point the camera-relative subtraction has already happened
-    // in full precision — so moving the large offset onto the group
-    // instead of the vertices fixes it without needing any custom
-    // floating-origin machinery.
-    const ratio = orbitCompressionRatio(orbit)
-    return orbitPath(orbit, segments).map((p) => compressVecByRatio(p, ratio))
-  }, [orbit, segments])
-  if (!points) return null
-  return (
-    <group ref={groupRef}>
-      <Line points={points} color={color} opacity={0.25} transparent lineWidth={1} />
-    </group>
-  )
-}
+import type { SceneInteractionSnapshot, SceneInteractionStore } from './sceneInteractionStore'
+import { FOLLOW_PRIORITY } from './useFollowPosition'
 
 /**
- * A body with only a `fixedPosition` (see CelestialBody — a single known
- * snapshot has no orbital elements to draw a true path from) still has a
- * real, known distance from its parent. Drawing a flat circle at that radius,
- * passing exactly through the body's own current position, gives the same
- * "this is roughly where it orbits" reference the real Keplerian orbit path
- * gives for the Solar System — honest about being a simplification (flat,
- * not tilted to whatever the body's true — currently unknown — inclination
- * is) rather than omitting the reference entirely.
+ * Every Keplerian orbit and every fixed body's flat reference ring in the
+ * system, drawn on the GPU in one instanced draw call per LOD tier (see
+ * orbitBatch.ts for the maths) — instead of one drei <Line> per body,
+ * which was one draw call, one vertex buffer and one per-frame follow
+ * callback per orbit: thousands for a game-data system.
+ *
+ * Each tier is a shared strip of `segments` quads; every orbit drawn at
+ * that tier is one instance of it, carrying its ellipse (axes,
+ * eccentricity), colour and width. The vertex shader evaluates both ends
+ * of its segment on the ellipse (through the shared arc-length parameter
+ * table, so points stay evenly spaced like orbitPath's), projects them,
+ * and pushes the quad out to a screen-space width — the LineSegments2
+ * approach drei's <Line> used, near-plane trim included, so the lines
+ * look the same: 1px, the body's colour at 0.25 opacity (0.18 for a
+ * reference ring), with the selected body's orbit picked out brighter.
+ *
+ * Precision: the old per-orbit lines kept their vertices parent-relative
+ * and put the parent's (potentially large) offset on a wrapping group, so
+ * three composed it in float64 — baking it into float32 vertices used to
+ * make a tight orbit like the ISS's visibly jitter far from the origin.
+ * There's no per-orbit group here, so the same rule is kept by hand: the
+ * one large number, the ellipse's centre, is written camera-relative and
+ * normalized every frame on the CPU in float64 (writeOrbitCentres, at
+ * CAMERA_RELATIVE_PRIORITY, from the same RenderFrame RenderPass draws
+ * with), and only small numbers reach the GPU. That's also why the
+ * meshes sit outside the rebased root group: their buffers are already
+ * in render space.
+ *
+ * Tiering follows orbitDetailFor as before; re-packing only happens when
+ * a zoom step moves an orbit across a tier (or the selection changes),
+ * and per frame only the centres (and, when the visible set changes, the
+ * reference rings' opacity — a ring only draws while its body does) are
+ * uploaded. Allocation-free per frame.
  */
-export function ReferenceOrbitRing({
-  position,
-  parentWorldPos,
-  color,
+export function OrbitLineBatch({
+  system,
+  frame,
   cameraDistance,
+  selectedId,
+  interaction,
+  renderFrame,
 }: {
-  /** Both live (see framePositions.ts). A fixed body's offset from its
-   *  parent never changes, so the ring's shape is read from them at render
-   *  time; only its position follows the parent every frame. */
-  position: WorldVec
-  parentWorldPos: WorldVec
-  color: string
-  /** Drives how many points the ring samples — see orbitDetailFor. */
+  system: StarSystemData
+  frame: FramePositions
+  /** Drives each orbit's LOD tier — see orbitDetailFor. */
   cameraDistance: number
+  selectedId: string | null
+  /** Which bodies are visible right now — a reference ring only draws
+   *  while its body does, as before. */
+  interaction: SceneInteractionStore
+  renderFrame: RenderFrame
 }) {
-  const groupRef = useRef<THREE.Group>(null)
-  useFollowPosition(groupRef, parentWorldPos)
-  // Parent-relative, not absolute — see OrbitPathLine's own comment on
-  // why baking a large absolute offset into these vertices (rather than
-  // the wrapping <group> below) causes visible float32 precision loss up
-  // close. Reduced to scalars before the memo: cameraDistance changes
-  // every zoom frame — only the radius, height and LOD tier actually
-  // change the ring.
-  const radius = Math.hypot(position[0] - parentWorldPos[0], position[2] - parentWorldPos[2])
-  const y = position[1] - parentWorldPos[1]
-  const segments = radius < 1e-4 ? 0 : orbitDetailFor(apparentSize(radius, cameraDistance))
-  const points = useMemo(() => (segments === 0 ? null : referenceRingPoints(radius, y, segments)), [radius, y, segments])
-  if (!points) return null
-  return (
-    <group ref={groupRef}>
-      <Line points={points} color={color} opacity={0.18} transparent lineWidth={1} />
-    </group>
-  )
+  const scene = useThree((s) => s.scene)
+  const size = useThree((s) => s.size)
+  const records = useMemo(() => buildOrbitLineRecords(system, frame.positions), [system, frame])
+  const colors = useMemo(() => records.map((r) => linearRgb(r.color)), [records])
+  const batch = useMemo(() => createOrbitBatch(records.length), [records.length])
+  const packed = useRef({ selectedId: null as string | null, assignment: '', snapshot: null as SceneInteractionSnapshot | null })
+
+  useLayoutEffect(() => {
+    for (const tier of batch.tiers) scene.add(tier.mesh)
+    return () => {
+      for (const tier of batch.tiers) scene.remove(tier.mesh)
+      disposeOrbitBatch(batch)
+    }
+  }, [scene, batch])
+
+  // Re-pack only when a tier boundary was crossed or the selection moved
+  // — cameraDistance changes on every zoom frame, the tiers rarely.
+  useLayoutEffect(() => {
+    const assignment = assignOrbitTiers(records, cameraDistance, batch.assignment)
+    const key = tierAssignmentKey(assignment)
+    const state = packed.current
+    if (key === state.assignment && selectedId === state.selectedId) return
+    state.assignment = key
+    state.selectedId = selectedId
+    state.snapshot = null
+    packOrbitBatch(batch, records, colors, selectedId)
+  }, [batch, records, colors, cameraDistance, selectedId])
+
+  useFrame(() => {
+    const snapshot = interaction.getSnapshot()
+    const visibilityChanged = snapshot !== packed.current.snapshot
+    packed.current.snapshot = snapshot
+    for (const tier of batch.tiers) {
+      tier.material.uniforms.renderScale!.value = renderFrame.scale
+      ;(tier.material.uniforms.resolution!.value as THREE.Vector2).set(size.width, size.height)
+      if (tier.count === 0) continue
+      writeOrbitCentres(tier.slots, tier.count, renderFrame, tier.arrays.centre)
+      markRange(tier.attributes.centre, tier.count * 3)
+      if (visibilityChanged && applyReferenceVisibility(tier, snapshot.visibleBodyIds, selectedId)) {
+        markRange(tier.attributes.color, tier.count * 4)
+      }
+    }
+  }, CAMERA_RELATIVE_PRIORITY)
+
+  return null
 }
+
+function linearRgb(color: string): [number, number, number] {
+  const c = new THREE.Color(color)
+  return [c.r, c.g, c.b]
+}
+
+function tierAssignmentKey(assignment: readonly (readonly number[])[]): string {
+  return assignment.map((members) => members.join(',')).join('|')
+}
+
+/** Uploads just the first `count` floats of `attribute` next draw. */
+function markRange(attribute: THREE.BufferAttribute, count: number): void {
+  attribute.clearUpdateRanges()
+  attribute.addUpdateRange(0, count)
+  attribute.needsUpdate = true
+}
+
+/** Sets each reference ring's opacity from whether its body is visible;
+ *  true when anything changed. */
+function applyReferenceVisibility(tier: OrbitTier, visibleIds: ReadonlySet<string>, selectedId: string | null): boolean {
+  let changed = false
+  for (let i = 0; i < tier.count; i++) {
+    const record = tier.slots[i]!
+    if (record.kind !== 'reference') continue
+    const opacity = Math.fround(visibleIds.has(record.id) ? orbitLineStyle(record, record.id === selectedId).opacity : 0)
+    if (tier.arrays.color[i * 4 + 3] !== opacity) {
+      tier.arrays.color[i * 4 + 3] = opacity
+      changed = true
+    }
+  }
+  return changed
+}
+
+interface OrbitTier {
+  mesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>
+  material: THREE.ShaderMaterial
+  geometry: THREE.InstancedBufferGeometry
+  arrays: OrbitInstanceArrays
+  attributes: Record<keyof OrbitInstanceArrays, THREE.InstancedBufferAttribute>
+  /** The record drawn by each instance slot. */
+  slots: OrbitLineRecord[]
+  count: number
+}
+
+interface OrbitBatch {
+  tiers: OrbitTier[]
+  table: THREE.DataTexture
+  /** Reused by assignOrbitTiers. */
+  assignment: number[][]
+}
+
+function createOrbitBatch(capacity: number): OrbitBatch {
+  const table = new THREE.DataTexture(buildOrbitParameterTable(), ORBIT_TABLE_COLUMNS, ORBIT_TABLE_ROWS, THREE.RedFormat, THREE.FloatType)
+  table.minFilter = THREE.NearestFilter
+  table.magFilter = THREE.NearestFilter
+  table.needsUpdate = true
+  const tiers = ORBIT_SEGMENT_TIERS.map((segments) => createOrbitTier(segments, Math.max(capacity, 1), table))
+  return { tiers, table, assignment: tiers.map(() => []) }
+}
+
+function disposeOrbitBatch(batch: OrbitBatch): void {
+  for (const tier of batch.tiers) {
+    tier.geometry.dispose()
+    tier.material.dispose()
+  }
+  batch.table.dispose()
+}
+
+const INSTANCE_ATTRIBUTES: Record<keyof OrbitInstanceArrays, { name: string; size: number }> = {
+  centre: { name: 'orbitCentre', size: 3 },
+  axisP: { name: 'orbitAxisP', size: 3 },
+  axisQ: { name: 'orbitAxisQ', size: 3 },
+  shape: { name: 'orbitShape', size: 2 },
+  color: { name: 'orbitColor', size: 4 },
+  width: { name: 'orbitWidth', size: 1 },
+}
+const INSTANCE_KEYS = Object.keys(INSTANCE_ATTRIBUTES) as (keyof OrbitInstanceArrays)[]
+
+/** A strip of `segments` quads — per vertex (segment index, 0 = the
+ *  segment's start | 1 = its end, side ±1) — the shared shape every orbit
+ *  in the tier instances. */
+function segmentStrip(segments: number): THREE.InstancedBufferGeometry {
+  const geometry = new THREE.InstancedBufferGeometry()
+  const corners = new Float32Array(segments * 12)
+  const indices = new Uint32Array(segments * 6)
+  for (let i = 0; i < segments; i++) {
+    corners.set([i, 0, -1, i, 0, 1, i, 1, -1, i, 1, 1], i * 12)
+    indices.set([i * 4, i * 4 + 1, i * 4 + 2, i * 4 + 2, i * 4 + 1, i * 4 + 3], i * 6)
+  }
+  geometry.setAttribute('position', new THREE.BufferAttribute(corners, 3))
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1))
+  geometry.instanceCount = 0
+  return geometry
+}
+
+function createOrbitTier(segments: number, capacity: number, table: THREE.DataTexture): OrbitTier {
+  const geometry = segmentStrip(segments)
+  const arrays = {} as OrbitInstanceArrays
+  const attributes = {} as OrbitTier['attributes']
+  for (const key of INSTANCE_KEYS) {
+    const { name, size } = INSTANCE_ATTRIBUTES[key]
+    arrays[key] = new Float32Array(capacity * size)
+    attributes[key] = new THREE.InstancedBufferAttribute(arrays[key], size)
+    attributes[key].setUsage(THREE.DynamicDrawUsage)
+    geometry.setAttribute(name, attributes[key])
+  }
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      parameterTable: { value: table },
+      columnStep: { value: ORBIT_TABLE_SPAN / segments },
+      renderScale: { value: 1 },
+      resolution: { value: new THREE.Vector2(1, 1) },
+    },
+    defines: { TABLE_ROWS: ORBIT_TABLE_ROWS },
+    vertexShader: ORBIT_VERTEX_SHADER,
+    fragmentShader: ORBIT_FRAGMENT_SHADER,
+    transparent: true,
+    // One draw call holds every orbit in the tier, so there's no
+    // per-object back-to-front sort among them — with depth writes on,
+    // whichever orbit came first in the buffer would hide the ones
+    // crossing behind it.
+    depthWrite: false,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  // Already in render space (see OrbitLineBatch); bounds would have to be
+  // recomputed from every instance every frame.
+  mesh.frustumCulled = false
+  mesh.matrixAutoUpdate = false
+  mesh.visible = false
+  return { mesh, material, geometry, arrays, attributes, slots: [], count: 0 }
+}
+
+/** Writes every record's instance data into its tier's slots, from the
+ *  batch's current tier assignment. */
+function packOrbitBatch(batch: OrbitBatch, records: readonly OrbitLineRecord[], colors: readonly [number, number, number][], selectedId: string | null): void {
+  batch.tiers.forEach((tier, t) => {
+    const members = batch.assignment[t]!
+    tier.slots.length = 0
+    members.forEach((index, slot) => {
+      const record = records[index]!
+      tier.slots.push(record)
+      writeOrbitInstance(tier.arrays, slot, record, colors[index]!, orbitLineStyle(record, record.id === selectedId))
+    })
+    tier.count = members.length
+    tier.geometry.instanceCount = tier.count
+    tier.mesh.visible = tier.count > 0
+    for (const key of INSTANCE_KEYS) markRange(tier.attributes[key], tier.count * INSTANCE_ATTRIBUTES[key].size)
+  })
+}
+
+const ORBIT_VERTEX_SHADER = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+
+uniform sampler2D parameterTable;
+uniform float columnStep;
+uniform float renderScale;
+uniform vec2 resolution;
+
+attribute vec3 orbitCentre;
+attribute vec3 orbitAxisP;
+attribute vec3 orbitAxisQ;
+attribute vec2 orbitShape;
+attribute vec4 orbitColor;
+attribute float orbitWidth;
+
+varying vec4 vColor;
+
+// The even-arc-length eccentric anomaly at a table column, between the
+// two eccentricity rows bracketing this orbit's own (orbitShape.y).
+float anomalyAt(float column) {
+  float lower = floor(orbitShape.y);
+  int c = int(column + 0.5);
+  int r = int(lower);
+  float a = texelFetch(parameterTable, ivec2(c, r), 0).r;
+  float b = texelFetch(parameterTable, ivec2(c, min(r + 1, TABLE_ROWS - 1)), 0).r;
+  return mix(a, b, orbitShape.y - lower);
+}
+
+vec3 orbitPoint(float column) {
+  float anomaly = anomalyAt(column);
+  return orbitCentre + renderScale * ((cos(anomaly) - orbitShape.x) * orbitAxisP + sin(anomaly) * orbitAxisQ);
+}
+
+// LineMaterial's: pull an end that's behind the camera onto the near
+// plane, so a segment passing beside the camera isn't projected through
+// infinity.
+void trimSegment(const in vec4 start, inout vec4 end) {
+  float a = projectionMatrix[2][2];
+  float b = projectionMatrix[3][2];
+  float nearEstimate = -0.5 * b / a;
+  float alpha = (nearEstimate - start.z) / (end.z - start.z);
+  end.xyz = mix(start.xyz, end.xyz, alpha);
+}
+
+void main() {
+  vColor = orbitColor;
+  float segment = position.x;
+  vec4 start = modelViewMatrix * vec4(orbitPoint(segment * columnStep), 1.0);
+  vec4 end = modelViewMatrix * vec4(orbitPoint((segment + 1.0) * columnStep), 1.0);
+  if (projectionMatrix[2][3] == -1.0) {
+    if (start.z < 0.0 && end.z >= 0.0) trimSegment(start, end);
+    else if (end.z < 0.0 && start.z >= 0.0) trimSegment(end, start);
+  }
+  vec4 clipStart = projectionMatrix * start;
+  vec4 clipEnd = projectionMatrix * end;
+  float aspect = resolution.x / resolution.y;
+  vec2 direction = clipEnd.xy / clipEnd.w - clipStart.xy / clipStart.w;
+  direction.x *= aspect;
+  float len = length(direction);
+  direction = len > 0.0 ? direction / len : vec2(1.0, 0.0);
+  vec2 offset = vec2(direction.y, -direction.x);
+  offset.x /= aspect;
+  // NDC spans 2 per viewport height, so this is half the width each side.
+  offset *= orbitWidth / resolution.y;
+  vec4 clip = position.y < 0.5 ? clipStart : clipEnd;
+  clip.xy += offset * position.z * clip.w;
+  // A hidden reference ring: off every edge of clip space.
+  gl_Position = orbitColor.a > 0.0 ? clip : vec4(2.0, 2.0, 2.0, 1.0);
+  #include <logdepthbuf_vertex>
+}
+`
+
+const ORBIT_FRAGMENT_SHADER = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_fragment>
+
+varying vec4 vColor;
+
+void main() {
+  #include <logdepthbuf_fragment>
+  gl_FragColor = vColor;
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`
 
 /**
  * Draws a planned route (see lib/routing.ts's routeWaypointIds) as a
@@ -172,8 +408,8 @@ interface LiveLine {
 /**
  * One contiguous run of a route (see routeSegments).
  *
- * Parent-relative, not absolute — same reasoning as OrbitPathLine's own
- * comment: baking each point's absolute (potentially far from the origin)
+ * Anchor-relative, not absolute — the reasoning OrbitLineBatch's comment
+ * gives for orbits: baking each point's absolute (potentially far from the origin)
  * position directly into <Line>'s Float32Array vertex buffer wastes most
  * of float32's ~7 significant digits on whatever that shared magnitude
  * is, leaving little precision for the segment's own shape. A route can
