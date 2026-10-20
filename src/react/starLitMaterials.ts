@@ -6,7 +6,8 @@
  * own uniforms, not three's scene lights, because a scene light's
  * position is in the compressed world (scale.ts), and a light from there
  * can't produce a true-geometry shadow. Three's lights still light every
- * other material (glTF models, asteroids, stations) — see StarLight.
+ * other material (glTF models, stations, the built shapes) — see
+ * StarLight.
  *
  * Everything is worked out in the mesh's OBJECT space — the body is the
  * unit sphere at the origin; rings are in body radii — with the uniforms
@@ -92,6 +93,28 @@ float eclipseFactor(vec3 p) {
 }
 `
 
+/** The brightness model every star-lit surface shares — the full-path
+ *  bodies' and the instanced small bodies' (createLitInstancedMaterial),
+ *  so a body promoted from one path to the other doesn't change shade. */
+const STAR_LIGHT_GLSL = /* glsl */ `
+// Lambert: a matte surface's brightness goes as the cosine of the sun's
+// angle from overhead, reaching zero at the terminator.
+float starLambert(vec3 normal, vec3 starDir) {
+  return max(dot(normal, starDir), 0.0);
+}
+// Full sun at normal incidence is 1 × albedo; the night side keeps
+// ambient (nightSideBrightness) × albedo.
+vec3 starLitColor(vec3 albedo, float light, float ambient) {
+  return albedo * (ambient + light);
+}
+// A flat-shaded face's normal, from the screen-space derivatives of the
+// position (in whatever space the star direction is): three's
+// flatShading, for the asteroid's faceted rock.
+vec3 faceNormal(vec3 position) {
+  return normalize(cross(dFdx(position), dFdy(position)));
+}
+`
+
 const VERTEX_GLSL = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
@@ -118,6 +141,7 @@ const SURFACE_FRAGMENT_GLSL = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_fragment>
 ${SHADOW_GLSL}
+${STAR_LIGHT_GLSL}
 uniform vec3 uColor;
 uniform sampler2D uMap;
 uniform float uUseMap;
@@ -130,14 +154,75 @@ void main() {
   #include <logdepthbuf_fragment>
   vec3 albedo = uColor;
   if (uUseMap > 0.5) albedo *= texture2D(uMap, vUv).rgb;
-  // Lambert: a matte surface's brightness goes as the cosine of the sun's
-  // angle from overhead, reaching zero at the terminator.
-  float light = max(dot(normalize(vObjectNormal), uStarDir), 0.0);
+  #ifdef FLAT_SHADED
+  vec3 normal = faceNormal(vObjectPosition);
+  #else
+  vec3 normal = normalize(vObjectNormal);
+  #endif
+  float light = starLambert(normal, uStarDir);
   if (light > 0.0) {
     if (uEclipses > 0.5) light *= eclipseFactor(vObjectPosition);
     if (uRingShadows > 0.5 && uRingBandCount > 0) light *= ringShadowTransmission(vObjectPosition, uStarDir, uStarAngularRadius);
   }
-  gl_FragColor = vec4(albedo * (uAmbient + light), 1.0);
+  gl_FragColor = vec4(starLitColor(albedo, light, uAmbient), 1.0);
+  ${OUTPUT_CHUNKS}
+}
+`
+
+/**
+ * The instanced small bodies' version (InstancedBodies): Lambert and the
+ * night-side floor, with each instance's own star direction from a
+ * per-instance attribute (`instanceStarDirection`, render axes — the
+ * floating origin's rebase is a scale and a translation, so it never
+ * turns a direction) and its colour from instanceColor. Worked in render
+ * space rather than object space: the instance matrix holds a rotation
+ * and a uniform scale, so the normal is just its rotation part.
+ *
+ * No eclipse or ring shadows: an instanced body is by definition at its
+ * lowest LOD, a few pixels across, where a shadow's edge can't be seen —
+ * and picking each body's shadow casters every frame (the store's
+ * per-body work) is exactly what thousands of instances can't afford.
+ * Selected, hovered and large bodies are promoted to the full path, which
+ * has them.
+ */
+const INSTANCED_VERTEX_GLSL = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+attribute vec3 instanceStarDirection;
+varying vec3 vRenderPosition;
+varying vec3 vRenderNormal;
+varying vec3 vStarDirection;
+varying vec3 vAlbedo;
+void main() {
+  mat4 placement = modelMatrix * instanceMatrix;
+  vec4 renderPosition = placement * vec4(position, 1.0);
+  vRenderPosition = renderPosition.xyz;
+  vRenderNormal = mat3(placement) * normal;
+  vStarDirection = instanceStarDirection;
+  vAlbedo = instanceColor;
+  gl_Position = projectionMatrix * viewMatrix * renderPosition;
+  #include <logdepthbuf_vertex>
+}
+`
+
+const INSTANCED_FRAGMENT_GLSL = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_fragment>
+${STAR_LIGHT_GLSL}
+uniform float uAmbient;
+varying vec3 vRenderPosition;
+varying vec3 vRenderNormal;
+varying vec3 vStarDirection;
+varying vec3 vAlbedo;
+void main() {
+  #include <logdepthbuf_fragment>
+  #ifdef FLAT_SHADED
+  vec3 normal = faceNormal(vRenderPosition);
+  #else
+  vec3 normal = normalize(vRenderNormal);
+  #endif
+  float light = starLambert(normal, normalize(vStarDirection));
+  gl_FragColor = vec4(starLitColor(vAlbedo, light, uAmbient), 1.0);
   ${OUTPUT_CHUNKS}
 }
 `
@@ -206,8 +291,9 @@ function baseUniforms(): Record<string, THREE.IUniform> {
 
 export type StarLitKind = 'surface' | 'ring' | 'atmosphere'
 
-export function createLitSurfaceMaterial(color: string, map: THREE.Texture | null): THREE.ShaderMaterial {
+export function createLitSurfaceMaterial(color: string, map: THREE.Texture | null, { flat = false }: { flat?: boolean } = {}): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
+    defines: flat ? { FLAT_SHADED: '' } : {},
     uniforms: {
       ...baseUniforms(),
       uColor: { value: new THREE.Color(map ? '#ffffff' : color) },
@@ -218,6 +304,19 @@ export function createLitSurfaceMaterial(color: string, map: THREE.Texture | nul
     },
     vertexShader: VERTEX_GLSL,
     fragmentShader: SURFACE_FRAGMENT_GLSL,
+  })
+}
+
+/** The instanced small bodies' star-lit material (see
+ *  INSTANCED_VERTEX_GLSL). Needs an InstancedMesh with instanceColor and
+ *  an `instanceStarDirection` attribute; `uAmbient` is the caller's to
+ *  keep at nightSideBrightness. */
+export function createLitInstancedMaterial({ flat = false }: { flat?: boolean } = {}): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    defines: flat ? { FLAT_SHADED: '' } : {},
+    uniforms: { uAmbient: { value: 0 } },
+    vertexShader: INSTANCED_VERTEX_GLSL,
+    fragmentShader: INSTANCED_FRAGMENT_GLSL,
   })
 }
 

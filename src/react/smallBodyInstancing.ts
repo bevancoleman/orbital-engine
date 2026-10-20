@@ -17,17 +17,14 @@
 import { icosahedronDetailFor, sphereDetailFor, torusDetailFor } from '../levelOfDetail'
 import type { WorldVec } from '../render'
 import type { CelestialBody } from '../types'
-import { hashSeed, TEXTURABLE_BODY_TYPES } from './bodyTypeStyles'
+import { TEXTURABLE_BODY_TYPES } from './bodyTypeStyles'
 import type { RenderTransform } from './floatingOrigin'
+import { PLACEHOLDER_SHAPES, placeholderShapeFor, type PlaceholderShape } from './placeholderShapes'
 
 /** One InstancedMesh (two for surface_installation's base + spike) per
- *  shape — PlaceholderBodyShape's lowest-detail geometry and material. */
-export const INSTANCE_SHAPES = ['planet', 'moon', 'plain', 'asteroid', 'station', 'nav_point', 'surface_installation'] as const
-export type InstanceShape = (typeof INSTANCE_SHAPES)[number]
-
-/** Types whose placeholder has a glow or tail sprite many times the
- *  body's radius (see PlaceholderBodyShape) — always the full path. */
-const SPRITE_TYPES = new Set(['star', 'comet', 'jump_point'])
+ *  shape — placeholderShapes.ts's lowest-detail parts. */
+export const INSTANCE_SHAPES = PLACEHOLDER_SHAPES
+export type InstanceShape = PlaceholderShape
 
 /**
  * The instanced shape a body draws as when small, or null when it always
@@ -36,21 +33,9 @@ const SPRITE_TYPES = new Set(['star', 'comet', 'jump_point'])
  * geometry doesn't reproduce).
  */
 export function instanceShapeFor(body: CelestialBody): InstanceShape | null {
-  if (SPRITE_TYPES.has(body.type) || body.modelUrl || body.rings?.length || body.atmosphereHeightKm) return null
+  if (body.modelUrl || body.rings?.length || body.atmosphereHeightKm) return null
   if (body.textureUrl && TEXTURABLE_BODY_TYPES.has(body.type)) return null
-  switch (body.type) {
-    case 'planet':
-    case 'dwarf_planet':
-      return 'planet'
-    case 'moon':
-    case 'asteroid':
-    case 'station':
-    case 'nav_point':
-    case 'surface_installation':
-      return body.type
-    default:
-      return 'plain'
-  }
+  return placeholderShapeFor(body.type)
 }
 
 const LOWEST_SPHERE = sphereDetailFor(0).widthSegments
@@ -74,13 +59,6 @@ export function isSmallOnScreen(shape: InstanceShape, detailSize: number): boole
 /** Whether an instanceable body is promoted to its own BodyMarker. */
 export function needsFullMarker(shape: InstanceShape, state: { selected: boolean; hovered: boolean; detailSize: number }): boolean {
   return state.selected || state.hovered || !isSmallOnScreen(shape, state.detailSize)
-}
-
-/** PlaceholderBodyShape's fixed per-body orientation (an irregular rock
- *  reads as a rock), from the same seed — kept in step with it by test. */
-export function placeholderRotation(id: string): [number, number, number] {
-  const seed = hashSeed(id)
-  return [(seed % 620) / 100, ((seed * 7) % 620) / 100, ((seed * 13) % 620) / 100]
 }
 
 /** A three.js 'XYZ' Euler rotation as a column-major 3×3 (m[col*3 + row]). */

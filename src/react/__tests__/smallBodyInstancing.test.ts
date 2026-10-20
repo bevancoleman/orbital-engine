@@ -1,14 +1,12 @@
 import * as THREE from 'three'
 import { icosahedronDetailFor, sphereDetailFor, torusDetailFor } from '../../levelOfDetail'
 import type { BodyType, CelestialBody } from '../../types'
-import { hashSeed } from '../bodyTypeStyles'
 import { renderTransformFor } from '../floatingOrigin'
 import {
   INSTANCE_SHAPES,
   instanceShapeFor,
   isSmallOnScreen,
   needsFullMarker,
-  placeholderRotation,
   rotationMatrix,
   writeInstanceMatrix,
 } from '../smallBodyInstancing'
@@ -76,12 +74,7 @@ describe('isSmallOnScreen / needsFullMarker', () => {
   })
 })
 
-describe('placeholderRotation / rotationMatrix', () => {
-  it('is PlaceholderBodyShape\'s per-body seeded rotation', () => {
-    const seed = hashSeed('asteroid-7')
-    expect(placeholderRotation('asteroid-7')).toEqual([(seed % 620) / 100, ((seed * 7) % 620) / 100, ((seed * 13) % 620) / 100])
-  })
-
+describe('rotationMatrix', () => {
   it('matches three\'s XYZ Euler rotation', () => {
     const euler: [number, number, number] = [0.3, 1.2, -2.1]
     const expected = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(...euler)).elements

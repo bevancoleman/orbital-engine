@@ -14,14 +14,18 @@ import type { FramePositions } from './framePositions'
 import { propsEqualWithVectors } from './memoEquality'
 import type { SceneInteractionSnapshot, SceneInteractionStore } from './sceneInteractionStore'
 import {
-  INSTANCE_SHAPES,
-  instanceShapeFor,
-  isSmallOnScreen,
+  ROTATED_PLACEHOLDER_SHAPES,
+  STAR_LIT_PLACEHOLDER_SHAPES,
+  createPlaceholderGeometry,
+  createPlaceholderMaterial,
+  placeholderDetailFor,
+  placeholderParts,
   placeholderRotation,
-  rotationMatrix,
-  writeInstanceMatrix,
-  type InstanceShape,
-} from './smallBodyInstancing'
+} from './placeholderShapes'
+import { useSceneLighting } from './sceneLighting'
+import type { StarLightingStore } from './starLighting'
+import { createLitInstancedMaterial } from './starLitMaterials'
+import { INSTANCE_SHAPES, instanceShapeFor, isSmallOnScreen, rotationMatrix, writeInstanceMatrix, type InstanceShape } from './smallBodyInstancing'
 
 /**
  * The instanced small-body path — see smallBodyInstancing.ts for which
@@ -35,8 +39,14 @@ import {
  *
  * Semantics kept from BodyMarker: the same rendered radius (renderRadius,
  * against the same React-side cameraDistance), the same 0.3s grow/shrink
- * fade towards "in the store's visible set", the same seeded orientation
- * and colour. Bodies this path can't draw identically are promoted to
+ * fade towards "in the store's visible set", the same seeded orientation,
+ * colour and parts (placeholderShapes.ts, shared with BodyShapes). With
+ * `lightFromStar`, the natural shapes (planets, moons, asteroids) are
+ * shaded like the full path's (starLitMaterials.ts): each instance
+ * carries its own true direction to the star, rewritten whenever the
+ * lighting store re-resolves the true positions — Lambert and the
+ * night-side floor, though not eclipse shadows (see
+ * createLitInstancedMaterial). Bodies this path can't draw identically are promoted to
  * their own BodyMarker, rendered here: the selected and hovered body, and
  * any body large enough on screen for a higher LOD tier. A body whose
  * label shows gets a label-only BodyMarker (drawShape={false}) — a label
@@ -64,8 +74,9 @@ export function InstancedBodies({
 }) {
   const scene = useThree((s) => s.scene)
   const viewportHeight = useThree((s) => s.size.height)
+  const { store } = useSceneLighting()
   const model = useMemo(() => buildInstanceModel(bodies, frame), [bodies, frame])
-  const meshes = useMemo(() => createShapeMeshes(model), [model])
+  const meshes = useMemo(() => createShapeMeshes(model, store !== null), [model, store])
 
   useLayoutEffect(() => {
     for (const shape of meshes) for (const mesh of shape.meshes) scene.add(mesh)
@@ -111,6 +122,7 @@ export function InstancedBodies({
 
   useFrame((_, delta) => {
     const { cameraDistance: distance, viewportHeight: height, promoted: full } = live.current
+    if (store) updateStarLighting(model, meshes, store)
     writeInstances(model, meshes, {
       visibleIds: interaction.getSnapshot().visibleBodyIds,
       promoted: full,
@@ -178,6 +190,10 @@ interface InstanceModel {
   rotations: Float64Array[]
   /** Linear RGB, 3 per body. */
   colors: Float32Array
+  /** Unit direction to the star, 3 per body (render axes), and the
+   *  lighting store version it was read at (updateStarLighting). */
+  starDirections: Float32Array
+  starDirectionsVersion: number
   /** Current visibility fade, 0..1 (BodyMarker's scaleRef). */
   fades: Float32Array
   /** Index of each body's shape among the shapes in use (createShapeMeshes
@@ -186,7 +202,6 @@ interface InstanceModel {
 }
 
 const IDENTITY = rotationMatrix([0, 0, 0])
-const ROTATED_SHAPES = new Set<InstanceShape>(['asteroid', 'station', 'nav_point', 'surface_installation'])
 
 function buildInstanceModel(candidates: readonly CelestialBody[], frame: FramePositions): InstanceModel {
   const bodies = candidates.filter((b) => instanceShapeFor(b) && frame.positions.has(b.id))
@@ -208,10 +223,27 @@ function buildInstanceModel(candidates: readonly CelestialBody[], frame: FramePo
       const radius = trueRadius(b.radiusKm)
       return Number.isFinite(radius) ? radius : 0
     }),
-    rotations: bodies.map((b, i) => (ROTATED_SHAPES.has(shapes[i]!) ? rotationMatrix(placeholderRotation(b.id)) : IDENTITY)),
+    rotations: bodies.map((b, i) => (ROTATED_PLACEHOLDER_SHAPES.has(shapes[i]!) ? rotationMatrix(placeholderRotation(b.id)) : IDENTITY)),
     colors,
+    // Straight up until the store has resolved a direction.
+    starDirections: Float32Array.from({ length: bodies.length * 3 }, (_, k) => (k % 3 === 1 ? 1 : 0)),
+    starDirectionsVersion: -1,
     fades: new Float32Array(bodies.length),
   }
+}
+
+const LOWEST_DETAIL = placeholderDetailFor(0)
+
+/** Every part of a shape at its lowest detail (placeholderShapes.ts, as
+ *  BodyShapes draws it), white so the per-instance colour is the colour —
+ *  or, lit from the star, the instanced star-lit material. */
+function shapeParts(shape: InstanceShape, starLit: boolean): { geometry: THREE.BufferGeometry; material: THREE.Material }[] {
+  return placeholderParts(shape, LOWEST_DETAIL).map((part) => ({
+    geometry: createPlaceholderGeometry(part.geometry),
+    material: starLit
+      ? createLitInstancedMaterial({ flat: part.material.kind === 'standard' && part.material.flatShading })
+      : createPlaceholderMaterial(part.material),
+  }))
 }
 
 interface ShapeMeshes {
@@ -224,42 +256,27 @@ interface ShapeMeshes {
   owners: Int32Array
   /** Slots filled this frame. */
   count: number
+  /** Star lighting: each slot's direction to the star (null when the
+   *  shape isn't star-lit), and its material's ambient uniform. */
+  starDirections: THREE.InstancedBufferAttribute | null
+  litMaterials: THREE.ShaderMaterial[]
 }
 
-/** PlaceholderBodyShape's lowest-detail geometry and material per shape
- *  (see BodyShapes.tsx), white so the per-instance colour is the colour. */
-function shapeParts(shape: InstanceShape): { geometry: THREE.BufferGeometry; material: THREE.Material }[] {
-  const standard = (roughness: number, metalness = 0, flatShading = false) => new THREE.MeshStandardMaterial({ roughness, metalness, flatShading })
-  switch (shape) {
-    case 'planet':
-      return [{ geometry: new THREE.SphereGeometry(1, 14, 10), material: standard(0.85, 0.05) }]
-    case 'moon':
-      return [{ geometry: new THREE.SphereGeometry(1, 14, 10), material: standard(0.95) }]
-    case 'plain':
-      return [{ geometry: new THREE.SphereGeometry(1, 14, 10), material: new THREE.MeshBasicMaterial() }]
-    case 'asteroid':
-      return [{ geometry: new THREE.IcosahedronGeometry(1, 0), material: standard(1, 0, true) }]
-    case 'station':
-      return [{ geometry: new THREE.TorusGeometry(1, 0.35, 8, 16), material: standard(0.4, 0.6) }]
-    case 'nav_point':
-      return [{ geometry: new THREE.OctahedronGeometry(1, 0), material: new THREE.MeshBasicMaterial({ wireframe: true, transparent: true, opacity: 0.9 }) }]
-    case 'surface_installation':
-      return [
-        { geometry: new THREE.CylinderGeometry(1, 1.1, 0.3, 8), material: standard(0.6, 0.5) },
-        { geometry: new THREE.ConeGeometry(0.35, 1.2, 8).translate(0, 0.75, 0), material: standard(0.5, 0.4) },
-      ]
-  }
-}
-
-function createShapeMeshes(model: InstanceModel): ShapeMeshes[] {
+function createShapeMeshes(model: InstanceModel, lightFromStar: boolean): ShapeMeshes[] {
   return INSTANCE_SHAPES.flatMap((shape) => {
     const capacity = model.shapes.filter((s) => s === shape).length
     if (capacity === 0) return []
+    const starLit = lightFromStar && STAR_LIT_PLACEHOLDER_SHAPES.has(shape)
     // Shared by every part of the shape: written and uploaded once.
     const matrices = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 16), 16)
     matrices.setUsage(THREE.DynamicDrawUsage)
     const colors = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3)
-    const meshes = shapeParts(shape).map(({ geometry, material }) => {
+    const starDirections = starLit ? new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3) : null
+    starDirections?.setUsage(THREE.DynamicDrawUsage)
+    const litMaterials: THREE.ShaderMaterial[] = []
+    const meshes = shapeParts(shape, starLit).map(({ geometry, material }) => {
+      if (starDirections) geometry.setAttribute('instanceStarDirection', starDirections)
+      if (material instanceof THREE.ShaderMaterial) litMaterials.push(material)
       const mesh = new THREE.InstancedMesh(geometry, material, capacity)
       mesh.instanceMatrix = matrices
       // Set up front: whether instancing colour is used is decided when
@@ -272,8 +289,20 @@ function createShapeMeshes(model: InstanceModel): ShapeMeshes[] {
       mesh.matrixAutoUpdate = false
       return mesh
     })
-    return [{ shape, meshes, owners: new Int32Array(capacity).fill(-1), count: 0 }]
+    return [{ shape, meshes, owners: new Int32Array(capacity).fill(-1), count: 0, starDirections, litMaterials }]
   })
+}
+
+/** Rereads every body's direction to the star when the lighting store has
+ *  re-resolved the true positions (each simulated-time step), and keeps
+ *  the lit materials' night-side floor at the store's setting. */
+function updateStarLighting(model: InstanceModel, meshes: readonly ShapeMeshes[], store: StarLightingStore): void {
+  for (const group of meshes) {
+    for (const material of group.litMaterials) material.uniforms.uAmbient!.value = store.settings.nightSideBrightness
+  }
+  if (model.starDirectionsVersion === store.version) return
+  model.starDirectionsVersion = store.version
+  for (let i = 0; i < model.bodies.length; i++) store.writeStarDirection(model.bodies[i]!.id, model.starDirections, i * 3)
 }
 
 interface InstanceFrame {
@@ -298,6 +327,12 @@ function writeInstances(model: InstanceModel, meshes: readonly ShapeMeshes[], f:
     const mesh = group.meshes[0]!
     const radius = Math.max(model.radii[i]!, f.floor) * Math.max(fade, 0.0001)
     writeInstanceMatrix(mesh.instanceMatrix.array as Float32Array, slot, model.rotations[i]!, model.positions[i]!, radius, f.transform)
+    if (group.starDirections) {
+      const directions = group.starDirections.array as Float32Array
+      directions[slot * 3] = model.starDirections[i * 3]!
+      directions[slot * 3 + 1] = model.starDirections[i * 3 + 1]!
+      directions[slot * 3 + 2] = model.starDirections[i * 3 + 2]!
+    }
     if (group.owners[slot] !== i) {
       group.owners[slot] = i
       const colors = mesh.instanceColor!.array as Float32Array
@@ -312,6 +347,11 @@ function writeInstances(model: InstanceModel, meshes: readonly ShapeMeshes[], f:
     matrices.clearUpdateRanges()
     matrices.addUpdateRange(0, group.count * 16)
     matrices.needsUpdate = true
+    if (group.starDirections) {
+      group.starDirections.clearUpdateRanges()
+      group.starDirections.addUpdateRange(0, group.count * 3)
+      group.starDirections.needsUpdate = true
+    }
     for (const mesh of group.meshes) {
       mesh.count = group.count
       mesh.visible = group.count > 0

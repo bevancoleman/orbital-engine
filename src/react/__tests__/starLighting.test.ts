@@ -204,3 +204,32 @@ describe('ringShadowData', () => {
     expect(ringShadowData(body([{ innerRadiusKm: 2000, outerRadiusKm: 3000 }], 0))).toBeNull()
   })
 })
+
+describe('the store\'s per-body star direction (for the instanced small bodies)', () => {
+  it('is the unit direction from the body to the star, for any body, once updated', () => {
+    const store = createStarLightingStore(SOLAR_SYSTEM)!
+    const out = new Float32Array(6).fill(9)
+    expect(store.writeStarDirection('ceres', out, 3)).toBe(false)
+    const before = store.version
+    store.update(OCT_2026)
+    expect(store.version).toBe(before + 1)
+    expect(store.writeStarDirection('ceres', out, 3)).toBe(true)
+    const truePositions = resolveAllTruePositionsKm(SOLAR_SYSTEM, OCT_2026)
+    const ceres = truePositions.get('ceres')!
+    const sun = truePositions.get('sun')!
+    expectVecClose([out[3]!, out[4]!, out[5]!], unit([sun[0] - ceres[0], sun[1] - ceres[1], sun[2] - ceres[2]]), 6)
+    expect([...out.slice(0, 3)]).toEqual([9, 9, 9])
+    expect(store.writeStarDirection('no-such-body', out, 0)).toBe(false)
+  })
+
+  it('bumps its version only when the true positions are re-resolved', () => {
+    const store = createStarLightingStore(SOLAR_SYSTEM)!
+    store.update(OCT_2026)
+    const version = store.version
+    store.acquire('earth')
+    store.update(OCT_2026)
+    expect(store.version).toBe(version)
+    store.update(new Date(OCT_2026.getTime() + 1000))
+    expect(store.version).toBe(version + 1)
+  })
+})

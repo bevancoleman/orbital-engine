@@ -86,11 +86,13 @@ export interface OrbitalSystemSceneProps {
    * (falls back to just the ambient fill light) rather than guessing.
    *
    * Natural bodies (planets, moons, dwarf planets — placeholder or real
-   * texture), ring discs and atmospheres are then shaded from the star's
-   * TRUE direction, with analytic eclipse shadows (a moon's on its
-   * planet, a planet's on its moons) and ring shadows (a planet's on its
-   * rings and its rings' on it) — see `starLighting`. Real glTF models
-   * and the other placeholder shapes are lit by a point light at the star.
+   * texture — and asteroids), ring discs and atmospheres are then shaded
+   * from the star's TRUE direction, with analytic eclipse shadows (a
+   * moon's on its planet, a planet's on its moons) and ring shadows (a
+   * planet's on its rings and its rings' on it) — see `starLighting`.
+   * Small bodies drawn instanced get the same day/night shading, without
+   * eclipses. Real glTF models and the built placeholder shapes
+   * (stations, installations) are lit by a point light at the star.
    */
   lightFromStar?: boolean
   /**

@@ -69,6 +69,30 @@ export function StarLitSphere({
   )
 }
 
+/** A placeholder shape's part (placeholderShapes.ts — a sphere, or the
+ *  asteroid's flat-shaded icosahedron), lit from its star. The geometry
+ *  is the caller's (shared with the unlit path). */
+export function StarLitSurface({
+  store,
+  bodyId,
+  color,
+  geometry,
+  flat,
+}: {
+  store: StarLightingStore
+  bodyId: string
+  color: string
+  geometry: THREE.BufferGeometry
+  flat: boolean
+}) {
+  const material = useMemo(() => createLitSurfaceMaterial(color, null, { flat }), [color, flat])
+  return (
+    <StarLitMesh store={store} bodyId={bodyId} material={material}>
+      <primitive object={geometry} attach="geometry" />
+    </StarLitMesh>
+  )
+}
+
 /** AtmosphereRim's star-lit version: the same shell, its glow brighter on
  *  the day side. */
 export function StarLitAtmosphere({

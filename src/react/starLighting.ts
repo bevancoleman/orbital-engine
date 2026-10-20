@@ -84,6 +84,17 @@ export interface StarLightingStore {
   release(bodyId: string): void
   /** Recomputes every acquired body for `date` (a no-op if nothing changed). */
   update(date: Date): void
+  /** Bumped each time `update` re-resolves the true positions — for a
+   *  reader of writeStarDirection to know when to read again. */
+  readonly version: number
+  /**
+   * The unit direction from `bodyId` to the star, in render axes, as of
+   * the last `update`, into out[at..at+2] — for every body, acquired or
+   * not: the instanced small bodies (InstancedBodies) take just this, not
+   * a full BodyLightState each. False (and nothing written) before the
+   * first update or for an unknown body.
+   */
+  writeStarDirection(bodyId: string, out: Float32Array, at: number): boolean
 }
 
 /** Null when the system has no star to light it from. */
@@ -98,9 +109,27 @@ export function createStarLightingStore(system: StarSystemData, settings: StarLi
   const stale = new Set<string>()
   let resolvedAt = Number.NaN
   let truePositions = new Map<string, WorldVec>()
+  let version = 0
 
   return {
     settings: { ...settings },
+    get version() {
+      return version
+    },
+    writeStarDirection(bodyId, out, at) {
+      const position = truePositions.get(bodyId)
+      const starPosition = truePositions.get(star.id)
+      if (!position || !starPosition) return false
+      const x = starPosition[0] - position[0]
+      const y = starPosition[1] - position[1]
+      const z = starPosition[2] - position[2]
+      const length = Math.sqrt(x * x + y * y + z * z)
+      if (!(length > 0)) return false
+      out[at] = x / length
+      out[at + 1] = y / length
+      out[at + 2] = z / length
+      return true
+    },
     stateFor(bodyId) {
       let state = states.get(bodyId)
       if (!state) {
@@ -132,6 +161,7 @@ export function createStarLightingStore(system: StarSystemData, settings: StarLi
       if (timeChanged) {
         resolvedAt = timeMs
         truePositions = resolveAllTruePositionsKm(system, date)
+        version++
       }
       const starPosition = truePositions.get(star.id) ?? [0, 0, 0]
       for (const bodyId of timeChanged ? users.keys() : stale) {
