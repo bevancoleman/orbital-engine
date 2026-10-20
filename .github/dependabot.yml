@@ -34,6 +34,14 @@ updates:
         versions: [">=19.3.0"]
       - dependency-name: "react-dom"
         versions: [">=19.3.0"]
+      # TypeScript 7 (the native port) ships no JS compiler API, which the
+      # toolchain still needs: tsup's dts build (rollup-plugin-dts) fails
+      # outright, and the typescript-eslint 8.72 (<6.1), ts-jest 29.4
+      # (<7) and typedoc 0.28 (<=6.0) peer ranges all exclude it. Remove
+      # this once those support TS 7 (or ship a TS 7 API fallback).
+      # TS 6 is still offered: the same toolchain accepts it.
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
   - package-ecosystem: npm
     directory: /examples/basic
     schedule:

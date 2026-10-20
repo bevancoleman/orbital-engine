@@ -52,7 +52,6 @@ const SIM_MS_PER_FRAME = 6 * 3_600_000
 
 installDom()
 
-const React = await import('react')
 const fiber = await import('@react-three/fiber')
 const THREEModule = await import('three')
 const { createSyntheticSystem } = await import('../src/fixtures/syntheticSystem')
