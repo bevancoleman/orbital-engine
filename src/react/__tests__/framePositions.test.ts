@@ -2,6 +2,7 @@ import { resolveAllWorldPositions } from '../../render'
 import { SOLAR_SYSTEM } from '../../solarSystemData'
 import type { CelestialBody, StarSystemData } from '../../types'
 import { computeColliderBodies } from '../../camera'
+import { createSyntheticSystem } from '../../fixtures/syntheticSystem'
 import { createFramePositions, liveColliderBodies } from '../framePositions'
 
 const START = Date.parse('2026-01-01T00:00:00Z')
@@ -40,6 +41,14 @@ describe('createFramePositions', () => {
     expect(frame.update(START + 86_400_000)).toBe(true)
     expect(frame.positions.get('earth')).toBe(earth)
     expect([...earth]).not.toEqual(before)
+  })
+
+  it('matches exactly for a large nested system of orbiting and fixed bodies', () => {
+    const sys = createSyntheticSystem(600)
+    const frame = createFramePositions(sys, START)
+    expectSameAs(frame, sys, START)
+    frame.update(START + 86_400_000 * 12.25)
+    expectSameAs(frame, sys, START + 86_400_000 * 12.25)
   })
 
   it('skips the work when the time has not changed', () => {
