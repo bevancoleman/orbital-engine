@@ -91,7 +91,9 @@ export interface OrbitalSystemSceneProps {
    * moon's on its planet, a planet's on its moons) and ring shadows (a
    * planet's on its rings and its rings' on it) — see `starLighting`.
    * Small bodies drawn instanced get the same day/night shading, without
-   * eclipses. Real glTF models and the built placeholder shapes
+   * eclipses. A fly-to then settles on the body's day side, the star
+   * 30–50° off the camera's direction (see camera.ts's
+   * computeEndDirection). Real glTF models and the built placeholder shapes
    * (stations, installations) are lit by a point light at the star.
    */
   lightFromStar?: boolean
@@ -264,6 +266,7 @@ export function OrbitalSystemScene({
     cameraPose,
     flightPacing,
     arrivalFraming,
+    lightFromStar,
   })
   const { selectedBody, selectedBelt } = nav
 

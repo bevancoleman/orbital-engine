@@ -153,20 +153,6 @@ test.describe('examples/with-models — star lighting, shadows and comet tails',
   /** Most of the canvas: Saturn's rings reach well beyond the planet. */
   const WIDE: CanvasRegion = { cx: 0.5, cy: 0.5, sizeFraction: 0.9 }
 
-  /** Drags the camera round its target by `dx` CSS px — camera-controls'
-   *  orbit. Over 2px of movement, so R3F doesn't treat it as a click. */
-  async function orbitCamera(page: Page, dx: number): Promise<void> {
-    const box = (await page.locator('canvas').boundingBox())!
-    const x = box.x + box.width / 2
-    const y = box.y + box.height / 2
-    await page.mouse.move(x, y)
-    await page.mouse.down()
-    for (let i = 1; i <= 10; i++) await page.mouse.move(x + (dx * i) / 10, y)
-    await page.mouse.up()
-    // camera-controls damps the rotation out over a few hundred ms.
-    await page.waitForTimeout(1500)
-  }
-
   /** Pixels that are lit without the setting and at most `ratio` as
    *  bright with it, as a fraction of the sample. */
   function darkenedFraction(withSetting: number[], without: number[], ratio: number): number {
@@ -200,14 +186,16 @@ test.describe('examples/with-models — star lighting, shadows and comet tails',
 
   test("Halley's Comet has a visible tail near perihelion", async ({ page }) => {
     const errors = trackErrors(page)
-    await gotoScene(page, `${URL}?date=1986-03-10T00:00:00Z`)
+    // Lit from the star, the fly-to settles on the comet's day side, the
+    // Sun 30–50° off the view — so the tail, pointing away from the Sun,
+    // crosses the view. (Unlit, the settled view looks back towards the
+    // Sun, straight down the tail; this test used to drag the camera
+    // round ~90° by hand to see it.)
+    await gotoScene(page, `${URL}?light=1&date=1986-03-10T00:00:00Z`)
     await flyTo(page, 'Halley')
     // Back out to ~10⁷ km, where the tail (true scale, ~10⁷–10⁸ km)
-    // spans the view...
+    // spans the view.
     await setRangeValue(page.locator('input[type=range][title^="Zoom"]'), 720)
-    // ...and orbit round ~90°: the settled view looks back towards the Sun,
-    // which is straight down the tail.
-    await orbitCamera(page, 150)
     const withTail = await readLuminance(page, WIDE)
     await page.getByRole('checkbox', { name: 'Comet tails' }).uncheck()
     const withoutTail = await readLuminance(page, WIDE)
@@ -220,10 +208,9 @@ test.describe('examples/with-models — star lighting, shadows and comet tails',
 
   test("Halley's Comet has no tail far from the Sun", async ({ page }) => {
     // October 2026: ~34 AU out, long inert.
-    await gotoScene(page, `${URL}?date=2026-10-20T00:00:00Z`)
+    await gotoScene(page, `${URL}?light=1&date=2026-10-20T00:00:00Z`)
     await flyTo(page, 'Halley')
     await setRangeValue(page.locator('input[type=range][title^="Zoom"]'), 720)
-    await orbitCamera(page, 150)
     const tailsOn = await readLuminance(page, WIDE)
     await page.getByRole('checkbox', { name: 'Comet tails' }).uncheck()
     const tailsOff = await readLuminance(page, WIDE)

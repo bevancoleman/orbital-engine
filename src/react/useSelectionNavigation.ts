@@ -45,6 +45,10 @@ export interface SelectionNavigationOptions {
   flightPacing?: FlightPacing
   /** See OrbitalSystemSceneProps.arrivalFraming. Defaults to 'body'. */
   arrivalFraming?: BodyFraming
+  /** OrbitalSystemSceneProps.lightFromStar: a fly-to then settles on the
+   *  body's day side (FocusTarget.starDirection). Read when a flight is
+   *  planned. */
+  lightFromStar?: boolean
 }
 
 export interface SelectionNavigation {
@@ -103,7 +107,7 @@ export function useSelectionNavigation(options: SelectionNavigationOptions): Sel
   // flightTargetDate itself already uses.
   function focusOnBodyWithTrajectory(body: CelestialBody, bodyFraming: BodyFraming, previousBody: CelestialBody | null = null): FocusTarget {
     return planned((durationMs) => {
-      const target = computeFocusForBody(body, system, targetDate(durationMs), previousBody, bodyFraming)
+      const target = computeFocusForBody(body, system, targetDate(durationMs), previousBody, bodyFraming, { daySide: options.lightFromStar ?? false })
       const predictedTargetAt = clock.playing
         ? (safePredictFlightTarget(body, system, clock.now(), clock.daysPerSecond, target.distance, durationMs) ?? undefined)
         : undefined

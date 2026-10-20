@@ -37,11 +37,15 @@ export function trueOffsetKm(body: CelestialBody, date: Date): WorldVec {
  */
 export function resolveAllTruePositionsKm(system: StarSystemData, date: Date): Map<string, WorldVec> {
   const cache = new Map<string, WorldVec>()
-  for (const body of system.bodies) {
-    resolveHierarchical(body, system.bodies, cache, (): WorldVec => [0, 0, 0], (link, parent): WorldVec => {
-      const [x, y, z] = trueOffsetKm(link, date)
-      return [parent[0] + x, parent[1] + y, parent[2] + z]
-    })
-  }
+  for (const body of system.bodies) resolveTruePositionKm(body, system, date, cache)
   return cache
+}
+
+/** One body's true position, km — resolveAllTruePositionsKm's walk for
+ *  just its own parent chain. */
+export function resolveTruePositionKm(body: CelestialBody, system: StarSystemData, date: Date, cache: Map<string, WorldVec> = new Map()): WorldVec {
+  return resolveHierarchical(body, system.bodies, cache, (): WorldVec => [0, 0, 0], (link, parent): WorldVec => {
+    const [x, y, z] = trueOffsetKm(link, date)
+    return [parent[0] + x, parent[1] + y, parent[2] + z]
+  })
 }

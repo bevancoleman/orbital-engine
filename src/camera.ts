@@ -12,6 +12,7 @@ import { compressDistance, trueRadius } from './scale'
 import { ringOuterRadiusKm } from './rings'
 import { MS_PER_DAY } from './constants'
 import { lookupBody } from './hierarchy'
+import { resolveTruePositionKm } from './truePositions'
 import {
   addVec3,
   angleBetweenDeg,
@@ -186,6 +187,12 @@ export interface FocusTarget {
    *  no parent, or the parent already looks bigger than the body and so
    *  can't hide behind it (a satellite over its planet). */
   lookBiasClearanceDeg?: number
+  /** Unit direction from the focused body toward the system's star (true
+   *  positions — the direction star lighting shades from), when the scene
+   *  is lit from the star (`lightFromStar`) so the settled view should be
+   *  on the body's day side — see computeEndDirection. Null or omitted:
+   *  no day-side constraint, the unlit behaviour. */
+  starDirection?: WorldVec | null
   /** The nearest shared ancestor of the body just left and the one being
    *  flown to (see findContextBody) — Earth, when switching between the
    *  ISS and Hubble; the Sun, when switching between Earth and Mars; null
@@ -967,17 +974,40 @@ export function computeArrivalDirection(cameraPos: WorldVec, targetPos: WorldVec
  * far compared to the camera distance, which holds for any arrival
  * framing: the angle between this direction and away-from-parent is then
  * the parent's angle off the view axis on screen.
+ *
+ * `starDirection` (FocusTarget.starDirection, set when the scene is lit
+ * from the star) puts the settled view on the lit side. Looking back at
+ * the parent put the camera on the far side of a body from its parent —
+ * for a planet, the far side from the star: with star lighting on, every
+ * planet arrived as a black disc on its night side (the e2e lighting
+ * checks had to drag the camera round by hand to see anything). The
+ * direction above is turned, the least it can be, until the star is
+ * within DAY_SIDE_PHASE_RANGE_DEG of it, then the parent's clearance is
+ * applied again so the body still doesn't eclipse it. For a planet that
+ * means the star ends up behind the camera, out of frame; for a moon, its
+ * planet usually stays in view beside it. Without it, unchanged.
  */
 export function computeEndDirection(
   arrivalDirection: WorldVec,
   lookBias: WorldVec | null,
   biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT,
-  clearanceDeg = 0
+  clearanceDeg = 0,
+  starDirection: WorldVec | null = null
 ): WorldVec {
-  if (!lookBias) return arrivalDirection
-  const biasLen = lengthVec3(lookBias)
-  if (biasLen <= 1e-9) return arrivalDirection
-  const awayFromParent = scaleVec3(lookBias, -1 / biasLen)
+  const biasLen = lookBias ? lengthVec3(lookBias) : 0
+  const awayFromParent = lookBias && biasLen > 1e-9 ? scaleVec3(lookBias, -1 / biasLen) : null
+  const looking = awayFromParent ? lookBackAtParent(arrivalDirection, awayFromParent, biasWeight, clearanceDeg) : arrivalDirection
+  const sunLength = starDirection ? lengthVec3(starDirection) : 0
+  if (!starDirection || !(sunLength > 1e-9)) return looking
+  const sun = scaleVec3(starDirection, 1 / sunLength)
+  const lit = onDaySide(looking, sun, arrivalDirection)
+  if (!awayFromParent || !(clearanceDeg > 0) || angleBetweenDeg(lit, awayFromParent) >= clearanceDeg) return lit
+  return rotateAwayFrom(awayFromParent, [lit, looking, arrivalDirection], clearanceDeg)
+}
+
+/** computeEndDirection's blend toward looking back at the parent, with
+ *  the parent kept from being eclipsed — see there. */
+function lookBackAtParent(arrivalDirection: WorldVec, awayFromParent: WorldVec, biasWeight: number, clearanceDeg: number): WorldVec {
   const blended: WorldVec = [
     arrivalDirection[0] * (1 - biasWeight) + awayFromParent[0] * biasWeight,
     arrivalDirection[1] * (1 - biasWeight) + awayFromParent[1] * biasWeight,
@@ -986,6 +1016,21 @@ export function computeEndDirection(
   const direction = normalizeOr(blended, arrivalDirection)
   if (!(clearanceDeg > 0) || angleBetweenDeg(direction, awayFromParent) >= clearanceDeg) return direction
   return rotateAwayFrom(awayFromParent, [direction, arrivalDirection], clearanceDeg)
+}
+
+/** The phase angles (star–body–camera, degrees) a star-lit arrival settles
+ *  at — see computeEndDirection. Under ~30° the disc is lit almost face-on
+ *  and looks flat; past ~60° the night side starts to take over. */
+export const DAY_SIDE_PHASE_RANGE_DEG: readonly [number, number] = [30, 50]
+
+/** `direction` turned, in the plane it shares with the star direction
+ *  `sun` (the least turn there is), until its phase angle is inside
+ *  DAY_SIDE_PHASE_RANGE_DEG — unchanged when it already is. */
+function onDaySide(direction: WorldVec, sun: WorldVec, arrivalDirection: WorldVec): WorldVec {
+  const [low, high] = DAY_SIDE_PHASE_RANGE_DEG
+  const phase = angleBetweenDeg(direction, sun)
+  if (phase >= low && phase <= high) return direction
+  return rotateAwayFrom(sun, [direction, arrivalDirection], Math.min(Math.max(phase, low), high))
 }
 
 /** The unit vector `angleDeg` from unit `axis`, on the side of the first
@@ -1019,7 +1064,7 @@ export function computeFlightEndpoint(
   biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT
 ): { position: WorldVec; target: WorldVec; direction: WorldVec } {
   const arrivalDirection = computeArrivalDirection(currentCameraPos, currentTargetPos, fallbackDirection)
-  const direction = computeEndDirection(arrivalDirection, focus.lookBias, biasWeight, focus.lookBiasClearanceDeg ?? 0)
+  const direction = computeEndDirection(arrivalDirection, focus.lookBias, biasWeight, focus.lookBiasClearanceDeg ?? 0, focus.starDirection ?? null)
   return { position: addVec3(focus.position, scaleVec3(direction, focus.distance)), target: focus.position, direction }
 }
 
@@ -1496,7 +1541,8 @@ export function computeFocusForBody(
   system: StarSystemData,
   simDate: Date,
   previousBody: CelestialBody | null = null,
-  framing: BodyFraming = 'body'
+  framing: BodyFraming = 'body',
+  { daySide = false }: { daySide?: boolean } = {}
 ): FocusTarget {
   const bodyPos = resolveWorldPosition(body, system.bodies, simDate)
   const distance = framing === 'system' ? systemFramingDistance(body, bodyPos, system, simDate) : bodyFramingDistance(body)
@@ -1507,7 +1553,22 @@ export function computeFocusForBody(
 
   const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
 
-  return { position: bodyPos, distance, lookBias, lookBiasClearanceDeg, contextBody }
+  const starDirection = daySide ? directionToStar(body, system, simDate) : null
+
+  return { position: bodyPos, distance, lookBias, lookBiasClearanceDeg, contextBody, starDirection }
+}
+
+/** Unit direction from `body` to the system's star, from true positions
+ *  (FocusTarget.starDirection), or null for the star itself or a system
+ *  without one. */
+export function directionToStar(body: CelestialBody, system: StarSystemData, date: Date): WorldVec | null {
+  const star = system.bodies.find((b) => b.type === 'star')
+  if (!star || star.id === body.id) return null
+  const cache = new Map<string, WorldVec>()
+  const from = resolveTruePositionKm(body, system, date, cache)
+  const to = resolveTruePositionKm(star, system, date, cache)
+  const offset = subtractVec3(to, from)
+  return lengthVec3(offset) > 0 ? normalizeOr(offset, offset) : null
 }
 
 /** computeFocusForBody's `'body'` framing distance — see there. It used

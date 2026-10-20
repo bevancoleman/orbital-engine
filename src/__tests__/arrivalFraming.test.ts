@@ -1,5 +1,6 @@
 import {
   BODY_VIEW_FILL,
+  DAY_SIDE_PHASE_RANGE_DEG,
   MAX_CAMERA_DISTANCE,
   RING_VIEW_FILL,
   VERTICAL_FOV_DEG,
@@ -7,11 +8,13 @@ import {
   computeFlightEndpoint,
   computeFocusForBody,
   computeFocusForSystem,
+  directionToStar,
   distanceToFillView,
   minCameraDistanceForRadius,
   type FocusTarget,
 } from '../camera'
 import { trueRadius } from '../scale'
+import { resolveAllTruePositionsKm } from '../truePositions'
 import { SOLAR_SYSTEM } from '../solarSystemData'
 import { angleBetweenDeg } from '../vec3'
 import type { WorldVec } from '../render'
@@ -213,5 +216,73 @@ describe('lookBias clearance — the parent sits beside the body, not behind it'
     const moonAngularRadius = (Math.asin(trueRadius(moon.radiusKm) / focus.distance) * 180) / Math.PI
     expect(angleBetweenDeg(toEarth, toMoon)).toBeGreaterThan(moonAngularRadius)
     expect(angleBetweenDeg(toEarth, toMoon)).toBeLessThan(VERTICAL_FOV_DEG / 2)
+  })
+})
+
+describe('star-lit arrival: the settled view is on the day side', () => {
+  const [LOW, HIGH] = DAY_SIDE_PHASE_RANGE_DEG
+
+  it('turns a night-side view round until the star is 30–50° off it, the least turn there is', () => {
+    // A planet: looking back at its parent (the star) puts the camera on
+    // the far side from it — the night side.
+    const toStar: WorldVec = [1, 0, 0]
+    const arrival: WorldVec = [-0.6, 0.8, 0]
+    const unlit = computeEndDirection(arrival, toStar)
+    expect(angleBetweenDeg(unlit, toStar)).toBeGreaterThan(120)
+    const lit = computeEndDirection(arrival, toStar, undefined, 0, toStar)
+    expect(angleBetweenDeg(lit, toStar)).toBeCloseTo(HIGH, 6)
+    expect(Math.hypot(...lit)).toBeCloseTo(1, 10)
+    // In the plane of the old view and the star: turned, not swung round.
+    expect(lit[2]).toBeCloseTo(0, 10)
+    expect(lit[1]).toBeGreaterThan(0)
+  })
+
+  it('leaves a view already on the day side alone, and pushes a face-on one out to 30°', () => {
+    const sun: WorldVec = [0, 0, 1]
+    const arrival: WorldVec = [0, Math.sin(0.7), Math.cos(0.7)] // ~40° from the star
+    expect(computeEndDirection(arrival, null, undefined, 0, sun)).toEqual(arrival)
+    const faceOn: WorldVec = [0, Math.sin(0.1), Math.cos(0.1)]
+    expect(angleBetweenDeg(computeEndDirection(faceOn, null, undefined, 0, sun), sun)).toBeCloseTo(LOW, 6)
+  })
+
+  it('still keeps the parent from being eclipsed', () => {
+    // A moon with its planet straight towards the star: the day-side
+    // turn alone could swing the view right onto the moon–planet line.
+    const toPlanet: WorldVec = [1, 0, 0]
+    const sun: WorldVec = [-Math.cos(0.6), Math.sin(0.6), 0]
+    const dir = computeEndDirection([-1, 0.01, 0], toPlanet, undefined, 40, sun)
+    expect(angleBetweenDeg(dir, [-1, 0, 0])).toBeGreaterThanOrEqual(40 - 1e-6)
+  })
+
+  it('is unchanged without a star direction — star lighting off', () => {
+    const arrival: WorldVec = [-0.6, 0.8, 0]
+    expect(computeEndDirection(arrival, [1, 0, 0], undefined, 12, null)).toEqual(computeEndDirection(arrival, [1, 0, 0], undefined, 12))
+    expect(computeEndDirection(arrival, [1, 0, 0], undefined, 12, [0, 0, 0])).toEqual(computeEndDirection(arrival, [1, 0, 0], undefined, 12))
+  })
+
+  it('takes the star direction from true positions, only when asked', () => {
+    const mars = find(SOLAR_SYSTEM, 'mars')
+    expect(computeFocusForBody(mars, SOLAR_SYSTEM, DATE).starDirection).toBeNull()
+    const focus = computeFocusForBody(mars, SOLAR_SYSTEM, DATE, null, 'body', { daySide: true })
+    const truePositions = resolveAllTruePositionsKm(SOLAR_SYSTEM, DATE)
+    const [m, sun] = [truePositions.get('mars')!, truePositions.get('sun')!]
+    const expected: WorldVec = [sun[0] - m[0], sun[1] - m[1], sun[2] - m[2]]
+    expect(angleBetweenDeg(focus.starDirection!, expected)).toBeLessThan(1e-5)
+    expect(directionToStar(find(SOLAR_SYSTEM, 'sun'), SOLAR_SYSTEM, DATE)).toBeNull()
+    expect(directionToStar(mars, { ...SOLAR_SYSTEM, bodies: SOLAR_SYSTEM.bodies.filter((b) => b.type !== 'star') }, DATE)).toBeNull()
+  })
+
+  it('lands every planet and moon of the Solar System on its day side, its parent clear of it', () => {
+    for (const target of SOLAR_SYSTEM.bodies.filter((b) => b.type === 'planet' || b.type === 'moon')) {
+      const focus = computeFocusForBody(target, SOLAR_SYSTEM, DATE, null, 'body', { daySide: true })
+      // From wherever the camera was: the whole-system view's direction.
+      const { direction } = computeFlightEndpoint([0, 400, 600], [0, 0, 0], focus, [0, 0, 1])
+      const phase = angleBetweenDeg(direction, focus.starDirection!)
+      expect(phase).toBeGreaterThanOrEqual(LOW - 1e-6)
+      // The clearance turn can add a few degrees past the range.
+      expect(phase).toBeLessThanOrEqual(HIGH + (focus.lookBiasClearanceDeg ?? 0))
+      const away: WorldVec = [-focus.lookBias![0], -focus.lookBias![1], -focus.lookBias![2]]
+      expect(angleBetweenDeg(direction, away)).toBeGreaterThanOrEqual((focus.lookBiasClearanceDeg ?? 0) - 1e-6)
+    }
   })
 })
