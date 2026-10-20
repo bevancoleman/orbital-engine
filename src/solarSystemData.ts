@@ -989,7 +989,7 @@ export const SOLAR_SYSTEM: StarSystemData = {
       parentId: 'sun',
       radiusKm: 5.5,
       color: '#a5f3fc',
-      note: 'Nucleus radius only (no coma/tail modelled). Retrograde, e≈0.97.',
+      note: 'Radius is the nucleus only; the coma and tails are drawn from its orbit. Retrograde, e≈0.97.',
       fixedPosition: null,
       orbit: {
         semiMajorAxisKm: 17.834 * AU_KM,

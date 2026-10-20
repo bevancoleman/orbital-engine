@@ -11,6 +11,8 @@ import type { CelestialBody } from '../types'
 import { glowSprite } from './textures'
 import { hashSeed, TEXTURABLE_BODY_TYPES } from './bodyTypeStyles'
 import { createRefCounter } from './resourceCache'
+import { useSceneLighting } from './sceneLighting'
+import { StarLitAtmosphere, StarLitSphere } from './StarLitShapes'
 
 /**
  * A soft additive rim just outside the surface, sized from the body's real
@@ -23,10 +25,26 @@ import { createRefCounter } from './resourceCache'
  * sphere and a real-textured one (TexturedSphereBody) so a body doesn't
  * lose its atmosphere just because a real surface photo is available for
  * it.
+ *
+ * With star lighting on (see sceneLighting.ts) the rim is star-lit too:
+ * brighter over the day side, fading past the terminator.
  */
 export function AtmosphereRim({ body, color, sphere }: { body: CelestialBody; color: string; sphere: SphereDetail }) {
+  const { store } = useSceneLighting()
   if (!body.atmosphereHeightKm) return null
   const ratio = 1 + body.atmosphereHeightKm / body.radiusKm
+  if (store) {
+    return (
+      <StarLitAtmosphere
+        store={store}
+        bodyId={body.id}
+        color={color}
+        ratio={ratio}
+        widthSegments={sphere.widthSegments}
+        heightSegments={sphere.heightSegments}
+      />
+    )
+  }
   return (
     <mesh>
       <sphereGeometry args={[ratio, sphere.widthSegments, sphere.heightSegments]} />
@@ -88,6 +106,19 @@ export function PlaceholderBodyShape({
   const sphere = sphereDetailFor(detailSize)
   const icosahedronSubdivisions = icosahedronDetailFor(detailSize)
   const torus = torusDetailFor(detailSize)
+  const { store, tailedCometIds } = useSceneLighting()
+  // With star lighting on (see sceneLighting.ts), the natural spheres
+  // take the star-lit material: a real terminator, eclipse and ring
+  // shadows. Without it, the original fixed-light material, unchanged.
+  const litSphere = store ? (
+    <StarLitSphere
+      store={store}
+      bodyId={body.id}
+      color={color}
+      widthSegments={sphere.widthSegments}
+      heightSegments={sphere.heightSegments}
+    />
+  ) : null
 
   switch (body.type) {
     case 'star':
@@ -114,20 +145,24 @@ export function PlaceholderBodyShape({
     case 'dwarf_planet':
       return (
         <>
-          <mesh>
-            <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
-            <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
-          </mesh>
+          {litSphere ?? (
+            <mesh>
+              <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
+              <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
+            </mesh>
+          )}
           <AtmosphereRim body={body} color={color} sphere={sphere} />
         </>
       )
 
     case 'moon':
       return (
-        <mesh>
-          <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
-          <meshStandardMaterial color={color} roughness={0.95} />
-        </mesh>
+        litSphere ?? (
+          <mesh>
+            <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
+            <meshStandardMaterial color={color} roughness={0.95} />
+          </mesh>
+        )
       )
 
     case 'asteroid':
@@ -154,20 +189,22 @@ export function PlaceholderBodyShape({
             <meshStandardMaterial color={color} roughness={0.6} />
           </mesh>
           {/* A faint trailing streak — comets are the one body type whose
-              defining visual feature isn't its own shape at all. Not aimed
-              away from the parent star (this engine has no per-frame "sun
-              direction" concept for a fixed body), just a fixed, recognisable
-              tail rather than omitting the feature entirely. */}
-          <sprite scale={[9, 2.4, 1]} position={[3.5, 0, 0]}>
-            <spriteMaterial
-              map={glowSprite()}
-              color={color}
-              transparent
-              opacity={0.25}
-              blending={THREE.AdditiveBlending}
-              depthWrite={false}
-            />
-          </sprite>
+              defining visual feature isn't its own shape at all. Only drawn
+              when there's no real tail (CometTails, which needs an orbit
+              round the system's star): a fixed, recognisable mark rather
+              than omitting the feature entirely. */}
+          {!tailedCometIds.has(body.id) && (
+            <sprite scale={[9, 2.4, 1]} position={[3.5, 0, 0]}>
+              <spriteMaterial
+                map={glowSprite()}
+                color={color}
+                transparent
+                opacity={0.25}
+                blending={THREE.AdditiveBlending}
+                depthWrite={false}
+              />
+            </sprite>
+          )}
         </>
       )
 
@@ -360,12 +397,24 @@ function TexturedSphereBody({
     }
   }, [textureUrl, texture])
   const sphere = sphereDetailFor(detailSize)
+  const { store } = useSceneLighting()
   return (
     <>
-      <mesh>
-        <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
-        <meshStandardMaterial map={texture} roughness={0.9} metalness={0.05} />
-      </mesh>
+      {store ? (
+        <StarLitSphere
+          store={store}
+          bodyId={body.id}
+          color={color}
+          map={texture}
+          widthSegments={sphere.widthSegments}
+          heightSegments={sphere.heightSegments}
+        />
+      ) : (
+        <mesh>
+          <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
+          <meshStandardMaterial map={texture} roughness={0.9} metalness={0.05} />
+        </mesh>
+      )}
       <AtmosphereRim body={body} color={color} sphere={sphere} />
     </>
   )

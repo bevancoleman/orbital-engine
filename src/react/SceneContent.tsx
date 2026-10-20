@@ -10,6 +10,7 @@ import type { CelestialBody, StarSystemData } from '../types'
 import { OrbitPathLine, ReferenceOrbitRing, RoutePreviewLine } from './OrbitLines'
 import { BeltGlowRing, BeltPoints, BeltSites } from './BeltRendering'
 import { BodyMarker } from './BodyMarker'
+import { CometTails } from './CometTails'
 import { ProximitySelector } from './ProximitySelector'
 import { NON_ORBITING_MARKER_TYPES } from './bodyTypeStyles'
 import { propsEqualWithVectors } from './memoEquality'
@@ -132,6 +133,7 @@ export const SceneContent = memo(function SceneContent({
           />
         )
       })}
+      <CometTails system={system} frame={frame} />
       {system.belts?.map((belt) => {
         const parentWorldPos = positions.get(belt.parentId) ?? ORIGIN
         return (

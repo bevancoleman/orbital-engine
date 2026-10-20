@@ -22,6 +22,9 @@ import type { CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
 import { RenderPass } from './RenderPass'
 import { StarLight } from './StarLight'
+import { DEFAULT_STAR_LIGHTING, createStarLightingStore, type StarLightingSettings } from './starLighting'
+import { SceneLightingContext, type SceneLighting } from './sceneLighting'
+import { tailedComets } from './CometTails'
 import { CameraRig } from './CameraRig'
 import type { CameraActivity } from './cameraFlightLifecycle'
 import { PerfStats, type RendererStats } from './PerfStats'
@@ -80,8 +83,42 @@ export interface OrbitalSystemSceneProps {
    * fictional system might not). If `true` and the system genuinely has
    * no `type: 'star'` body, this safely renders no star-based light
    * (falls back to just the ambient fill light) rather than guessing.
+   *
+   * Natural bodies (planets, moons, dwarf planets — placeholder or real
+   * texture), ring discs and atmospheres are then shaded from the star's
+   * TRUE direction, with analytic eclipse shadows (a moon's on its
+   * planet, a planet's on its moons) and ring shadows (a planet's on its
+   * rings and its rings' on it) — see `starLighting`. Real glTF models
+   * and the other placeholder shapes are lit by a point light at the star.
    */
   lightFromStar?: boolean
+  /**
+   * Tunes `lightFromStar` (ignored without it). Every field is optional:
+   * - `nightSideBrightness` (default 0.04) — how much of a body's full-sun
+   *   brightness its night side keeps: a legibility floor, since a real
+   *   airless night side is black. 0 is physically honest.
+   * - `ringShadows` (default true) — a planet's shadow on its rings and
+   *   the rings' on the planet (Saturn, Uranus).
+   * - `eclipseShadows` (default true) — moons' shadows on their planets
+   *   and planets' on their moons, umbra and penumbra.
+   * Changing it at runtime is a uniform write, not a rebuild.
+   */
+  starLighting?: Partial<StarLightingSettings>
+  /**
+   * Draws real ion and dust tails on every comet that orbits the system's
+   * star (see comets.ts for the physics): the ion tail straight out from
+   * the star, the dust tail curving behind the orbit, both growing as
+   * the comet nears the star and gone beyond ~5 AU. Default true — the
+   * alternative is a fixed streak that doesn't point anywhere in
+   * particular, which is what a comet without such an orbit still gets.
+   */
+  cometTails?: boolean
+  /**
+   * The simulated date to start at, instead of now — a Date or ms since
+   * the epoch (e.g. Halley's 1986 perihelion, or an eclipse). Only read on
+   * mount, like `initialPlaying`.
+   */
+  initialDate?: Date | number
   /**
    * Renders a dev-only overlay panel (top-left) with live FPS, draw calls,
    * triangle/GPU-memory counts, JS heap usage where the browser exposes it,
@@ -169,6 +206,9 @@ export function OrbitalSystemScene({
   onSelectBody,
   externalFocus,
   lightFromStar,
+  starLighting,
+  cometTails = true,
+  initialDate,
   routePreview,
   devMode,
   initialPlaying = false,
@@ -177,7 +217,7 @@ export function OrbitalSystemScene({
   flightPacing,
   arrivalFraming = 'body',
 }: OrbitalSystemSceneProps) {
-  const clock = useSimulationClock(initialPlaying, initialDaysPerSecond)
+  const clock = useSimulationClock(initialPlaying, initialDaysPerSecond, initialDate instanceof Date ? initialDate.getTime() : initialDate)
   const log = useActionLog(onAction, clock.simDateRef)
   const index = useMemo(() => buildSystemIndex(system), [system])
   // Hover / visible-label / visible-body state, written every frame by
@@ -286,6 +326,23 @@ export function OrbitalSystemScene({
   // for as long as the camera is still near it — see that file's own
   // comment on the jump this fixes).
   const colliderBodies = useMemo(() => liveColliderBodies(system, frame), [system, frame])
+  // Star lighting's per-frame state (see starLighting.ts) — one per
+  // system; null for a system with no star. The settings are written onto
+  // it rather than recreating it, so a toggle doesn't remount anything.
+  const lightingStore = useMemo(() => createStarLightingStore(system), [system])
+  const nightSideBrightness = starLighting?.nightSideBrightness ?? DEFAULT_STAR_LIGHTING.nightSideBrightness
+  const ringShadows = starLighting?.ringShadows ?? DEFAULT_STAR_LIGHTING.ringShadows
+  const eclipseShadows = starLighting?.eclipseShadows ?? DEFAULT_STAR_LIGHTING.eclipseShadows
+  useEffect(() => {
+    if (lightingStore) lightingStore.settings = { nightSideBrightness, ringShadows, eclipseShadows }
+  }, [lightingStore, nightSideBrightness, ringShadows, eclipseShadows])
+  const sceneLighting = useMemo<SceneLighting>(
+    () => ({
+      store: lightFromStar ? lightingStore : null,
+      tailedCometIds: new Set(cometTails ? tailedComets(system).map((c) => c.id) : []),
+    }),
+    [lightFromStar, lightingStore, cometTails, system]
+  )
   // The body the camera is centred on right now — CameraRig excludes this
   // (and, transiently, whatever it's flying away FROM) from colliderBodies
   // so the camera can actually get close to/inside it at true scale. A
@@ -372,7 +429,11 @@ export function OrbitalSystemScene({
         >
           <CanvasAccessibleName label={`${system.name} — interactive orbital map`} />
           <color attach="background" args={['#000000']} />
-          <ambientLight intensity={0.45} />
+          <ambientLight
+            // Under star lighting, the same night-side floor the star-lit
+            // materials use (three's Lambert divides by π, theirs doesn't).
+            intensity={lightFromStar ? nightSideBrightness * Math.PI : 0.45}
+          />
           {!lightFromStar && (
             /* A single fixed-direction light so lit bodies (planets/moons/
                asteroids/stations — see BodyShape) read as shaded 3D spheres
@@ -403,19 +464,21 @@ export function OrbitalSystemScene({
               // Real day/night shading, from the system's actual star
               // position — see StarLight's own comment for the reasoning
               // and the star-less-system fallback.
-              <StarLight system={system} frame={frame} />
+              <StarLight system={system} frame={frame} store={lightingStore} />
             )}
-            <SceneContent
-              // A fresh subtree per system — see SceneContent's own comment.
-              key={system.id}
-              system={system}
-              frame={frame}
-              selectedId={selectedBody?.id ?? null}
-              cameraDistance={cameraDistance}
-              onSelect={nav.selectBody}
-              interaction={interaction}
-              routePreview={routePreview ?? null}
-            />
+            <SceneLightingContext.Provider value={sceneLighting}>
+              <SceneContent
+                // A fresh subtree per system — see SceneContent's own comment.
+                key={system.id}
+                system={system}
+                frame={frame}
+                selectedId={selectedBody?.id ?? null}
+                cameraDistance={cameraDistance}
+                onSelect={nav.selectBody}
+                interaction={interaction}
+                routePreview={routePreview ?? null}
+              />
+            </SceneLightingContext.Provider>
           </group>
           <CameraRig
             focus={nav.focus}

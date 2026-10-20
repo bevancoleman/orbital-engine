@@ -39,11 +39,12 @@ export interface SimulationClock {
  * `commit` — see simulationTime.ts's stepPlayback for why the two are
  * split. `initialDaysPerSecond` comes from the consumer (a deep link, a
  * saved session) with no range guarantee, so it's clamped rather than
- * trusted directly.
+ * trusted directly. `initialTimeMs` (ms since the epoch) starts the clock
+ * somewhere other than now; a non-finite value falls back to now.
  */
-export function useSimulationClock(initialPlaying: boolean, initialDaysPerSecond: number): SimulationClock {
+export function useSimulationClock(initialPlaying: boolean, initialDaysPerSecond: number, initialTimeMs?: number): SimulationClock {
   const timeRef = useRef<number | null>(null)
-  if (timeRef.current === null) timeRef.current = Date.now()
+  if (timeRef.current === null) timeRef.current = initialTimeMs !== undefined && Number.isFinite(initialTimeMs) ? initialTimeMs : Date.now()
   const simTimeRef = timeRef as { readonly current: number }
   const [simDate, setSimDate] = useState(() => new Date(simTimeRef.current))
   const [playing, setRawPlaying] = useState(initialPlaying)

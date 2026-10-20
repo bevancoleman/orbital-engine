@@ -1,8 +1,10 @@
 import { useMemo, useRef } from 'react'
+import { useFrame } from '@react-three/fiber'
 import type * as THREE from 'three'
 import type { StarSystemData } from '../types'
 import type { FramePositions } from './framePositions'
-import { useFollowPosition } from './useFollowPosition'
+import type { StarLightingStore } from './starLighting'
+import { FOLLOW_PRIORITY, useFollowPosition } from './useFollowPosition'
 
 /**
  * A point light at the system's actual star position — every other body
@@ -20,18 +22,31 @@ import { useFollowPosition } from './useFollowPosition'
  * null) if the system has no `type: 'star'` body, so turning this on for
  * a star-less fictional system safely falls back to no light from this
  * component at all rather than guessing at a position.
+ *
+ * The point light only lights three's own materials — real glTF models,
+ * asteroids, stations. Natural spheres, ring discs and atmospheres use
+ * the star-lit materials instead (starLitMaterials.ts), which take the
+ * star's TRUE direction and the eclipse/ring-shadow geometry from
+ * `store`, updated here once per frame after TimeDriver has moved the
+ * simulated time on.
  */
 export function StarLight({
   system,
   frame,
+  store,
   intensity = 2.2,
 }: {
   system: StarSystemData
   /** Live positions — the light follows the star every frame. */
   frame: FramePositions
+  store: StarLightingStore | null
   intensity?: number
 }) {
   const star = useMemo(() => system.bodies.find((b) => b.type === 'star'), [system])
+  // Before the body groups follow their positions (FOLLOW_PRIORITY) — not
+  // that they depend on it, but it keeps every per-frame write for this
+  // frame's time ahead of anything that draws.
+  useFrame(() => store?.update(frame.date), FOLLOW_PRIORITY - 0.1)
   if (!star) return null
   return <StarPointLight position={frame.positions.get(star.id) ?? ORIGIN} intensity={intensity} />
 }
