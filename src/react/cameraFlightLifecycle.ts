@@ -189,7 +189,10 @@ export function beginFlight(
       durationMs: Math.max(
         1,
         focus.flightDurationMs ??
-          flightDurationMs({ startPosition: currentCameraPos, startTarget: currentTargetPos, endPosition, endTarget }, params.pacing)
+          flightDurationMs(
+            { startPosition: currentCameraPos, startTarget: currentTargetPos, endPosition, endTarget, contextBody: focus.contextBody },
+            params.pacing
+          )
       ),
       contextBody: focus.contextBody,
       predictedTargetAt: focus.predictedTargetAt ?? null,

@@ -8,7 +8,6 @@ import {
   computeFocusForBody,
   computeFocusForSystem,
   distanceToFillView,
-  distanceToFit,
   minCameraDistanceForRadius,
   type FocusTarget,
 } from '../camera'
@@ -57,8 +56,9 @@ describe('distanceToFillView', () => {
     expect(distanceToFillView(0, 0.4)).toBe(minCameraDistanceForRadius(0))
     expect(distanceToFillView(Number.NaN, 0.4)).toBe(minCameraDistanceForRadius(0))
     expect(distanceToFillView(1e9, 0.4)).toBe(MAX_CAMERA_DISTANCE)
-    const iss = trueRadius(0.055)
-    expect(distanceToFillView(iss, 0.4)).toBe(minCameraDistanceForRadius(iss))
+    // Only a radius below the floor itself is floored now — the ISS is
+    // well above it (see ABSOLUTE_MIN_CAMERA_DISTANCE).
+    expect(distanceToFillView(1e-13, 0.4)).toBe(minCameraDistanceForRadius(1e-13))
   })
 
   it('falls back to the default fill for a fill outside (0, 1]', () => {
@@ -106,14 +106,16 @@ describe('computeFocusForBody — arrival framing', () => {
     expect(viewFill(trueRadius(saturn.radiusKm), focus.distance)).toBeGreaterThan(0.25)
   })
 
-  it('keeps a true-scale-tiny satellite where it always arrived, with zoom room left above the precision floor', () => {
+  it('frames a true-scale-tiny satellite (ISS, Hubble) at the fill target like any other body, with zoom room left', () => {
+    // They used to be held back by a float-precision floor
+    // (ABSOLUTE_MIN_CAMERA_DISTANCE = 1e-6) and arrived as a speck; the
+    // floating-origin, distance-normalized render took that limit away.
     for (const id of ['iss', 'hubble']) {
       const satellite = find(SOLAR_SYSTEM, id)
       const radius = trueRadius(satellite.radiusKm)
       const focus = computeFocusForBody(satellite, SOLAR_SYSTEM, DATE)
-      expect(focus.distance).toBe(computeFocusForBody(satellite, SOLAR_SYSTEM, DATE, null, 'system').distance)
-      expect(focus.distance).toBe(distanceToFit(radius))
-      expect(focus.distance).toBeGreaterThan(minCameraDistanceForRadius(radius) * 2)
+      expect(viewFill(radius, focus.distance)).toBeCloseTo(BODY_VIEW_FILL, 6)
+      expect(focus.distance).toBeGreaterThan(minCameraDistanceForRadius(radius) * 20)
     }
   })
 

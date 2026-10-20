@@ -65,7 +65,7 @@ export interface FlightPacing {
  *  shorter than the flight itself, e.g. the ISS at higher simulated time)
  *  — so the duration is computed first, from the current endpoints, and
  *  carried on the focus (FocusTarget.flightDurationMs) into the flight. */
-export const DEFAULT_FLIGHT_PACING: Readonly<Required<FlightPacing>> = Object.freeze({ speed: 1, minMs: 1200, maxMs: 4000 })
+export const DEFAULT_FLIGHT_PACING: Readonly<Required<FlightPacing>> = Object.freeze({ speed: 1, minMs: 1200, maxMs: 5000 })
 
 // The Canvas's own DEFAULT near clip plane (see OrbitalSystemScene's
 // <Canvas near=... /> mount-time value) — used when nothing meaningfully
@@ -89,14 +89,26 @@ export const MIN_CAMERA_DISTANCE = 0.015
 // value) — the basis MIN_CAMERA_DISTANCE derives its margin from.
 export const DEFAULT_NEAR_PLANE = 0.01
 
-// The one genuinely hard, un-scalable floor left: driven by floating-point
-// precision in the camera's projection matrix (its near/far ratio), not by
-// artistic choice. The logarithmic depth buffer (see OrbitalSystemScene's
-// Canvas gl={{logarithmicDepthBuffer}}) fixes DEPTH-BUFFER precision, not
-// the near plane's own value — shrinking near indefinitely still
-// eventually produces visible z-fighting/flicker regardless. Empirically
-// tunable if that reappears at this value.
-export const ABSOLUTE_MIN_CAMERA_DISTANCE = 1e-6
+// The hard floor on how close the camera can get, and on the near plane.
+//
+// It used to be 1e-6, set by GPU precision: everything was rendered in
+// absolute world coordinates (the camera ~31 units from the origin, near
+// Earth) with three's logarithmic depth buffer, whose depth is log2(1 + w)
+// of the ABSOLUTE view distance w — close to linear for w << 1, which left
+// a depth step of ~1e-6 world units at any distance. The ISS (radius ~5e-8)
+// sat inside a single depth step, and couldn't be framed bigger than a
+// speck — "we have a lot of small objects (ISS, Hubble) and no way of
+// seeing them." The scene is now rendered camera-relative and
+// distance-normalized (see react/floatingOrigin.ts): every object at
+// (world - camera) / viewing distance, computed in float64 on the CPU, so
+// the GPU always works around w ~ 1 whatever the zoom.
+//
+// What's left is float64 itself: world coordinates up to ~100 units carry
+// ~1.4e-14 of absolute precision, and camera-controls keeps its target and
+// position in world coordinates. 1e-10 leaves that ~10^4 steps across the
+// closest possible viewing distance — sub-pixel — and is still 500x below
+// the ISS's own radius.
+export const ABSOLUTE_MIN_CAMERA_DISTANCE = 1e-10
 
 /**
  * Near clip plane sized to whatever's actually selected, rather than one
@@ -464,8 +476,9 @@ export function flightPathLength(startPosition: WorldVec, startTarget: WorldVec,
 
 /** Default pace: path length (view widths — see flightPathLength) covered
  *  per second at `speed` 1. Tuned on the Solar System routes in
- *  flightSmoothness.test.ts: a Moon → ISS dive (S ≈ 12) takes ~2.4s,
- *  Hubble → Mars (S ≈ 18) ~3.6s. At this pace the log-distance step per
+ *  flightSmoothness.test.ts: a Moon → ISS dive (S ≈ 14.5) takes ~2.9s,
+ *  Hubble → Mars (S ≈ 23) ~4.5s — longer than before satellites could be
+ *  framed up close (S ≈ 12.7 and 19.8), since the zoom spans more. At this pace the log-distance step per
  *  60fps frame peaks at ρ · 1.5 · 5 / 60 ≈ 0.18 (≈ 1.2x per frame) for any
  *  flight between the clamps. */
 export const FLIGHT_PATH_SPEED = 5
@@ -476,12 +489,39 @@ export const FLIGHT_PATH_SPEED = 5
  *  2.25° per 60fps frame — under the 3°/frame smoothness ceiling. */
 export const FLIGHT_TURN_DEG_PER_SECOND = 90
 
-/** Endpoints a duration (or a path) is planned from. */
+/** Endpoints a duration (or a path) is planned from — plus, optionally,
+ *  the flight's context body (see FocusTarget.contextBody), whose bulge
+ *  changes how the view turns mid-flight (see flightDurationMs). */
 export interface FlightEndpointPair {
   startPosition: WorldVec
   startTarget: WorldVec
   endPosition: WorldVec
   endTarget: WorldVec
+  contextBody?: { position: WorldVec; radius: number } | null
+}
+
+/** The fastest the view may turn at any moment of a flight — 2.75° per
+ *  60fps frame, just under the 3°/frame smoothness ceiling (a little more
+ *  headroom than the end-to-end rule's 2.25° peak: this one is measured on
+ *  the path itself, not inferred from its ends). See flightDurationMs. */
+export const FLIGHT_PEAK_TURN_DEG_PER_SECOND = 165
+
+/** How finely flightDurationMs samples a path for its fastest turn. */
+const TURN_SAMPLES = 96
+
+/** The view's fastest turn along the flight's path, in degrees per unit
+ *  of progress (the whole flight is progress 0 → 1). */
+function peakTurnPerProgress(flight: FlightEndpointPair): number {
+  const endpoints: FlightEndpoints = { ...flight, contextBody: flight.contextBody ?? null, predictedTargetAt: null }
+  let previous = sampleFlightFrame(endpoints, 0)
+  let peak = 0
+  for (let i = 1; i <= TURN_SAMPLES; i++) {
+    const next = sampleFlightFrame(endpoints, i / TURN_SAMPLES)
+    const turn = angleBetweenDeg(subtractVec3(previous.target, previous.position), subtractVec3(next.target, next.position))
+    if (Number.isFinite(turn)) peak = Math.max(peak, turn * TURN_SAMPLES)
+    previous = next
+  }
+  return peak
 }
 
 function positiveOr(value: number | undefined, fallback: number): number {
@@ -494,6 +534,15 @@ function positiveOr(value: number | undefined, fallback: number): number {
  * FLIGHT_PATH_SPEED), or to the view's turn when that's the bigger job
  * (see FLIGHT_TURN_DEG_PER_SECOND), divided by `pacing.speed` and clamped
  * to [minMs, maxMs]. Invalid pacing values fall back to the defaults.
+ *
+ * The turn is measured two ways: end to end, and at its fastest along the
+ * actual path (FLIGHT_PEAK_TURN_DEG_PER_SECOND). The end-to-end angle
+ * alone missed a turn concentrated mid-flight: a flight between two
+ * close-up satellites (ISS ↔ Hubble) zooms out to frame Earth (the
+ * context bulge) and does most of its turning up there — and once the
+ * satellites could be framed up close (see ABSOLUTE_MIN_CAMERA_DISTANCE)
+ * the zoom took a bigger share of the flight, squeezing that turn to
+ * 3.5° a frame, past the 3° ceiling.
  */
 export function flightDurationMs(flight: FlightEndpointPair, pacing: FlightPacing = {}): number {
   const speed = positiveOr(pacing.speed, DEFAULT_FLIGHT_PACING.speed)
@@ -501,7 +550,12 @@ export function flightDurationMs(flight: FlightEndpointPair, pacing: FlightPacin
   const maxMs = Math.max(minMs, positiveOr(pacing.maxMs, DEFAULT_FLIGHT_PACING.maxMs))
   const length = flightPathLength(flight.startPosition, flight.startTarget, flight.endPosition, flight.endTarget)
   const turnDeg = angleBetweenDeg(subtractVec3(flight.startPosition, flight.startTarget), subtractVec3(flight.endPosition, flight.endTarget))
-  const seconds = Math.max(length / FLIGHT_PATH_SPEED, turnDeg / FLIGHT_TURN_DEG_PER_SECOND) / speed
+  const seconds =
+    Math.max(
+      length / FLIGHT_PATH_SPEED,
+      turnDeg / FLIGHT_TURN_DEG_PER_SECOND,
+      peakTurnPerProgress(flight) / FLIGHT_PEAK_TURN_DEG_PER_SECOND
+    ) / speed
   return Math.min(maxMs, Math.max(minMs, seconds * 1000))
 }
 
@@ -534,7 +588,10 @@ export function planFocusFlight(
   const durationFor = (focus: FocusTarget): number => {
     if (!pose) return flightDurationMs({ startPosition: [0, 0, 1], startTarget: [0, 0, 0], endPosition: [0, 0, 1], endTarget: [0, 0, 0] }, pacing)
     const end = computeFlightEndpoint(pose.position, pose.target, focus, DEFAULT_VIEW_DIRECTION)
-    return flightDurationMs({ startPosition: pose.position, startTarget: pose.target, endPosition: end.position, endTarget: end.target }, pacing)
+    return flightDurationMs(
+      { startPosition: pose.position, startTarget: pose.target, endPosition: end.position, endTarget: end.target, contextBody: focus.contextBody },
+      pacing
+    )
   }
   const firstGuess = durationFor(focusAt(0))
   let focus = focusAt(firstGuess)
@@ -1366,9 +1423,8 @@ export function distanceToFit(worldRadius: number, marginFactor = 2.2): number {
  * even close in where perspective makes a sphere look bigger than r/d
  * suggests. distanceToFit's margin convention can't express "fill 40% of
  * the view" directly, and 'body' framing (see computeFocusForBody) is
- * specified exactly that way. Same floor (minCameraDistanceForRadius, so a
- * true-scale-tiny satellite stays at the float-precision floor rather
- * than inside the near plane) and ceiling as distanceToFit. A fill outside
+ * specified exactly that way. Same floor (minCameraDistanceForRadius, so
+ * nothing ever frames inside the near plane) and ceiling as distanceToFit. A fill outside
  * (0, 1] falls back to BODY_VIEW_FILL.
  */
 export function distanceToFillView(worldRadius: number, fill: number = BODY_VIEW_FILL): number {
@@ -1415,11 +1471,9 @@ export function distanceToFillView(worldRadius: number, fill: number = BODY_VIEW
  * close range — never the pixel floor (see pixelFloor.ts), which is a
  * screen-space visual aid only. A body loaded from a real model (modelUrl)
  * is normalised to unit radius and scaled by that same radius (see
- * BodyShapes.tsx), so it frames the same way as a placeholder sphere.
- * A true-scale-tiny satellite (the ISS, Hubble) can't reach the fill
- * target: the precision floor (minCameraDistanceForRadius) holds the
- * camera further out, at the same distance it always arrived at (see
- * bodyFramingDistance).
+ * BodyShapes.tsx), so it frames the same way as a placeholder sphere —
+ * a true-scale-tiny satellite (the ISS, Hubble) included, now that the
+ * precision floor sits far below it (see ABSOLUTE_MIN_CAMERA_DISTANCE).
  *
  * `simDate` doesn't have to be "now" — OrbitalSystemScene deliberately
  * passes a date advanced by the coming flight's own duration's worth of
@@ -1456,18 +1510,17 @@ export function computeFocusForBody(
   return { position: bodyPos, distance, lookBias, lookBiasClearanceDeg, contextBody }
 }
 
-/** computeFocusForBody's `'body'` framing distance — see there.
- *  distanceToFit(radius) is a lower bound that only ever binds for a body
- *  below the precision floor (for anything bigger it's ~0.86x the fill
- *  distance): there, arriving AT the hard floor would leave the zoom
- *  slider no room to go closer, and made the Hubble → ISS hop turn faster
- *  than the 3°/frame smoothness ceiling (see flightSmoothness.test.ts) —
- *  distanceToFit keeps the satellite framing exactly what it was. */
+/** computeFocusForBody's `'body'` framing distance — see there. It used
+ *  to keep distanceToFit(radius) as a lower bound for satellites below the
+ *  old 1e-6 precision floor (arriving AT the floor left the zoom slider no
+ *  room, and made the Hubble → ISS hop turn too fast); with the floor now
+ *  far below them (see ABSOLUTE_MIN_CAMERA_DISTANCE) they frame at the
+ *  fill target like every other body. */
 function bodyFramingDistance(body: CelestialBody): number {
   const radius = trueRadius(body.radiusKm)
   const ringOuterKm = ringOuterRadiusKm(body)
   const ringDistance = ringOuterKm === null ? 0 : distanceToFillView(trueRadius(ringOuterKm), RING_VIEW_FILL)
-  return Math.max(distanceToFillView(radius), distanceToFit(radius), ringDistance)
+  return Math.max(distanceToFillView(radius), ringDistance)
 }
 
 /** computeFocusForBody's `'system'` framing distance — see there. */

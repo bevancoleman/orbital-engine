@@ -57,6 +57,14 @@ describe('nearPlaneForRadius / minCameraDistanceForRadius', () => {
     expect(nearPlaneForRadius(1e-15)).toBe(ABSOLUTE_MIN_CAMERA_DISTANCE)
   })
 
+  it('puts that floor far enough below the smallest real satellites to frame them up close', () => {
+    // The ISS (~5x10⁻⁸ world units) must be able to fill BODY_VIEW_FILL of
+    // the view (~5.5 radii away) with room to zoom in further.
+    const issRadius = trueRadius(0.055)
+    expect(ABSOLUTE_MIN_CAMERA_DISTANCE).toBeLessThan(issRadius / 100)
+    expect(nearPlaneForRadius(issRadius)).toBeCloseTo(issRadius * 0.05, 20)
+  })
+
   it('never grows the near plane past the fixed default, even for a huge body', () => {
     expect(nearPlaneForRadius(1_000_000)).toBe(DEFAULT_NEAR_PLANE)
   })

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
+import type * as THREE from 'three'
 import { trueRadius } from '../scale'
 import {
   DEFAULT_CAMERA_DISTANCE,
@@ -9,7 +10,6 @@ import {
   MAX_CAMERA_DISTANCE,
   VERTICAL_FOV_DEG,
   minCameraDistanceForRadius,
-  nearPlaneForRadius,
   type BodyFraming,
   type CameraPose,
   type FlightPacing,
@@ -20,6 +20,7 @@ import type { ActionLogEntry } from '../actionLog'
 import { validateSystemData } from '../validateSystemData'
 import type { CelestialBody, StarSystemData } from '../types'
 import { SceneContent } from './SceneContent'
+import { RenderPass } from './RenderPass'
 import { StarLight } from './StarLight'
 import { CameraRig } from './CameraRig'
 import type { CameraActivity } from './cameraFlightLifecycle'
@@ -129,7 +130,7 @@ export interface OrbitalSystemSceneProps {
    * it really travels — zooming out far enough to see both ends, panning,
    * zooming back in (van Wijk & Nuij's smooth zoom-and-pan path) — at
    * `speed` (a multiplier on the default pace; 2 = twice as fast), clamped
-   * to [`minMs`, `maxMs`]. Defaults: `{ speed: 1, minMs: 1200, maxMs: 4000 }`.
+   * to [`minMs`, `maxMs`]. Defaults: `{ speed: 1, minMs: 1200, maxMs: 5000 }`.
    * Read when a flight starts, so a change applies to the next one.
    */
   flightPacing?: FlightPacing
@@ -204,6 +205,8 @@ export function OrbitalSystemScene({
   // selection plans its flight's duration (and its arrival prediction)
   // from it. A ref, not state: it changes every frame.
   const cameraPose = useRef<CameraPose | null>(null)
+  // The scene's world-space content, rebased for drawing — see RenderPass.
+  const worldRoot = useRef<THREE.Group>(null)
   const nav = useSelectionNavigation({
     system,
     index,
@@ -250,15 +253,17 @@ export function OrbitalSystemScene({
   // data). Recomputed whenever a different system loads in, not per frame.
   const dataWarnings = useMemo(() => (devMode ? validateSystemData(system) : []), [system, devMode])
 
-  // Both derived from the selected body's own true-scale radius (see
-  // camera.ts's nearPlaneForRadius/minCameraDistanceForRadius) — replacing
-  // one fixed floor everywhere with a per-selection one is the actual fix
-  // for zoom feeling capped: a fixed floor sized for a whole solar system
-  // held the camera at arm's length from anything true-scale-tiny (the ISS
-  // is ~5x10⁻⁸ world units — a "comfortable" floor for Earth is 300,000x
-  // that). null (nothing selected) falls back to the old fixed defaults.
+  // The camera-distance floor, derived from the selected body's own
+  // true-scale radius (see camera.ts's minCameraDistanceForRadius) —
+  // replacing one fixed floor everywhere with a per-selection one is the
+  // actual fix for zoom feeling capped: a fixed floor sized for a whole
+  // solar system held the camera at arm's length from anything
+  // true-scale-tiny (the ISS is ~5x10⁻⁸ world units — a "comfortable"
+  // floor for Earth is 300,000x that). null (nothing selected) falls back
+  // to the old fixed default. The near clip plane used to be derived the
+  // same way; it now follows the viewing distance every frame (see
+  // CameraRig's applyClipPlanes and floatingOrigin.ts).
   const selectedBodyRadius = selectedBody ? trueRadius(selectedBody.radiusKm) : null
-  const dynamicNearPlane = nearPlaneForRadius(selectedBodyRadius)
   // The zoom slider's own effective minimum, and the camera's hard floor
   // (see CameraRig's minDistance prop) — shared so the slider's displayed
   // position always agrees with what range [0, 1] actually spans.
@@ -368,12 +373,7 @@ export function OrbitalSystemScene({
           <CanvasAccessibleName label={`${system.name} — interactive orbital map`} />
           <color attach="background" args={['#000000']} />
           <ambientLight intensity={0.45} />
-          {lightFromStar ? (
-            // Real day/night shading, from the system's actual star
-            // position — see StarLight's own comment for the reasoning
-            // and the star-less-system fallback.
-            <StarLight system={system} frame={frame} />
-          ) : (
+          {!lightFromStar && (
             /* A single fixed-direction light so lit bodies (planets/moons/
                asteroids/stations — see BodyShape) read as shaded 3D spheres
                instead of flat colour discs. Not tied to any body's real
@@ -393,17 +393,30 @@ export function OrbitalSystemScene({
             commit={clock.commit}
             frame={frame}
           />
-          <SceneContent
-            // A fresh subtree per system — see SceneContent's own comment.
-            key={system.id}
-            system={system}
-            frame={frame}
-            selectedId={selectedBody?.id ?? null}
-            cameraDistance={cameraDistance}
-            onSelect={nav.selectBody}
-            interaction={interaction}
-            routePreview={routePreview ?? null}
-          />
+          {/* Everything drawn in world coordinates — rebased onto the
+              camera and normalized by the viewing distance for the draw
+              call alone (see RenderPass / floatingOrigin.ts). CameraRig's
+              invisible collider proxies stay outside: camera-controls
+              raycasts them in world coordinates. */}
+          <group ref={worldRoot}>
+            {lightFromStar && (
+              // Real day/night shading, from the system's actual star
+              // position — see StarLight's own comment for the reasoning
+              // and the star-less-system fallback.
+              <StarLight system={system} frame={frame} />
+            )}
+            <SceneContent
+              // A fresh subtree per system — see SceneContent's own comment.
+              key={system.id}
+              system={system}
+              frame={frame}
+              selectedId={selectedBody?.id ?? null}
+              cameraDistance={cameraDistance}
+              onSelect={nav.selectBody}
+              interaction={interaction}
+              routePreview={routePreview ?? null}
+            />
+          </group>
           <CameraRig
             focus={nav.focus}
             trackedBody={selectedBody}
@@ -415,12 +428,12 @@ export function OrbitalSystemScene({
             manualDistance={manualZoomDistanceRef}
             onDistanceChange={setCameraDistance}
             minDistance={zoomSliderMinDistance}
-            nearPlane={dynamicNearPlane}
             onActivityChange={setCameraActivity}
             flightPacing={flightPacing}
             cameraPose={cameraPose}
           />
           {devMode && <PerfStats onUpdate={setRendererStats} />}
+          <RenderPass root={worldRoot} cameraPose={cameraPose} />
         </Canvas>
 
         {devMode && (

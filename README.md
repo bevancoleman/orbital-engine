@@ -216,7 +216,7 @@ A fly-to a body arrives framing the body itself: its diameter fills about 40% of
 <OrbitalSystemScene system={SOLAR_SYSTEM} arrivalFraming="system" />
 ```
 
-A satellite far smaller than the camera's precision floor (the ISS, Hubble) can't fill that much of the view; it arrives as close as the floor allows. When the body would hide its parent from the "look back toward the parent" angle a fly-to ends on (Earth behind the Moon), the view is turned just far enough to show the parent beside it. The root element's `data-framing` (`body` / `system`) says which framing the selected body is in.
+That includes true-scale satellites far smaller than a pixel from Earth's distance (the ISS, ~110m across, is ~5×10⁻⁸ world units): the scene is drawn camera-relative and normalized by the viewing distance, so the GPU never sees the tiny numbers, and the camera can get within `ABSOLUTE_MIN_CAMERA_DISTANCE` (1×10⁻¹⁰) of what it's looking at. When the body would hide its parent from the "look back toward the parent" angle a fly-to ends on (Earth behind the Moon), the view is turned just far enough to show the parent beside it. The root element's `data-framing` (`body` / `system`) says which framing the selected body is in.
 
 ## Fly-to pacing
 
@@ -230,7 +230,7 @@ Selecting a body flies the camera along van Wijk & Nuij's optimal zoom-and-pan p
 | --- | --- | --- |
 | `speed` | `1` | Multiplier on the default pace — `2` flies twice as fast, `0.5` half as fast. |
 | `minMs` | `1200` | Shortest a flight may take. |
-| `maxMs` | `4000` | Longest a flight may take. |
+| `maxMs` | `5000` | Longest a flight may take. |
 
 Every field is optional; an invalid value falls back to its default. The scene's root element exposes `data-camera-state` (`flying` / `tracking` / `idle`) if you need to wait for a flight to land.
 

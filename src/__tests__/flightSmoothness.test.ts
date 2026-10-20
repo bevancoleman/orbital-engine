@@ -174,18 +174,23 @@ describe('fly-to smoothness on real Solar System routes', () => {
     expect(assertDestinationStaysInView(legs.get('moon→iss')!)).toBe(1)
   })
 
-  it('takes longer the further a flight really travels, within the 1.2s–4s clamps', () => {
+  // Satellites arrive framed up close now (see ABSOLUTE_MIN_CAMERA_DISTANCE),
+  // so hops to and from them span ~100x more zoom than they did and take
+  // ~0.4-0.7s longer: Moon → ISS ~2.9s, ISS → Hubble ~3.7s, Hubble → Mars
+  // ~4.5s (all were under 4s).
+  it('takes longer the further a flight really travels, within the 1.2s–5s clamps', () => {
     const seconds = (key: string): number => legs.get(key)!.durationMs / 1000
     for (const trace of legs.values()) {
       expect(trace.durationMs).toBeGreaterThanOrEqual(1200)
-      expect(trace.durationMs).toBeLessThanOrEqual(4000)
+      expect(trace.durationMs).toBeLessThanOrEqual(5000)
     }
-    expect(seconds('moon→iss')).toBeGreaterThanOrEqual(2)
-    expect(seconds('moon→iss')).toBeLessThanOrEqual(3)
-    expect(seconds('iss→hubble')).toBeGreaterThanOrEqual(2)
-    expect(seconds('iss→hubble')).toBeLessThanOrEqual(3)
-    expect(seconds('hubble→mars')).toBeGreaterThanOrEqual(3)
-    expect(seconds('hubble→mars')).toBeLessThanOrEqual(4)
+    expect(seconds('earth→moon')).toBeLessThan(seconds('moon→iss'))
+    expect(seconds('moon→iss')).toBeGreaterThanOrEqual(2.5)
+    expect(seconds('moon→iss')).toBeLessThanOrEqual(3.5)
+    expect(seconds('iss→hubble')).toBeGreaterThanOrEqual(3)
+    expect(seconds('iss→hubble')).toBeLessThanOrEqual(4)
+    expect(seconds('hubble→mars')).toBeGreaterThanOrEqual(4)
+    expect(seconds('hubble→mars')).toBeLessThanOrEqual(5)
   })
 
   // The old front-loaded ease covered half the look-at travel in 33ms on

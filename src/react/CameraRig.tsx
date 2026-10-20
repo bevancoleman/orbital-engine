@@ -14,6 +14,7 @@ import {
 import type { WorldVec } from '../render'
 import type { CelestialBody, StarSystemData } from '../types'
 import type { FramePositions } from './framePositions'
+import { clipPlanesFor } from './floatingOrigin'
 import {
   acknowledgeNullFocus,
   advanceCameraFrame,
@@ -229,7 +230,6 @@ export function CameraRig({
   manualDistance,
   onDistanceChange,
   minDistance,
-  nearPlane,
   onActivityChange,
   flightPacing,
   cameraPose,
@@ -279,10 +279,6 @@ export function CameraRig({
    *  tiny true-scale body isn't held at arm's length by a floor sized for
    *  a whole solar system. */
   minDistance: number
-  /** The near clip plane to match `minDistance` (see camera.ts's
-   *  nearPlaneForRadius) — applied imperatively to the live camera below,
-   *  since the Canvas's own `camera` prop only sets this once at mount. */
-  nearPlane: number
   /** Called whenever the camera's observable activity (flying / tracking /
    *  idle, plus the flight counter — see describeCameraActivity) changes,
    *  and never on an unchanged frame. OrbitalSystemScene mirrors it onto
@@ -299,14 +295,6 @@ export function CameraRig({
   cameraPose?: MutableRefObject<CameraPose | null>
 }) {
   const { camera } = useThree()
-
-  useEffect(() => {
-    const perspectiveCamera = camera as THREE.PerspectiveCamera
-    if (perspectiveCamera.near !== nearPlane) {
-      perspectiveCamera.near = nearPlane
-      perspectiveCamera.updateProjectionMatrix()
-    }
-  }, [camera, nearPlane])
 
   const controlsRef = useRef<CameraControls | null>(null)
   // Owns everything about whether a flight is in progress, where it's
@@ -355,6 +343,7 @@ export function CameraRig({
   useFrame(() => {
     const controls = controlsRef.current
     if (!controls) return
+    applyClipPlanes(camera, controls.distance)
     // The selected body's position at THIS frame's simulated time, routed
     // through computeSmoothedTrackedPosition rather than a single raw
     // sample — see that function's own comment: a body whose own PARENT is
@@ -589,4 +578,23 @@ export function CameraRig({
       {colliderMeshElements}
     </>
   )
+}
+
+/**
+ * The world camera's clip planes for the current viewing distance (see
+ * floatingOrigin.ts's clipPlanesFor) — set every frame before
+ * camera-controls' update, whose collision test casts from the near
+ * plane. They used to be fixed per SELECTION (camera.ts's
+ * nearPlaneForRadius, applied in an effect), which held the near plane at
+ * whatever the selected body allowed however far out the user zoomed; the
+ * render pass rescales them for drawing (see RenderPass). Only touches the
+ * projection matrix when a plane actually moved.
+ */
+function applyClipPlanes(camera: THREE.Camera, viewingDistance: number): void {
+  if (!(camera instanceof THREE.PerspectiveCamera)) return
+  const { near, far } = clipPlanesFor(viewingDistance)
+  if (camera.near === near && camera.far === far) return
+  camera.near = near
+  camera.far = far
+  camera.updateProjectionMatrix()
 }

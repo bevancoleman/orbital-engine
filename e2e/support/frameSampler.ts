@@ -40,6 +40,12 @@ export interface FrameSample {
    *  all this frame — even one hidden for sitting behind the camera
    *  (which `body` reports as null). */
   bodyLabelMounted: boolean
+  /** The body's projected on-screen radius in CSS px, read back from its
+   *  label's offset above it (BodyLabel's translateY is a fixed 14px gap
+   *  plus the projected radius — see labelLayout.ts's labelOffsetPx, which
+   *  caps the radius part at 220px), or null when the label isn't on
+   *  screen. */
+  bodyRadiusPx: number | null
 }
 
 export interface SampleOptions {
@@ -110,6 +116,15 @@ export async function startFrameSampler(page: Page, options: SampleOptions = {})
         return false
       }
 
+      function readBodyRadius(): number | null {
+        if (bodyName === null) return null
+        for (const el of document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]')) {
+          if (el.textContent !== bodyName || el.getBoundingClientRect().width === 0) continue
+          return Number(/translateY\((-?[\d.]+)px\)/.exec(el.style.transform)?.[1] ?? '0') * -1 - 14
+        }
+        return null
+      }
+
       function readBody(): { dx: number; dy: number } | null {
         if (bodyName === null) return null
         const box = canvas!.getBoundingClientRect()
@@ -132,7 +147,7 @@ export async function startFrameSampler(page: Page, options: SampleOptions = {})
         const tick = (): void => {
           const cameraState = root.dataset.cameraState ?? ''
           const count = Number(root.dataset.flightCount ?? '0')
-          samples.push({ cameraState, flightCount: count, lit: readLit(), zoom: Number(zoomSlider.value), body: readBody(), bodyLabelMounted: labelMounted() })
+          samples.push({ cameraState, flightCount: count, lit: readLit(), zoom: Number(zoomSlider.value), body: readBody(), bodyLabelMounted: labelMounted(), bodyRadiusPx: readBodyRadius() })
           const elapsed = performance.now() - start
           const flightPending = count < untilFlightCount || cameraState === 'flying'
           const keepGoing = elapsed < minDurationMs || (untilFlightCount > 0 && flightPending)

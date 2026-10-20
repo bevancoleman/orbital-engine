@@ -671,4 +671,53 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     expect(moved.length / located.length, detail).toBeGreaterThan(0.9)
     expect(errors).toEqual([])
   })
+  test('the ISS can be framed up close, filling much of the view, without jitter paused or at full speed', async ({ page }) => {
+    // The user's request: "can we have more zoom, we have a lot of small
+    // objects (ISS, Hubble) and no way of seeing them." The camera used to
+    // stop at a float-precision floor (1e-6 world units) that left the ISS
+    // (~5e-8 across) a speck; rendering is now camera-relative and
+    // distance-normalized (see floatingOrigin.ts), the floor is far below
+    // it, and the ISS arrives filling ~40% of the view like any other body.
+    // Its size is read back from its label's offset (see bodyRadiusPx);
+    // jitter or z-fighting at this scale would show as the body or its
+    // pixels moving between frames while nothing else does.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'ISS')
+    })
+    const box = (await page.locator('canvas').boundingBox())!
+    const region = { cx: 0.5, cy: 0.5, sizeFraction: 0.5 }
+
+    const paused = await sampleFor(page, 800, { bodyName: 'ISS', region })
+    const first = paused[0]!
+    expect(first.bodyRadiusPx, describeSamples(paused)).not.toBeNull()
+    // Diameter at least 30% of the view's height (the target is 40%).
+    expect((2 * first.bodyRadiusPx!) / box.height, describeSamples(paused)).toBeGreaterThan(0.3)
+    expect(bodyStaysCentred(paused, 0.02).ok, describeSamples(paused)).toBe(true)
+    // Paused, nothing moves: every frame identical, to the pixel.
+    for (const sample of paused) {
+      expect(sample.lit, describeSamples(paused)).toBe(first.lit)
+      expect(sample.body, describeSamples(paused)).toEqual(first.body)
+      expect(sample.bodyRadiusPx, describeSamples(paused)).toBe(first.bodyRadiusPx)
+    }
+
+    // Full speed: the ISS laps Earth every ~15 real seconds. The tracking
+    // camera keeps it centred and about the same size, frame after frame —
+    // within tracking smoothing's own allowance (the smoothed target may
+    // sit up to 15% of the viewing distance off the body; see
+    // adaptiveSmoothingRadius), so its distance, and its size, can vary by
+    // that much. (Its background legitimately changes — Earth swings in and
+    // out behind it — so the lit fraction isn't compared here.)
+    await setMaxSpeed(page)
+    await play(page)
+    const playing = await sampleFor(page, 1500, { bodyName: 'ISS', region })
+    expect(bodyStaysCentred(playing, 0.05).ok, describeSamples(playing)).toBe(true)
+    for (let i = 1; i < playing.length; i++) {
+      const [a, b] = [playing[i - 1]!, playing[i]!]
+      expect(Math.hypot(b.body!.dx - a.body!.dx, b.body!.dy - a.body!.dy), describeSamples(playing)).toBeLessThan(0.05)
+      expect(Math.abs(b.bodyRadiusPx! - first.bodyRadiusPx!), describeSamples(playing)).toBeLessThanOrEqual(first.bodyRadiusPx! * 0.2 + 1)
+    }
+    expect(errors).toEqual([])
+  })
 })

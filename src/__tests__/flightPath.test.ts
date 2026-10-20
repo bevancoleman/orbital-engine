@@ -8,18 +8,21 @@
 import {
   DEFAULT_FLIGHT_PACING,
   FLIGHT_PATH_SPEED,
+  FLIGHT_PEAK_TURN_DEG_PER_SECOND,
   FLIGHT_TURN_DEG_PER_SECOND,
   FLIGHT_VIEW_WIDTH_PER_DISTANCE,
   FLIGHT_ZOOM_RHO,
   flightDurationMs,
   flightPathLength,
   planFocusFlight,
+  sampleFlightFrame,
   smoothstep,
   trajectorySamplesFor,
   zoomPanPath,
 } from '../camera'
 import type { FocusTarget } from '../camera'
 import type { WorldVec } from '../render'
+import { angleBetweenDeg, subtractVec3 } from '../vec3'
 
 const RHO = FLIGHT_ZOOM_RHO
 
@@ -157,8 +160,11 @@ describe('flightDurationMs — perceptually constant speed, clamped', () => {
     endTarget: b.target,
   })
 
-  it('defaults to a 1.2s minimum and a 4s maximum', () => {
-    expect(DEFAULT_FLIGHT_PACING).toEqual({ speed: 1, minMs: 1200, maxMs: 4000 })
+  it('defaults to a 1.2s minimum and a 5s maximum', () => {
+    // 5s since satellites can be framed up close: a hop between two of
+    // them now spans enough zoom that 4s squeezed its mid-flight turn past
+    // the smoothness ceiling (see FLIGHT_PEAK_TURN_DEG_PER_SECOND).
+    expect(DEFAULT_FLIGHT_PACING).toEqual({ speed: 1, minMs: 1200, maxMs: 5000 })
   })
 
   it('never goes below the minimum, even for a flight that goes nowhere', () => {
@@ -173,7 +179,26 @@ describe('flightDurationMs — perceptually constant speed, clamped', () => {
   })
 
   it('caps at the maximum for an enormous path', () => {
-    expect(flightDurationMs(flight(at([0, 0, 0], 1e-9), at([1000, 0, 0], 1e-9)))).toBe(4000)
+    expect(flightDurationMs(flight(at([0, 0, 0], 1e-9), at([1000, 0, 0], 1e-9)))).toBe(5000)
+  })
+
+  it('gives a turn concentrated mid-flight enough time at its fastest, not just on average', () => {
+    // A context body to keep in frame makes the path swing out and back:
+    // planned with it, the flight is never faster than the peak-turn rule.
+    const start = at([0, 0, 0], 1e-6, [0, 0, 1])
+    const end = at([0.002, 0, 0], 1e-6, [0, 1, 0])
+    const contextBody = { position: [0.001, -0.01, 0] as WorldVec, radius: 0.005 }
+    const withContext = flightDurationMs({ ...flight(start, end), contextBody })
+    expect(withContext).toBeGreaterThanOrEqual(flightDurationMs(flight(start, end)))
+    const endpoints = { ...flight(start, end), contextBody, predictedTargetAt: null }
+    const frames = Math.round((withContext / 1000) * 60)
+    let worst = 0
+    for (let i = 1; i <= frames; i++) {
+      const a = sampleFlightFrame(endpoints, (i - 1) / frames)
+      const b = sampleFlightFrame(endpoints, i / frames)
+      worst = Math.max(worst, angleBetweenDeg(subtractVec3(a.target, a.position), subtractVec3(b.target, b.position)))
+    }
+    expect(worst).toBeLessThanOrEqual(FLIGHT_PEAK_TURN_DEG_PER_SECOND / 60 + 0.1)
   })
 
   it('gives a big view turn enough time even when the path itself is short', () => {
