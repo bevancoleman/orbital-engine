@@ -18,7 +18,11 @@ npm run lint
 npm test          # the unit suite
 npm run test:coverage  # the unit suite plus the core coverage gate CI enforces
 npm run build     # tsup — emits ESM + CJS + .d.ts/.d.cts to dist/
+npm run bench:scene                       # per-frame CPU, draw calls and allocations on 2,000/10,000-body synthetic systems
+npm run bench:scene -- 5000 --alloc-sites # one size, plus where each allocation figure comes from
 ```
+
+For a large system in a browser, open the basic example with `?system=synthetic-2000` (any count); its dev overlay shows the draw-call count.
 
 ## Working on the examples
 
