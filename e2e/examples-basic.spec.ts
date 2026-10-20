@@ -10,6 +10,7 @@ import {
   sampleFor,
   sampleLabelTrack,
 } from './support/frameSampler'
+import { bodyOnScreen, brightnessAt, radialLinePeak, traceBody, type ScreenPoint } from './support/canvasPixels'
 import {
   flightCount,
   flyAndSettle,
@@ -718,6 +719,105 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
       expect(Math.hypot(b.body!.dx - a.body!.dx, b.body!.dy - a.body!.dy), describeSamples(playing)).toBeLessThan(0.05)
       expect(Math.abs(b.bodyRadiusPx! - first.bodyRadiusPx!), describeSamples(playing)).toBeLessThanOrEqual(first.bodyRadiusPx! * 0.2 + 1)
     }
+    expect(errors).toEqual([])
+  })
+})
+
+// The batched GPU paths (OrbitLines.tsx's OrbitLineBatch, InstancedBodies)
+// have no per-orbit object or DOM element to inspect, so these read the
+// rendered canvas itself (support/canvasPixels.ts).
+test.describe('examples/basic — GPU orbit lines and large systems', () => {
+  const zoomSlider = (page: Page) => page.locator('input[type=range][title^="Zoom"]')
+
+  function median(values: number[]): number {
+    const sorted = [...values].sort((a, b) => a - b)
+    return sorted[Math.floor(sorted.length / 2)] ?? 0
+  }
+
+  /** Mars selected, zoomed out to take in its moons' orbits. */
+  async function marsSystem(page: Page): Promise<void> {
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'Mars')
+    })
+    await setRangeValue(zoomSlider(page), 330)
+    await expect(page.getByText('Deimos', { exact: true }).and(page.locator('div'))).toBeVisible()
+  }
+
+  test('draws each orbit where its body actually travels', async ({ page }) => {
+    // The camera tracks Mars, so Deimos's orbit stays put on screen while
+    // Deimos (a 1.26-day orbit) runs most of the way round it at full
+    // speed — its label marking every point it passes through.
+    await marsSystem(page)
+    await play(page)
+    await setMaxSpeed(page)
+    const path = await traceBody(page, 'Deimos', 4000)
+    await page.getByRole('button', { name: 'Pause' }).click()
+    // Null when Deimos stopped behind Mars — the Mars check covers it then.
+    const end = await bodyOnScreen(page, 'Deimos')
+    const mars = (await bodyOnScreen(page, 'Mars'))!
+
+    // Points a few px apart along the traced path — not over Mars's disc,
+    // nor where Deimos itself now is — each with a control point 6px off
+    // the path on either side.
+    const points: ScreenPoint[] = []
+    for (const p of path) {
+      const last = points[points.length - 1]
+      if (end && Math.hypot(p.x - end.x, p.y - end.y) < end.radius + 10) continue
+      if (Math.hypot(p.x - mars.x, p.y - mars.y) < mars.radius + 10) continue
+      if (!last || Math.hypot(p.x - last.x, p.y - last.y) >= 4) points.push(p)
+    }
+    expect(points.length).toBeGreaterThan(15)
+    const normals = points.map((p, i) => {
+      const a = points[Math.max(i - 1, 0)]!
+      const b = points[Math.min(i + 1, points.length - 1)]!
+      const length = Math.hypot(b.x - a.x, b.y - a.y) || 1
+      return { x: -(b.y - a.y) / length, y: (b.x - a.x) / length }
+    })
+    const on = await brightnessAt(page, points)
+    const off = await brightnessAt(page, [
+      ...points.map((p, i) => ({ x: p.x + 6 * normals[i]!.x, y: p.y + 6 * normals[i]!.y })),
+      ...points.map((p, i) => ({ x: p.x - 6 * normals[i]!.x, y: p.y - 6 * normals[i]!.y })),
+    ])
+    // The orbit line is drawn under (nearly) every point the body passed
+    // through — the GPU evaluates the ellipse itself, so this checks it
+    // evaluated the right one — and not beside it.
+    expect(on.filter((v) => v > 30).length / on.length).toBeGreaterThan(0.9)
+    expect(median(on)).toBeGreaterThan(2 * Math.max(median(off), 10))
+  })
+
+  test("draws the selected body's orbit brighter", async ({ page }) => {
+    // The same orbit, Deimos's, through Deimos, unselected and then
+    // selected. A line's brightness is set in screen space (its opacity
+    // and pixel width), so the two views compare whatever the zoom.
+    const peakThroughDeimos = async (): Promise<number> => {
+      const deimos = (await bodyOnScreen(page, 'Deimos'))!
+      return radialLinePeak(page, deimos, [deimos.radius + 6, deimos.radius + 10, deimos.radius + 14])
+    }
+    await marsSystem(page)
+    const unselected = await peakThroughDeimos()
+    await flyAndSettle(page, async () => {
+      await select(page, 'Deimos')
+    })
+    await setRangeValue(zoomSlider(page), 330)
+    const selected = await peakThroughDeimos()
+    expect(unselected).toBeGreaterThan(25)
+    expect(selected).toBeGreaterThan(unselected * 1.4)
+  })
+
+  test('a 2,000-body system loads without errors in a handful of draw calls', async ({ page }) => {
+    const errors = trackErrors(page)
+    await gotoScene(page, `${URL}?system=synthetic-2000`)
+    expect(await litFractionAt(page)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
+    // The dev overlay's renderer stats (PerfStats): one draw call per orbit
+    // tier and instanced shape, plus the few full-path bodies — it was
+    // ~1,050 when every body and orbit drew its own.
+    const drawCalls = async (): Promise<number> => Number(/draw calls\s*(\d+)/.exec(await page.locator('body').innerText())?.[1] ?? Number.NaN)
+    await expect.poll(drawCalls).toBeGreaterThan(0)
+    expect(await drawCalls()).toBeLessThanOrEqual(21)
+    await play(page)
+    await flyAndSettle(page, () => page.getByRole('button', { name: 'Planet 1', exact: true }).click())
+    expect(await drawCalls()).toBeLessThanOrEqual(40)
     expect(errors).toEqual([])
   })
 })
