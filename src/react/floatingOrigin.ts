@@ -28,7 +28,8 @@
  * holds thousands of objects, so there's no per-object float64 transform
  * for three to compose. Those batches sit outside the root group, and
  * write each object's camera-relative offset themselves every frame —
- * subtracted in float64 here (writeCameraRelative) from the same
+ * subtracted in float64 (smallBodyInstancing.ts's writeInstanceMatrix,
+ * orbitBatch.ts's writeOrbitFrame) from the same
  * transform RenderPass is about to draw with (the shared RenderFrame), so
  * no large absolute number ever reaches the GPU for them either.
  *
@@ -104,17 +105,4 @@ export function updateRenderFrame(frame: RenderFrame, cameraPosition: { x: numbe
   frame.origin[1] = y
   frame.origin[2] = z
   frame.scale = 1 / Math.max(distance, MIN_NORMALIZING_DISTANCE)
-}
-
-/**
- * Writes `point` (plus an optional small `local` offset from it) in render
- * space into `out[at..at+2]`: the large world-space subtraction happens
- * here in float64, so only the small, camera-relative result is rounded
- * to float32 — see this module's comment.
- */
-export function writeCameraRelative(out: Float32Array, at: number, point: WorldVec, transform: RenderTransform, local?: WorldVec): void {
-  const { origin, scale } = transform
-  out[at] = (point[0] - origin[0] + (local ? local[0] : 0)) * scale
-  out[at + 1] = (point[1] - origin[1] + (local ? local[1] : 0)) * scale
-  out[at + 2] = (point[2] - origin[2] + (local ? local[2] : 0)) * scale
 }

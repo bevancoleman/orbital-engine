@@ -137,7 +137,6 @@ export const SceneContent = memo(function SceneContent({
       <OrbitLineBatch
         system={system}
         frame={frame}
-        cameraDistance={cameraDistance}
         selectedId={selectedId}
         interaction={interaction}
         renderFrame={renderFrame}

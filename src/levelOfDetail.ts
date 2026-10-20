@@ -30,7 +30,11 @@ export function apparentSize(radius: number, cameraDistance: number): number {
  * every caller followed it with threw a TypeError mid-render.
  */
 function pickLevel<T extends { minApparentSize: number }>(levels: readonly T[], size: number): T {
-  return levels.find((l) => size >= l.minApparentSize) ?? levels[levels.length - 1]!
+  // A loop, not levels.find(): the orbit lines call this for every orbit
+  // every frame (orbitBatch.ts's updateOrbitTiers), and find's callback
+  // was a closure allocated per call.
+  for (let i = 0; i < levels.length; i++) if (size >= levels[i]!.minApparentSize) return levels[i]!
+  return levels[levels.length - 1]!
 }
 
 export interface SphereDetail {
@@ -91,7 +95,12 @@ const ORBIT_LEVELS: { minApparentSize: number; segments: number }[] = [
   { minApparentSize: 0.3, segments: 512 },
   { minApparentSize: 0.05, segments: 256 },
   { minApparentSize: 0.01, segments: 128 },
-  { minApparentSize: 0, segments: 48 },
+  { minApparentSize: 0.002, segments: 48 },
+  // A few pixels across: a 16-gon's facets are well under a pixel. A
+  // game-data system has thousands of these (every station's orbit round
+  // a distant moon), and at 48 segments they were most of the scene's
+  // triangles.
+  { minApparentSize: 0, segments: 16 },
 ]
 
 /**
@@ -115,3 +124,7 @@ export function orbitDetailFor(size: number): number {
 /** Every segment count orbitDetailFor returns, highest first — the GPU
  *  orbit lines (OrbitLines.tsx) keep one batch per tier. */
 export const ORBIT_SEGMENT_TIERS: readonly number[] = ORBIT_LEVELS.map((level) => level.segments)
+
+/** Each ORBIT_SEGMENT_TIERS tier's smallest apparent size — for picking a
+ *  tier inline in a per-frame loop (orbitBatch.ts's updateOrbitTiers). */
+export const ORBIT_TIER_MIN_SIZES: readonly number[] = ORBIT_LEVELS.map((level) => level.minApparentSize)

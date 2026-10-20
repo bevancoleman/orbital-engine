@@ -12,11 +12,12 @@ import {
   ORBIT_TABLE_COLUMNS,
   ORBIT_TABLE_ROWS,
   ORBIT_TABLE_SPAN,
-  assignOrbitTiers,
   buildOrbitLineRecords,
   buildOrbitParameterTable,
+  groupOrbitTiers,
   orbitLineStyle,
-  writeOrbitCentres,
+  updateOrbitTiers,
+  writeOrbitFrame,
   writeOrbitInstance,
   type OrbitInstanceArrays,
   type OrbitLineRecord,
@@ -33,45 +34,47 @@ import { FOLLOW_PRIORITY } from './useFollowPosition'
  * callback per orbit: thousands for a game-data system.
  *
  * Each tier is a shared strip of `segments` quads; every orbit drawn at
- * that tier is one instance of it, carrying its ellipse (axes,
- * eccentricity), colour and width. The vertex shader evaluates both ends
- * of its segment on the ellipse (through the shared arc-length parameter
- * table, so points stay evenly spaced like orbitPath's), projects them,
- * and pushes the quad out to a screen-space width — the LineSegments2
- * approach drei's <Line> used, near-plane trim included, so the lines
- * look the same: 1px, the body's colour at 0.25 opacity (0.18 for a
- * reference ring), with the selected body's orbit picked out brighter.
+ * that tier is one instance of it, carrying its anchor and rotated axes,
+ * table parameters, colour and width. The vertex shader evaluates both
+ * ends of its segment on the ellipse (through the shared arc-length
+ * parameter table, so points stay evenly spaced like orbitPath's, and
+ * bunched round the point nearest the camera when it's close), projects
+ * them, and pushes the quad out to a screen-space width — the
+ * LineSegments2 approach drei's <Line> used, near-plane trim included, so
+ * the lines look the same: 1px, the body's colour at 0.25 opacity (0.18
+ * for a reference ring), with the selected body's orbit picked out
+ * brighter and wider.
  *
  * Precision: the old per-orbit lines kept their vertices parent-relative
  * and put the parent's (potentially large) offset on a wrapping group, so
  * three composed it in float64 — baking it into float32 vertices used to
  * make a tight orbit like the ISS's visibly jitter far from the origin.
- * There's no per-orbit group here, so the same rule is kept by hand: the
- * one large number, the ellipse's centre, is written camera-relative and
- * normalized every frame on the CPU in float64 (writeOrbitCentres, at
+ * There's no per-orbit group here, so the rule is kept by hand: the
+ * orbit's point nearest the camera is written camera-relative and
+ * normalized every frame on the CPU in float64 (writeOrbitFrame, at
  * CAMERA_RELATIVE_PRIORITY, from the same RenderFrame RenderPass draws
- * with), and only small numbers reach the GPU. That's also why the
- * meshes sit outside the rebased root group: their buffers are already
- * in render space.
+ * with), and the shader builds the line out from it, so only small
+ * numbers reach the GPU near the camera. That's also why the meshes sit
+ * outside the rebased root group: their buffers are already in render
+ * space.
  *
- * Tiering follows orbitDetailFor as before; re-packing only happens when
- * a zoom step moves an orbit across a tier (or the selection changes),
- * and per frame only the centres (and, when the visible set changes, the
- * reference rings' opacity — a ring only draws while its body does) are
- * uploaded. Allocation-free per frame.
+ * Tiers come from each orbit's own distance to the camera
+ * (orbitSegmentsFor), checked every frame; re-packing only happens when
+ * an orbit crosses a tier (or the selection changes). Per frame the
+ * anchors upload, plus the rotated axes and parameters for any orbit the
+ * camera is close enough to warp, and, when the visible set changes, the
+ * reference rings' opacity (a ring only draws while its body does).
+ * Allocation-free per frame.
  */
 export function OrbitLineBatch({
   system,
   frame,
-  cameraDistance,
   selectedId,
   interaction,
   renderFrame,
 }: {
   system: StarSystemData
   frame: FramePositions
-  /** Drives each orbit's LOD tier — see orbitDetailFor. */
-  cameraDistance: number
   selectedId: string | null
   /** Which bodies are visible right now — a reference ring only draws
    *  while its body does, as before. */
@@ -83,7 +86,17 @@ export function OrbitLineBatch({
   const records = useMemo(() => buildOrbitLineRecords(system, frame.positions), [system, frame])
   const colors = useMemo(() => records.map((r) => linearRgb(r.color)), [records])
   const batch = useMemo(() => createOrbitBatch(records.length), [records.length])
-  const packed = useRef({ selectedId: null as string | null, assignment: '', snapshot: null as SceneInteractionSnapshot | null })
+  const packed = useRef({
+    packedFor: null as string | null,
+    records: null as readonly OrbitLineRecord[] | null,
+    snapshot: null as SceneInteractionSnapshot | null,
+    origin: [Number.NaN, 0, 0] as WorldVec,
+    timeMs: Number.NaN,
+  })
+  const selected = useRef(selectedId)
+  useLayoutEffect(() => {
+    selected.current = selectedId
+  }, [selectedId])
 
   useLayoutEffect(() => {
     for (const tier of batch.tiers) scene.add(tier.mesh)
@@ -93,30 +106,36 @@ export function OrbitLineBatch({
     }
   }, [scene, batch])
 
-  // Re-pack only when a tier boundary was crossed or the selection moved
-  // — cameraDistance changes on every zoom frame, the tiers rarely.
-  useLayoutEffect(() => {
-    const assignment = assignOrbitTiers(records, cameraDistance, batch.assignment)
-    const key = tierAssignmentKey(assignment)
-    const state = packed.current
-    if (key === state.assignment && selectedId === state.selectedId) return
-    state.assignment = key
-    state.selectedId = selectedId
-    state.snapshot = null
-    packOrbitBatch(batch, records, colors, selectedId)
-  }, [batch, records, colors, cameraDistance, selectedId])
-
   useFrame(() => {
+    const state = packed.current
+    const selectedNow = selected.current
+    // Tiers only move when the camera or the bodies do.
+    const origin = renderFrame.origin
+    const moved = origin[0] !== state.origin[0] || origin[1] !== state.origin[1] || origin[2] !== state.origin[2] || frame.timeMs !== state.timeMs
+    state.origin[0] = origin[0]
+    state.origin[1] = origin[1]
+    state.origin[2] = origin[2]
+    state.timeMs = frame.timeMs
+    const tiersMoved = moved && updateOrbitTiers(records, origin, batch.tierOf)
+    if (tiersMoved || state.records !== records || selectedNow !== state.packedFor) {
+      state.records = records
+      state.packedFor = selectedNow
+      state.snapshot = null
+      packOrbitBatch(batch, records, colors, selectedNow)
+    }
     const snapshot = interaction.getSnapshot()
-    const visibilityChanged = snapshot !== packed.current.snapshot
-    packed.current.snapshot = snapshot
-    for (const tier of batch.tiers) {
+    const visibilityChanged = snapshot !== state.snapshot
+    state.snapshot = snapshot
+    for (let t = 0; t < batch.tiers.length; t++) {
+      const tier = batch.tiers[t]!
       tier.material.uniforms.renderScale!.value = renderFrame.scale
       ;(tier.material.uniforms.resolution!.value as THREE.Vector2).set(size.width, size.height)
       if (tier.count === 0) continue
-      writeOrbitCentres(tier.slots, tier.count, renderFrame, tier.arrays.centre)
-      markRange(tier.attributes.centre, tier.count * 3)
-      if (visibilityChanged && applyReferenceVisibility(tier, snapshot.visibleBodyIds, selectedId)) {
+      if (writeOrbitFrame(tier.slots, tier.count, tier.segments, renderFrame, batch.tableData, tier.arrays)) {
+        for (let k = 0; k < PER_ANCHOR_KEYS.length; k++) markRange(tier.attributes[PER_ANCHOR_KEYS[k]!], tier.count * 3)
+      }
+      markRange(tier.attributes.anchor, tier.count * 3)
+      if (visibilityChanged && applyReferenceVisibility(tier, snapshot.visibleBodyIds, selectedNow)) {
         markRange(tier.attributes.color, tier.count * 4)
       }
     }
@@ -128,10 +147,6 @@ export function OrbitLineBatch({
 function linearRgb(color: string): [number, number, number] {
   const c = new THREE.Color(color)
   return [c.r, c.g, c.b]
-}
-
-function tierAssignmentKey(assignment: readonly (readonly number[])[]): string {
-  return assignment.map((members) => members.join(',')).join('|')
 }
 
 /** Uploads just the first `count` floats of `attribute` next draw. */
@@ -158,6 +173,7 @@ function applyReferenceVisibility(tier: OrbitTier, visibleIds: ReadonlySet<strin
 }
 
 interface OrbitTier {
+  segments: number
   mesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>
   material: THREE.ShaderMaterial
   geometry: THREE.InstancedBufferGeometry
@@ -171,17 +187,22 @@ interface OrbitTier {
 interface OrbitBatch {
   tiers: OrbitTier[]
   table: THREE.DataTexture
-  /** Reused by assignOrbitTiers. */
+  /** The table's values, for the CPU half (writeOrbitFrame). */
+  tableData: Float32Array
+  /** Each record's tier index (updateOrbitTiers); -2 before the first frame. */
+  tierOf: Int8Array
+  /** Reused by groupOrbitTiers. */
   assignment: number[][]
 }
 
 function createOrbitBatch(capacity: number): OrbitBatch {
-  const table = new THREE.DataTexture(buildOrbitParameterTable(), ORBIT_TABLE_COLUMNS, ORBIT_TABLE_ROWS, THREE.RedFormat, THREE.FloatType)
+  const tableData = buildOrbitParameterTable()
+  const table = new THREE.DataTexture(tableData, ORBIT_TABLE_COLUMNS, ORBIT_TABLE_ROWS, THREE.RedFormat, THREE.FloatType)
   table.minFilter = THREE.NearestFilter
   table.magFilter = THREE.NearestFilter
   table.needsUpdate = true
   const tiers = ORBIT_SEGMENT_TIERS.map((segments) => createOrbitTier(segments, Math.max(capacity, 1), table))
-  return { tiers, table, assignment: tiers.map(() => []) }
+  return { tiers, table, tableData, tierOf: new Int8Array(capacity).fill(-2), assignment: tiers.map(() => []) }
 }
 
 function disposeOrbitBatch(batch: OrbitBatch): void {
@@ -193,14 +214,16 @@ function disposeOrbitBatch(batch: OrbitBatch): void {
 }
 
 const INSTANCE_ATTRIBUTES: Record<keyof OrbitInstanceArrays, { name: string; size: number }> = {
-  centre: { name: 'orbitCentre', size: 3 },
-  axisP: { name: 'orbitAxisP', size: 3 },
-  axisQ: { name: 'orbitAxisQ', size: 3 },
-  shape: { name: 'orbitShape', size: 2 },
+  anchor: { name: 'orbitAnchor', size: 3 },
+  axisU: { name: 'orbitAxisU', size: 3 },
+  axisV: { name: 'orbitAxisV', size: 3 },
+  param: { name: 'orbitParam', size: 3 },
   color: { name: 'orbitColor', size: 4 },
   width: { name: 'orbitWidth', size: 1 },
 }
 const INSTANCE_KEYS = Object.keys(INSTANCE_ATTRIBUTES) as (keyof OrbitInstanceArrays)[]
+/** Rewritten only when an orbit's anchor or warp moves. */
+const PER_ANCHOR_KEYS = ['axisU', 'axisV', 'param'] as const
 
 /** A strip of `segments` quads — per vertex (segment index, 0 = the
  *  segment's start | 1 = its end, side ±1) — the shared shape every orbit
@@ -233,11 +256,11 @@ function createOrbitTier(segments: number, capacity: number, table: THREE.DataTe
   const material = new THREE.ShaderMaterial({
     uniforms: {
       parameterTable: { value: table },
-      columnStep: { value: ORBIT_TABLE_SPAN / segments },
+      segments: { value: segments },
       renderScale: { value: 1 },
       resolution: { value: new THREE.Vector2(1, 1) },
     },
-    defines: { TABLE_ROWS: ORBIT_TABLE_ROWS },
+    defines: { TABLE_ROWS: ORBIT_TABLE_ROWS, TABLE_SPAN: `${ORBIT_TABLE_SPAN}.0` },
     vertexShader: ORBIT_VERTEX_SHADER,
     fragmentShader: ORBIT_FRAGMENT_SHADER,
     transparent: true,
@@ -253,19 +276,20 @@ function createOrbitTier(segments: number, capacity: number, table: THREE.DataTe
   mesh.frustumCulled = false
   mesh.matrixAutoUpdate = false
   mesh.visible = false
-  return { mesh, material, geometry, arrays, attributes, slots: [], count: 0 }
+  return { segments, mesh, material, geometry, arrays, attributes, slots: [], count: 0 }
 }
 
-/** Writes every record's instance data into its tier's slots, from the
- *  batch's current tier assignment. */
+/** Writes every record's style into its tier's slots, from the batch's
+ *  current tier indices. The geometry follows in writeOrbitFrame. */
 function packOrbitBatch(batch: OrbitBatch, records: readonly OrbitLineRecord[], colors: readonly [number, number, number][], selectedId: string | null): void {
+  groupOrbitTiers(batch.tierOf, batch.assignment)
   batch.tiers.forEach((tier, t) => {
     const members = batch.assignment[t]!
     tier.slots.length = 0
     members.forEach((index, slot) => {
       const record = records[index]!
       tier.slots.push(record)
-      writeOrbitInstance(tier.arrays, slot, record, colors[index]!, orbitLineStyle(record, record.id === selectedId))
+      writeOrbitInstance(tier.arrays, slot, colors[index]!, orbitLineStyle(record, record.id === selectedId))
     })
     tier.count = members.length
     tier.geometry.instanceCount = tier.count
@@ -279,33 +303,56 @@ const ORBIT_VERTEX_SHADER = /* glsl */ `
 #include <logdepthbuf_pars_vertex>
 
 uniform sampler2D parameterTable;
-uniform float columnStep;
+uniform float segments;
 uniform float renderScale;
 uniform vec2 resolution;
 
-attribute vec3 orbitCentre;
-attribute vec3 orbitAxisP;
-attribute vec3 orbitAxisQ;
-attribute vec2 orbitShape;
+attribute vec3 orbitAnchor;
+attribute vec3 orbitAxisU;
+attribute vec3 orbitAxisV;
+attribute vec3 orbitParam;
 attribute vec4 orbitColor;
 attribute float orbitWidth;
 
 varying vec4 vColor;
 
-// The even-arc-length eccentric anomaly at a table column, between the
-// two eccentricity rows bracketing this orbit's own (orbitShape.y).
-float anomalyAt(float column) {
-  float lower = floor(orbitShape.y);
-  int c = int(column + 0.5);
-  int r = int(lower);
-  float a = texelFetch(parameterTable, ivec2(c, r), 0).r;
-  float b = texelFetch(parameterTable, ivec2(c, min(r + 1, TABLE_ROWS - 1)), 0).r;
-  return mix(a, b, orbitShape.y - lower);
+float tableAt(int column, int row, int nextRow, float rowMix) {
+  return mix(texelFetch(parameterTable, ivec2(column, row), 0).r, texelFetch(parameterTable, ivec2(column, nextRow), 0).r, rowMix);
 }
 
-vec3 orbitPoint(float column) {
-  float anomaly = anomalyAt(column);
-  return orbitCentre + renderScale * ((cos(anomaly) - orbitShape.x) * orbitAxisP + sin(anomaly) * orbitAxisQ);
+// orbitBatch.ts anomalyAtColumn: the even-arc-length eccentric anomaly at
+// a (fractional, possibly wrapped) table column, between the two
+// eccentricity rows bracketing this orbit's own (orbitParam.x).
+float anomalyAt(float column) {
+  float turns = floor(column / TABLE_SPAN);
+  float c = column - turns * TABLE_SPAN;
+  float c0 = min(floor(c), TABLE_SPAN - 1.0);
+  float lower = floor(orbitParam.x);
+  int r = int(lower);
+  int r1 = min(r + 1, TABLE_ROWS - 1);
+  float w = orbitParam.x - lower;
+  int ci = int(c0);
+  float a = tableAt(ci, r, r1, w);
+  float b = tableAt(ci + 1, r, r1, w);
+  return mix(a, b, c - c0) + turns * PI2;
+}
+
+// orbitBatch.ts warpedColumn: segment boundary s's column, bunched round
+// the anchor's by the warp (orbitParam.z).
+float columnAt(float s) {
+  float t = 2.0 * s / segments - 1.0;
+  float warp = orbitParam.z;
+  float offset = warp > 1.0 ? sign(t) * pow(abs(t), warp) : t;
+  return orbitParam.y + 0.5 * TABLE_SPAN * offset;
+}
+
+// The ellipse point Δ = E − E₀ past the anchor, built out from the anchor
+// (camera-relative) so it's small numbers near the camera; 1 − cos Δ as
+// 2 sin²(Δ/2) keeps its precision for small Δ.
+vec3 orbitPoint(float s, float anchorAnomaly) {
+  float delta = anomalyAt(columnAt(s)) - anchorAnomaly;
+  float h = sin(0.5 * delta);
+  return orbitAnchor + renderScale * (-2.0 * h * h * orbitAxisU + sin(delta) * orbitAxisV);
 }
 
 // LineMaterial's: pull an end that's behind the camera onto the near
@@ -322,8 +369,9 @@ void trimSegment(const in vec4 start, inout vec4 end) {
 void main() {
   vColor = orbitColor;
   float segment = position.x;
-  vec4 start = modelViewMatrix * vec4(orbitPoint(segment * columnStep), 1.0);
-  vec4 end = modelViewMatrix * vec4(orbitPoint((segment + 1.0) * columnStep), 1.0);
+  float anchorAnomaly = anomalyAt(orbitParam.y);
+  vec4 start = modelViewMatrix * vec4(orbitPoint(segment, anchorAnomaly), 1.0);
+  vec4 end = modelViewMatrix * vec4(orbitPoint(segment + 1.0, anchorAnomaly), 1.0);
   if (projectionMatrix[2][3] == -1.0) {
     if (start.z < 0.0 && end.z >= 0.0) trimSegment(start, end);
     else if (end.z < 0.0 && start.z >= 0.0) trimSegment(end, start);

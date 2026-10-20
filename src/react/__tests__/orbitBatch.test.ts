@@ -10,16 +10,23 @@ import {
   ORBIT_TABLE_COLUMNS,
   ORBIT_TABLE_ROWS,
   ORBIT_TABLE_SPAN,
+  ORBIT_SAG_TOLERANCE,
   REFERENCE_RING_OPACITY,
   SELECTED_ORBIT_OPACITY,
-  assignOrbitTiers,
+  anomalyAtColumn,
   buildOrbitLineRecords,
   buildOrbitParameterTable,
+  columnForAnomaly,
   eccentricityRow,
+  groupOrbitTiers,
+  nearestEllipseAnomaly,
   orbitLineStyle,
   orbitSegmentsFor,
   rowEccentricity,
-  writeOrbitCentres,
+  updateOrbitTiers,
+  warpForSpacingRatio,
+  warpedColumn,
+  writeOrbitFrame,
   writeOrbitInstance,
   type OrbitInstanceArrays,
   type OrbitLineRecord,
@@ -158,14 +165,16 @@ describe('buildOrbitLineRecords', () => {
   })
 })
 
-describe('orbitSegmentsFor / assignOrbitTiers', () => {
+describe('orbitSegmentsFor / updateOrbitTiers / groupOrbitTiers', () => {
   const records = recordsFor(SOLAR_SYSTEM)
+  const positions = resolveAllWorldPositions(SOLAR_SYSTEM, DATE)
 
-  it('picks the same segment count the per-orbit line did', () => {
+  it('picks the per-orbit line\'s segment count for the distance it is viewed from', () => {
     const earth = records.find((r) => r.id === 'earth')!
     expect(orbitSegmentsFor(earth, 5000)).toBe(48)
     expect(orbitSegmentsFor(earth, 1000)).toBe(128)
     expect(orbitSegmentsFor(earth, 40)).toBe(512)
+    expect(orbitSegmentsFor(earth, 50_000)).toBe(16)
   })
 
   it('draws no reference ring too small to see', () => {
@@ -173,22 +182,51 @@ describe('orbitSegmentsFor / assignOrbitTiers', () => {
     expect(orbitSegmentsFor(tiny, 1e-9)).toBe(0)
   })
 
-  it('groups records by tier, highest detail first, in record order within a tier', () => {
-    const tiers = assignOrbitTiers(records, 100)
-    expect(tiers).toHaveLength(ORBIT_SEGMENT_TIERS.length)
-    const flat = tiers.flat()
-    expect(new Set(flat).size).toBe(flat.length)
-    expect(flat.length).toBe(records.length)
-    tiers.forEach((members, t) => {
-      for (const index of members) expect(orbitSegmentsFor(records[index]!, 100)).toBe(ORBIT_SEGMENT_TIERS[t])
-      expect([...members]).toEqual([...members].sort((a, b) => a - b))
+  it('judges each orbit from the camera, not from what the camera is looking at', () => {
+    // Close to the Sun: the inner planets' orbits round it are big on
+    // screen, the Moon's orbit round a far-off Earth is a few pixels.
+    // The per-orbit lines tiered both on the camera-to-target distance,
+    // drawing every far moon's orbit at full detail.
+    const tiers = new Int8Array(records.length).fill(-2)
+    const camera: WorldVec = [0, 0.2, 0.3]
+    expect(updateOrbitTiers(records, camera, tiers)).toBe(true)
+    const tierOf = (id: string): number => tiers[records.findIndex((r) => r.id === id)]!
+    expect(ORBIT_SEGMENT_TIERS[tierOf('mercury')]).toBe(512)
+    expect(ORBIT_SEGMENT_TIERS[tierOf('moon')]).toBeLessThanOrEqual(128)
+    expect(orbitSegmentsFor(records.find((r) => r.id === 'moon')!, Math.hypot(...camera))).toBe(512)
+    // Beside the Earth, the Moon's orbit is the big one.
+    const earth = positions.get('earth')!
+    expect(updateOrbitTiers(records, [earth[0] + 0.05, earth[1], earth[2]], tiers)).toBe(true)
+    expect(ORBIT_SEGMENT_TIERS[tierOf('moon')]).toBe(512)
+    // ...and every record's tier is orbitSegmentsFor's at its own distance.
+    const at: WorldVec = [earth[0] + 0.05, earth[1], earth[2]]
+    records.forEach((record, i) => {
+      const focus = [0, 1, 2].map((k) => record.parent[k]! + record.local[k]!)
+      const segments = orbitSegmentsFor(record, Math.hypot(at[0] - focus[0]!, at[1] - focus[1]!, at[2] - focus[2]!))
+      expect(tiers[i]).toBe(ORBIT_SEGMENT_TIERS.indexOf(segments))
     })
   })
 
-  it('reuses the arrays it is given', () => {
+  it('reports no change when nothing crossed a tier', () => {
+    const tiers = new Int8Array(records.length).fill(-2)
+    updateOrbitTiers(records, [0, 0, 100], tiers)
+    expect(updateOrbitTiers(records, [0, 0, 100.0001], tiers)).toBe(false)
+  })
+
+  it('groups records by tier, in record order within a tier, reusing the arrays it is given', () => {
+    const tiers = new Int8Array(records.length).fill(-2)
+    updateOrbitTiers(records, [0, 0, 100], tiers)
     const into = ORBIT_SEGMENT_TIERS.map(() => [99])
-    expect(assignOrbitTiers(records, 100, into)).toBe(into)
-    expect(into.flat()).not.toContain(99)
+    const groups = groupOrbitTiers(tiers, into)
+    expect(groups).toBe(into)
+    const flat = groups.flat()
+    expect(flat).not.toContain(99)
+    expect(new Set(flat).size).toBe(flat.length)
+    expect(flat.length).toBe(records.length)
+    groups.forEach((members, t) => {
+      for (const index of members) expect(tiers[index]).toBe(t)
+      expect([...members]).toEqual([...members].sort((a, b) => a - b))
+    })
   })
 })
 
@@ -202,38 +240,188 @@ describe('orbitLineStyle', () => {
   })
 })
 
-describe('writeOrbitInstance / writeOrbitCentres', () => {
-  function arrays(capacity: number): OrbitInstanceArrays {
-    return {
-      centre: new Float32Array(capacity * 3),
-      axisP: new Float32Array(capacity * 3),
-      axisQ: new Float32Array(capacity * 3),
-      shape: new Float32Array(capacity * 2),
-      color: new Float32Array(capacity * 4),
-      width: new Float32Array(capacity),
-    }
+function instanceArrays(capacity: number): OrbitInstanceArrays {
+  return {
+    anchor: new Float32Array(capacity * 3),
+    axisU: new Float32Array(capacity * 3),
+    axisV: new Float32Array(capacity * 3),
+    param: new Float32Array(capacity * 3),
+    color: new Float32Array(capacity * 4),
+    width: new Float32Array(capacity),
   }
+}
 
-  it('packs a record\'s shape, colour and style into its slot', () => {
-    const record = recordsFor(SOLAR_SYSTEM).find((r) => r.id === 'halley')!
-    const out = arrays(3)
-    writeOrbitInstance(out, 2, record, [0.1, 0.2, 0.3], { opacity: 0.4, width: 1.5 })
-    expect([...out.axisP.slice(6, 9)]).toEqual([...Float32Array.from(record.axisP)])
-    expect([...out.axisQ.slice(6, 9)]).toEqual([...Float32Array.from(record.axisQ)])
-    expect(out[`shape`][4]).toBeCloseTo(record.eccentricity, 6)
-    expect(out.shape[5]).toBeCloseTo(eccentricityRow(record.eccentricity), 5)
+describe('writeOrbitInstance', () => {
+  it('packs a record\'s colour and style into its slot', () => {
+    const out = instanceArrays(3)
+    writeOrbitInstance(out, 2, [0.1, 0.2, 0.3], { opacity: 0.4, width: 1.5 })
     expect([...out.color.slice(8, 12)].map((v) => +v.toFixed(5))).toEqual([0.1, 0.2, 0.3, 0.4])
     expect(out.width[2]).toBe(1.5)
-    expect([...out.axisP.slice(0, 6)]).toEqual([0, 0, 0, 0, 0, 0])
+    expect([...out.color.slice(0, 8)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
+  })
+})
+
+describe('the parameter table, read the way the shader reads it', () => {
+  const table = buildOrbitParameterTable()
+
+  it('interpolates between columns and wraps whole turns', () => {
+    const row = eccentricityRow(0.6)
+    const a = anomalyAtColumn(table, row, 100)
+    const b = anomalyAtColumn(table, row, 101)
+    expect(anomalyAtColumn(table, row, 100.25)).toBeCloseTo(a + 0.25 * (b - a), 6)
+    expect(anomalyAtColumn(table, row, 100 - ORBIT_TABLE_SPAN)).toBeCloseTo(a - 2 * Math.PI, 5)
+    expect(anomalyAtColumn(table, row, 0)).toBeCloseTo(0, 6)
+    expect(anomalyAtColumn(table, row, ORBIT_TABLE_SPAN)).toBeCloseTo(2 * Math.PI, 5)
   })
 
-  it('writes each slot\'s centre camera-relative in float64, the local offset included', () => {
+  it('inverts: the column where a row reaches an anomaly', () => {
+    for (const e of [0, 0.2, 0.97]) {
+      const row = eccentricityRow(e)
+      for (const anomaly of [0.001, 1, 3.1, 5.9, 2 * Math.PI + 1]) {
+        expect(anomalyAtColumn(table, row, columnForAnomaly(table, row, anomaly))).toBeCloseTo(anomaly % (2 * Math.PI), 5)
+      }
+    }
+  })
+})
+
+describe('nearestEllipseAnomaly / warpForSpacingRatio / warpedColumn', () => {
+  it('finds the point of an ellipse nearest a point near it', () => {
+    for (const [a, e] of [[1, 0], [2, 0.3], [5, 0.97]] as const) {
+      const b = a * Math.sqrt(1 - e * e)
+      for (const E of [0.3, 2, 4.5]) {
+        const normal = [b * Math.cos(E), a * Math.sin(E)]
+        const length = Math.hypot(normal[0]!, normal[1]!)
+        const offset = 1e-3 * a
+        const x = a * (Math.cos(E) - e) + (normal[0]! / length) * offset
+        const y = b * Math.sin(E) + (normal[1]! / length) * offset
+        const found = nearestEllipseAnomaly(x, y, a, b, e)
+        expect(Math.cos(found)).toBeCloseTo(Math.cos(E), 9)
+        expect(Math.sin(found)).toBeCloseTo(Math.sin(E), 9)
+      }
+    }
+  })
+
+  it('picks the exponent whose first segment is the given fraction of an even one', () => {
+    expect(warpForSpacingRatio(1, 512)).toBe(1)
+    expect(warpForSpacingRatio(2, 512)).toBe(1)
+    for (const ratio of [0.5, 1e-2, 1e-4]) {
+      const p = warpForSpacingRatio(ratio, 512)
+      expect((2 / 512) ** (p - 1)).toBeCloseTo(ratio, 10)
+    }
+    expect(warpForSpacingRatio(1e-30, 512)).toBe(4)
+    expect(warpForSpacingRatio(0, 512)).toBe(4)
+  })
+
+  it('spreads the segments over one whole turn centred on the anchor, densest there', () => {
+    for (const warp of [1, 3]) {
+      expect(warpedColumn(0, 512, 300, warp)).toBeCloseTo(300 - ORBIT_TABLE_SPAN / 2, 9)
+      expect(warpedColumn(256, 512, 300, warp)).toBe(300)
+      expect(warpedColumn(512, 512, 300, warp)).toBeCloseTo(300 + ORBIT_TABLE_SPAN / 2, 9)
+    }
+    const even = warpedColumn(257, 512, 300, 1) - 300
+    expect(warpedColumn(257, 512, 300, 3) - 300).toBeCloseTo(even * (1 / 256) ** 2, 9)
+    // The far side's segments: at most p times an even one.
+    expect(warpedColumn(512, 512, 300, 3) - warpedColumn(511, 512, 300, 3)).toBeLessThan(3 * even)
+  })
+})
+
+describe('writeOrbitFrame', () => {
+  const table = buildOrbitParameterTable()
+  const positions = resolveAllWorldPositions(SOLAR_SYSTEM, DATE)
+  const records = buildOrbitLineRecords(SOLAR_SYSTEM, positions)
+  const iss = records.find((r) => r.id === 'iss')!
+  const halley = records.find((r) => r.id === 'halley')!
+
+  /** The vertex shader's points for slot 0, back in world space. */
+  function shaderPoints(out: OrbitInstanceArrays, segments: number, transform: { origin: WorldVec; scale: number }): WorldVec[] {
+    const [row, column, warp] = [out.param[0]!, out.param[1]!, out.param[2]!]
+    const anchorAnomaly = anomalyAtColumn(table, row, column)
+    const points: WorldVec[] = []
+    for (let s = 0; s <= segments; s++) {
+      const delta = anomalyAtColumn(table, row, warpedColumn(s, segments, column, warp)) - anchorAnomaly
+      const h = Math.sin(delta / 2)
+      points.push([0, 1, 2].map((k) => transform.origin[k]! + out.anchor[k]! / transform.scale - 2 * h * h * out.axisU[k]! + Math.sin(delta) * out.axisV[k]!) as WorldVec)
+    }
+    return points
+  }
+
+  function distanceToSegment(p: WorldVec, a: WorldVec, b: WorldVec): number {
+    const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+    const ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]]
+    const length2 = ab[0]! ** 2 + ab[1]! ** 2 + ab[2]! ** 2
+    const t = length2 > 0 ? Math.min(Math.max((ap[0]! * ab[0]! + ap[1]! * ab[1]! + ap[2]! * ab[2]!) / length2, 0), 1) : 0
+    return Math.hypot(ap[0]! - t * ab[0]!, ap[1]! - t * ab[1]!, ap[2]! - t * ab[2]!)
+  }
+
+  function nearestPolylineDistance(p: WorldVec, points: WorldVec[]): number {
+    let best = Infinity
+    for (let i = 1; i < points.length; i++) best = Math.min(best, distanceToSegment(p, points[i - 1]!, points[i]!))
+    return best
+  }
+
+  it('draws every vertex on the true ellipse, evenly, when the camera is far from it', () => {
+    const transform = { origin: [10, 20, 30] as WorldVec, scale: 1 / 40 }
+    const out = instanceArrays(1)
+    writeOrbitFrame([halley], 1, 128, transform, table, out)
+    expect(out.param[2]).toBe(1)
+    const points = shaderPoints(out, 128, transform)
+    const anomalies = arcLengthEccentricAnomalies(halley.eccentricity, 128)
+    const size = halley.semiMajor
+    for (const s of [0, 40, 64, 100, 128]) {
+      // Anchored at periapsis, s = 0 is half a turn back: E = -π.
+      const expected = pointAt(halley, anomalies[(s + 64) % 128]!)
+      expect(distance(points[s]!, expected) / size).toBeLessThan(5e-5)
+    }
+  })
+
+  it('follows the ISS\'s orbit within a fraction of a pixel when framed right beside it (it used to miss the screen)', () => {
+    // The ISS framing: the camera ~2e-7 world units from a ~6e-3-unit
+    // orbit (~30,000 viewing distances across). 512 even chords sag ~0.2
+    // viewing distances off it — far enough out of the near-edge-on view
+    // that the line drawn through the ISS could be off the screen.
+    const live = positions.get('iss')!
+    const offset = 2e-7
+    const camera: WorldVec = [live[0] + offset * 0.6, live[1] + offset * 0.8, live[2]]
+    const transform = { origin: camera, scale: 1 / offset }
+    const out = instanceArrays(1)
+    expect(writeOrbitFrame([iss], 1, 512, transform, table, out)).toBe(true)
+    expect(out.param[2]).toBeGreaterThan(1)
+    const trueDistance = nearestPolylineDistance(camera, shaderPoints({ ...out, param: Float32Array.of(out.param[0]!, out.param[1]!, 4) }, 512, transform))
+    const drawn = nearestPolylineDistance(camera, shaderPoints(out, 512, transform))
+    expect(Math.abs(drawn - trueDistance) / offset).toBeLessThan(2 * ORBIT_SAG_TOLERANCE)
+    // ...and no chord anywhere round the orbit sags off it by more than
+    // ~a pixel's worth of its distance from the camera (the far side's
+    // chords are longer, but farther away).
+    const [row, column, warp] = [out.param[0]!, out.param[1]!, out.param[2]!]
+    const anchorAnomaly = anomalyAtColumn(table, row, column)
+    const anomalyAt = (s: number): number => anomalyAtColumn(table, row, warpedColumn(s, 512, column, warp)) - anchorAnomaly
+    const truePoint = (delta: number): WorldVec => {
+      const h = Math.sin(delta / 2)
+      return [0, 1, 2].map((k) => camera[k]! + out.anchor[k]! / transform.scale - 2 * h * h * out.axisU[k]! + Math.sin(delta) * out.axisV[k]!) as WorldVec
+    }
+    let worst = 0
+    for (let s = 0; s < 512; s++) {
+      const a = truePoint(anomalyAt(s))
+      const b = truePoint(anomalyAt(s + 1))
+      const chordMid: WorldVec = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]
+      const sag = distance(truePoint((anomalyAt(s) + anomalyAt(s + 1)) / 2), chordMid)
+      worst = Math.max(worst, sag / distance(camera, chordMid))
+    }
+    expect(worst).toBeLessThan(1e-3)
+    // The even spacing it replaced, for scale.
+    const even = nearestPolylineDistance(camera, [...arcLengthEccentricAnomalies(iss.eccentricity, 512)].map((E) => pointAt(iss, E)))
+    expect(Math.abs(even - trueDistance) / offset).toBeGreaterThan(0.01)
+  })
+
+  it('writes the anchor camera-relative in float64, and says when the shape moved', () => {
     const parent: WorldVec = [31.123456, 0.5, -7]
-    const record: OrbitLineRecord = { ...recordsFor(SOLAR_SYSTEM)[0]!, parent, local: [0, 2e-8, 0] }
-    const out = new Float32Array(6)
-    writeOrbitCentres([record, record], 2, { origin: [31.123456, 0.5, -7 - 1e-7], scale: 1e7 }, out)
-    expect(out[1]).toBeCloseTo(0.2, 5)
-    expect(out[2]).toBeCloseTo(1, 5)
-    expect(out[4]).toBeCloseTo(0.2, 5)
+    const ring: OrbitLineRecord = { ...records.find((r) => r.kind === 'orbit')!, parent, local: [0, 2e-8, 0], eccentricity: 0, axisP: [1e-6, 0, 0], axisQ: [0, 0, 1e-6], semiMajor: 1e-6, semiMinor: 1e-6, unitP: [1, 0, 0], unitQ: [0, 0, 1], perimeter: 2 * Math.PI * 1e-6 }
+    const out = instanceArrays(1)
+    const far = { origin: [31.123456 - 1e-4, 0.5, -7] as WorldVec, scale: 1e4 }
+    expect(writeOrbitFrame([ring], 1, 48, far, table, out)).toBe(true)
+    // Periapsis (1e-6, 2e-8, 0) from the focus, 1e-4 behind the camera's x.
+    expect(out.anchor[0]).toBeCloseTo((1e-4 + 1e-6) * 1e4, 5)
+    expect(out.anchor[1]).toBeCloseTo(2e-8 * 1e4, 7)
+    expect(writeOrbitFrame([ring], 1, 48, { ...far, origin: [31.123456 - 1.1e-4, 0.5, -7] }, table, out)).toBe(false)
   })
 })

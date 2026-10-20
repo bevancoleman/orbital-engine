@@ -31,6 +31,11 @@ describe('sphereDetailFor', () => {
     expect(near.heightSegments).toBeGreaterThan(far.heightSegments)
   })
 
+  it('drops to a 16-gon for an orbit only a few pixels across', () => {
+    expect(orbitDetailFor(0.001)).toBe(16)
+    expect(orbitDetailFor(0.005)).toBe(48)
+  })
+
   it('never returns zero or negative segments, even for apparent size 0', () => {
     const detail = sphereDetailFor(0)
     expect(detail.widthSegments).toBeGreaterThan(0)
@@ -99,6 +104,11 @@ describe('orbitDetailFor', () => {
     expect(large).toBeGreaterThan(small)
   })
 
+  it('drops to a 16-gon for an orbit only a few pixels across', () => {
+    expect(orbitDetailFor(0.001)).toBe(16)
+    expect(orbitDetailFor(0.005)).toBe(48)
+  })
+
   it('never returns zero or negative segments, even for apparent size 0', () => {
     expect(orbitDetailFor(0)).toBeGreaterThan(0)
   })
@@ -129,7 +139,7 @@ describe('detail levels — degenerate sizes', () => {
     expect(sphereDetailFor(size)).toEqual({ widthSegments: 14, heightSegments: 10 })
     expect(icosahedronDetailFor(size)).toBe(0)
     expect(torusDetailFor(size)).toEqual({ radialSegments: 8, tubularSegments: 16 })
-    expect(orbitDetailFor(size)).toBe(48)
+    expect(orbitDetailFor(size)).toBe(16)
   })
 })
 

@@ -7,7 +7,6 @@ import {
   renderTransformFor,
   toRenderSpace,
   updateRenderFrame,
-  writeCameraRelative,
 } from '../floatingOrigin'
 import type { WorldVec } from '../../render'
 
@@ -84,33 +83,5 @@ describe('createRenderFrame / updateRenderFrame — the shared per-frame transfo
     const frame = createRenderFrame()
     updateRenderFrame(frame, { x: 1, y: 2, z: 3 }, null)
     expect(frame).toEqual({ origin: [1, 2, 3], scale: 1 })
-  })
-})
-
-describe('writeCameraRelative — float64 offsets, float32 storage', () => {
-  it('writes (point − camera) × scale at the given index', () => {
-    const out = new Float32Array(6).fill(-1)
-    writeCameraRelative(out, 3, [12, 5, -3], { origin: [10, 1, 1], scale: 0.5 })
-    expect([...out]).toEqual([-1, -1, -1, 1, 2, -2])
-  })
-
-  it('adds a small local offset after the large subtraction', () => {
-    const out = new Float32Array(3)
-    writeCameraRelative(out, 0, [31, 0, 0], { origin: [31, 0, 0], scale: 1e6 }, [0, 2e-6, 0])
-    expect(out[1]).toBeCloseTo(2, 5)
-  })
-
-  it('keeps a nearby point exact where a float32 world position would not', () => {
-    // A station 3e-8 units from a camera ~31 units from the origin,
-    // framed at a viewing distance of 1e-7: in float32 both positions
-    // round to the same value (spacing ~2e-6 at 31), so a GPU-side
-    // subtraction gives 0 — the float64 one gives 0.3 of the view.
-    const camera: WorldVec = [31.123456, 0.25, -7.5]
-    const point: WorldVec = [camera[0] + 3e-8, camera[1], camera[2]]
-    const transform = renderTransformFor(camera, 1e-7)
-    const out = new Float32Array(3)
-    writeCameraRelative(out, 0, point, transform)
-    expect(out[0]).toBeCloseTo(0.3, 5)
-    expect((Math.fround(point[0]) - Math.fround(camera[0])) * transform.scale).not.toBeCloseTo(0.3, 1)
   })
 })
