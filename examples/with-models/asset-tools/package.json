@@ -7,10 +7,10 @@
     "build": "node build-assets.mjs"
   },
   "dependencies": {
-    "@gltf-transform/core": "^4.5.0",
-    "@gltf-transform/extensions": "^4.5.0",
-    "@gltf-transform/functions": "^4.5.0",
-    "adm-zip": "^0.5.16",
-    "sharp": "^0.35.4"
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "adm-zip": "^0.6.1",
+    "sharp": "^0.35.5"
   }
 }
