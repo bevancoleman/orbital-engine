@@ -270,3 +270,42 @@ export async function sampleLabelTrack(page: Page, bodyName: string, durationMs:
     { bodyName, durationMs }
   )
 }
+
+/**
+ * One rendered frame's luminance (0–255, max of R/G/B) for every
+ * `step`-th pixel of `region`, row by row — read in-page from inside a
+ * requestAnimationFrame, for the same reason as startFrameSampler. For
+ * comparing two frames of the same view pixel for pixel (a setting on vs
+ * off), not for "is anything there" (litFractionAt does that).
+ */
+export async function readLuminance(page: Page, region: CanvasRegion = CENTRE, step = 2): Promise<number[]> {
+  return page.evaluate(
+    ({ region, step }) =>
+      new Promise<number[]>((resolve, reject) => {
+        const canvas = document.querySelector('canvas')
+        const gl = canvas?.getContext('webgl2')
+        if (!gl) {
+          reject(new Error('Scene canvas or WebGL2 context missing'))
+          return
+        }
+        requestAnimationFrame(() => {
+          const width = gl.drawingBufferWidth
+          const height = gl.drawingBufferHeight
+          const size = Math.max(4, Math.round(Math.min(width, height) * region.sizeFraction))
+          const x = Math.min(Math.max(0, Math.round(width * region.cx - size / 2)), width - size)
+          const y = Math.min(Math.max(0, Math.round(height * (1 - region.cy) - size / 2)), height - size)
+          const pixels = new Uint8Array(size * size * 4)
+          gl.readPixels(x, y, size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+          const out: number[] = []
+          for (let row = 0; row < size; row += step) {
+            for (let col = 0; col < size; col += step) {
+              const i = (row * size + col) * 4
+              out.push(Math.max(pixels[i]!, pixels[i + 1]!, pixels[i + 2]!))
+            }
+          }
+          resolve(out)
+        })
+      }),
+    { region, step }
+  )
+}

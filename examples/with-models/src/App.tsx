@@ -11,6 +11,7 @@ const FLY_TARGETS = [
   { id: 'earth', label: 'Earth' },
   { id: 'moon', label: 'Moon' },
   { id: 'saturn', label: 'Saturn' },
+  { id: 'jupiter', label: 'Jupiter' },
   { id: 'iss', label: 'ISS' },
   { id: 'hubble', label: 'Hubble' },
   { id: 'mercury', label: 'Mercury' },
@@ -31,11 +32,27 @@ function initialMode(): Mode {
   return new URLSearchParams(window.location.search).get('mode') === 'placeholders' ? 'placeholders' : 'real-assets'
 }
 
+/** `?date=1986-02-09` starts the simulated clock there (Halley's
+ *  perihelion, say, or an eclipse) via OrbitalSystemScene's initialDate;
+ *  `?light=1` starts with "Light from star" on. */
+function initialDate(): number | undefined {
+  const value = new URLSearchParams(window.location.search).get('date')
+  const ms = value ? Date.parse(value) : Number.NaN
+  return Number.isFinite(ms) ? ms : undefined
+}
+
+function initialLightFromStar(): boolean {
+  return new URLSearchParams(window.location.search).get('light') === '1'
+}
+
 export function App() {
   const [mode, setMode] = useState<Mode>(initialMode)
   const [selected, setSelected] = useState<CelestialBody | null>(null)
   const [externalFocus, setExternalFocus] = useState<ExternalFocusRequest | null>(null)
-  const [lightFromStar, setLightFromStar] = useState(false)
+  const [lightFromStar, setLightFromStar] = useState(initialLightFromStar)
+  const [shadows, setShadows] = useState(true)
+  const [cometTails, setCometTails] = useState(true)
+  const [startDate] = useState(initialDate)
   const system = mode === 'real-assets' ? SOLAR_SYSTEM_WITH_ASSETS : SOLAR_SYSTEM
 
   function switchMode(next: Mode) {
@@ -73,6 +90,14 @@ export function App() {
             <input type="checkbox" checked={lightFromStar} onChange={(e) => setLightFromStar(e.target.checked)} />
             Light from star (real day/night)
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, opacity: lightFromStar ? 1 : 0.5 }}>
+            <input type="checkbox" checked={shadows} disabled={!lightFromStar} onChange={(e) => setShadows(e.target.checked)} />
+            Ring and eclipse shadows
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+            <input type="checkbox" checked={cometTails} onChange={(e) => setCometTails(e.target.checked)} />
+            Comet tails
+          </label>
           <a href="../" style={{ color: '#22d3ee', fontSize: 13 }}>
             ← other example
           </a>
@@ -103,6 +128,9 @@ export function App() {
           onSelectBody={setSelected}
           externalFocus={externalFocus}
           lightFromStar={lightFromStar}
+          starLighting={{ ringShadows: shadows, eclipseShadows: shadows }}
+          cometTails={cometTails}
+          initialDate={startDate}
           devMode
         />
       </div>
