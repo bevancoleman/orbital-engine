@@ -17,6 +17,13 @@ type SystemId = 'solar' | 'fictional' | 'synthetic'
 const SYNTHETIC_COUNT = /^synthetic-(\d+)$/.exec(new URLSearchParams(window.location.search).get('system') ?? '')?.[1]
 const SYNTHETIC_SYSTEM: StarSystemData | null = SYNTHETIC_COUNT ? createSyntheticSystem(Math.min(Number(SYNTHETIC_COUNT), 50_000)) : null
 
+// `?date=2026-10-20T07:30:00Z` starts the simulated clock there (via
+// OrbitalSystemScene's initialDate) — the e2e suite pins it for views whose
+// content depends on where fast moons are, e.g. Deimos (a 30-hour orbit)
+// beside Mars, which otherwise change with the wall-clock time of the run.
+const DATE_PARAM = Date.parse(new URLSearchParams(window.location.search).get('date') ?? '')
+const INITIAL_DATE = Number.isFinite(DATE_PARAM) ? DATE_PARAM : undefined
+
 // A handful of bodies worth flying straight to, per system — demonstrates
 // the externalFocus prop (a body id + a token that must change on every
 // request, even a repeat of the same id, so clicking the same button twice
@@ -162,6 +169,7 @@ export function App() {
           onSelectBody={setSelected}
           externalFocus={externalFocus}
           lightFromStar={lightFromStar}
+          initialDate={INITIAL_DATE}
           onAction={(entry) => setActionLog((prev) => [...prev, entry])}
           devMode
         />
