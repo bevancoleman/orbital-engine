@@ -734,9 +734,12 @@ test.describe('examples/basic — GPU orbit lines and large systems', () => {
     return sorted[Math.floor(sorted.length / 2)] ?? 0
   }
 
-  /** Mars selected, zoomed out to take in its moons' orbits. */
+  /** Mars selected, zoomed out to take in its moons' orbits. Pinned to a
+   *  fixed date: Deimos goes round Mars every 30 hours, so at the live
+   *  wall-clock time its label is sometimes decluttered away beside Mars
+   *  and these tests failed or passed by time of day (a real CI failure). */
   async function marsSystem(page: Page): Promise<void> {
-    await gotoScene(page, URL)
+    await gotoScene(page, `${URL}?date=2026-10-20T07:30:00Z`)
     await flyAndSettle(page, async () => {
       await select(page, 'Mars')
     })
