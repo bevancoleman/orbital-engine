@@ -14,3 +14,12 @@ export function stepToward(current: number, target: number, maxStep: number): nu
   const diff = target - current
   return Math.abs(diff) <= maxStep ? target : current + Math.sign(diff) * maxStep
 }
+
+/** How long a body takes to grow in / shrink out when it crosses in or
+ *  out of the visible set (see ProximitySelector's screen-space thinning
+ *  and computeVisibleBodyIds' rank-and-cap) — replaces what used to be an
+ *  instant pop the moment a hard distance cliff was crossed, which could
+ *  make a body vanish entirely from what looked like a trivial zoom
+ *  change. Shared by BodyMarker and the instanced small bodies
+ *  (InstancedBodies), so both fade alike. */
+export const VISIBILITY_FADE_SECONDS = 0.3

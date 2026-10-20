@@ -7,14 +7,13 @@
  * one is reused by both the regression test and the plot script.
  */
 
-import { FLY_DURATION_MS } from '../camera'
 import { MS_PER_DAY } from '../constants'
 import { DEFAULT_DAYS_PER_SECOND, MAX_DAYS_PER_SECOND, formatPlaybackSpeed } from '../timeScale'
 import type { CelestialBody, StarSystemData } from '../types'
 
 
 /** Target render rate this fixture samples at — see
- *  CAMERA_ROUTE_SAMPLES_PER_FLIGHT/CAMERA_ROUTE_TRACK_STEPS for why "one
+ *  CAMERA_ROUTE_FLIGHT_FPS/CAMERA_ROUTE_TRACK_STEPS for why "one
  *  computed camera update per real rendered frame" is the requirement,
  *  not just a round sample count. */
 export const FIXTURE_FPS = 60
@@ -145,19 +144,22 @@ export const CAMERA_ROUTE_FIXTURE_SYSTEM: StarSystemData = {
 export const CAMERA_ROUTE_FIXTURE_WAYPOINTS = ['star', 'planetA', 'moonA', 'stationA'] as const
 
 /** One computed camera update per real rendered frame of the flight, not
- *  an arbitrary round sample count — derived directly from FLY_DURATION_MS
- *  (camera.ts) at FIXTURE_FPS, the same cadence CameraRig.tsx's own
+ *  an arbitrary round sample count — pass as simulateCameraRoute's
+ *  `framesPerSecond`, so each flight is sampled once per FIXTURE_FPS frame
+ *  of its OWN duration (flights no longer share one fixed length — see
+ *  camera.ts's flightDurationMs), the same cadence CameraRig.tsx's own
  *  useFrame loop actually runs at. Sampling any COARSER than this spreads
  *  the exact same total viewing-angle/path change across fewer, bigger
  *  steps and manufactures an apparent "sharp turn" a real 60fps playback
- *  would never show — confirmed directly on this fixture's own moonA leg:
- *  its largest real per-frame turn is ~9° at this density, but reads as a
- *  much larger single-step jump when coarsely sampled, purely from
- *  under-sampling the exact same smooth curve. This is separate from (and
- *  doesn't mask) naturalFlightOffset's own near-antipodal slerp fix in
- *  camera.ts, which was a genuine mid-flight discontinuity reproducible
- *  at ANY sample density. */
-export const CAMERA_ROUTE_SAMPLES_PER_FLIGHT = Math.round((FLY_DURATION_MS / 1000) * FIXTURE_FPS)
+ *  would never show — confirmed directly on this fixture's own moonA leg
+ *  back when flights were a fixed 900ms: its largest real per-frame turn
+ *  was ~9° at this density, but read as a much larger single-step jump
+ *  when coarsely sampled, purely from under-sampling the exact same
+ *  smooth curve. This is separate from (and doesn't mask)
+ *  naturalFlightOffset's own near-antipodal slerp fix in camera.ts, which
+ *  was a genuine mid-flight discontinuity reproducible at ANY sample
+ *  density. */
+export const CAMERA_ROUTE_FLIGHT_FPS = FIXTURE_FPS
 
 /** How much real playback time the settle/track phase covers — long
  *  enough for moonA (0.5-day period) and stationA (0.2-day period) to

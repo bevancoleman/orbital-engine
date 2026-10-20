@@ -165,6 +165,16 @@ describe('thinByScreenProximity', () => {
     ]
     expect(thinByScreenProximity(candidates, 40)).toEqual(computeVisibleLabels(candidates, 40))
   })
+
+  it('still thins candidates projected millions of pixels away, and keeps distinct cells apart', () => {
+    const far = [
+      { id: 'a', x: 5e6, y: -3e6, priority: 0 },
+      { id: 'b', x: 5e6 + 3, y: -3e6, priority: 1 },
+      { id: 'c', x: 5e6 + 400, y: -3e6, priority: 1 },
+      { id: 'd', x: 10, y: 10, priority: 1 },
+    ]
+    expect([...thinByScreenProximity(far, 14)].sort()).toEqual(['a', 'c', 'd'])
+  })
 })
 
 describe('thinByScreenProximity — agrees with the naive O(n²) pass', () => {

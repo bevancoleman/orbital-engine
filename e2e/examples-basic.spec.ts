@@ -8,7 +8,9 @@ import {
   litFractionAt,
   sampleFlight,
   sampleFor,
+  sampleLabelTrack,
 } from './support/frameSampler'
+import { bodyOnScreen, brightnessAt, radialLinePeak, traceBody, type ScreenPoint } from './support/canvasPixels'
 import {
   flightCount,
   flyAndSettle,
@@ -32,7 +34,7 @@ import {
 // data-sim-playing attributes — see support/scene.ts) or an auto-retrying
 // assertion, and every "what's on screen" check reads real rendered frames
 // (see support/frameSampler.ts) — never a screenshot taken at a guessed
-// moment of the ~900ms flight.
+// moment of the flight.
 
 const URL = 'http://localhost:5173/'
 
@@ -162,7 +164,7 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // was when the fly-to STARTED, not where it ended up — for a fast
     // orbiter (the ISS completes a real orbit in ~92 minutes; at typical
     // playback speeds that's a large fraction of a full lap within the
-    // ~900ms flight itself), the body would already be gone by the time
+    // flight itself), the body would already be gone by the time
     // the camera finished arriving, and the user had to click Recenter
     // manually to reacquire it. Checked on every rendered frame from the
     // landing onward — the ISS's own label (projected from the body's
@@ -181,7 +183,8 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     //
     // Both were fixed the same way: the flight target is computed once,
     // deterministically, from a simDate already advanced by the flight's
-    // own duration (see camera.ts's FLY_DURATION_MS/computeFocusForBody).
+    // own planned duration (see camera.ts's planFocusFlight and
+    // computeFocusForBody).
     // The precise numeric claims are covered by camera.test.ts's
     // "resolving a PREDICTED (non-"now") simDate" tests and
     // cameraFlightLifecycle.test.ts's "fixes the endpoint at flight start"
@@ -390,7 +393,7 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // camera's LIVE mid-tween position). The three selections are made
     // from inside the page, one animation frame apart, so each one is
     // seen by the frame loop as its own flight start — well within the
-    // previous one's ~900ms.
+    // previous one's 1.2s minimum.
     const errors = trackErrors(page)
     await gotoScene(page, URL)
     const before = await flightCount(page)
@@ -552,6 +555,269 @@ test.describe('examples/basic — built-in placeholder rendering', () => {
     // Reset returns to the whole-system view: nothing selected.
     await expect(sceneRoot(page)).not.toHaveAttribute('data-focused-id', /.+/)
     await expect(sceneRoot(page)).toHaveAttribute('data-camera-state', 'idle')
+    expect(errors).toEqual([])
+  })
+  for (const [from, to] of [
+    ['Earth', 'Moon'],
+    ['ISS', 'Hubble Space Telescope'],
+  ] as const) {
+    test(`the selected body's label exists from the flight's first frame and shows once it lands (${from} → ${to})`, async ({ page }) => {
+      // Regression test for a real, reported bug: a selected body's label
+      // sometimes vanished for a few frames right after a fly-to landed.
+      // Labels used to be drei <Html> elements, which render their content
+      // through a SEPARATE React root whose render() is scheduled, not
+      // synchronous — so a label that wasn't already showing (here: the
+      // destination's, decluttered away by its neighbour's before the
+      // selection) only appeared once the scheduler got round to that
+      // root: measured at 2-7 frames after the flight had started, and on
+      // a loaded machine (few, slow frames per flight) after it had landed.
+      // A throttled CPU stands in for that machine. See BodyLabel.
+      const errors = trackErrors(page)
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 })
+      await gotoScene(page, URL)
+      await flyAndSettle(page, async () => {
+        await select(page, from)
+      })
+
+      const flight = await sampleFlight(page, async () => {
+        await select(page, to)
+      }, { bodyName: to })
+      const firstFlying = flight.findIndex((s) => s.cameraState === 'flying')
+      expect(firstFlying, describeSamples(flight)).toBeGreaterThanOrEqual(0)
+      // In the DOM on every frame of the flight — it can still be hidden
+      // mid-flight while the body is behind the camera, so only existence
+      // is checked there…
+      for (const sample of flight.slice(firstFlying)) expect(sample.bodyLabelMounted, describeSamples(flight)).toBe(true)
+      // …and on screen on every frame from the landing on.
+      const landing = flight.findIndex((s, i) => i > firstFlying && s.cameraState !== 'flying')
+      const landed = [...flight.slice(landing), ...(await sampleFor(page, 500, { bodyName: to }))]
+      for (const sample of landed) expect(sample.body, describeSamples(landed)).not.toBeNull()
+      expect(errors).toEqual([])
+    })
+  }
+  test('clicking anywhere on a large on-screen disc selects that body, not just near its centre', async ({ page }) => {
+    // Regression test for a real, reported gap: proximity selection only
+    // snapped within 28px of a body's projected CENTRE, and arrival framing
+    // fills ~40% of the view with the selected body — so a click on the
+    // edge of the disc selected nothing. Clicking the already-selected body
+    // toggles its framing (see framingForBodySelection), which is the
+    // observable proof the click hit it.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'Jupiter')
+    })
+    await expect(sceneRoot(page)).toHaveAttribute('data-framing', 'body')
+
+    // In this example's 450px-tall view the disc's radius is ~52px: 0.085
+    // of the height (~38px) from the centre is inside it and outside the
+    // 28px snap.
+    const box = (await page.locator('canvas').boundingBox())!
+    await page.mouse.move(box.x + box.width / 2 + box.height * 0.085, box.y + box.height / 2, { steps: 4 })
+    // Hover is resolved on the next rendered frame, as it is for a real
+    // pointer that has to move there before it clicks.
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await flyAndSettle(page, async () => {
+      await page.mouse.down()
+      await page.mouse.up()
+    })
+    await expect(sceneRoot(page)).toHaveAttribute('data-focused-id', 'jupiter')
+    await expect(sceneRoot(page)).toHaveAttribute('data-framing', 'system')
+
+    // And dead centre, which sits under the body's label element's own
+    // (unshifted) layout box — that box used to swallow the pointer, and
+    // R3F, reading offsetX/offsetY relative to it, hovered the wrong spot.
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await flyAndSettle(page, async () => {
+      await page.mouse.down()
+      await page.mouse.up()
+    })
+    await expect(sceneRoot(page)).toHaveAttribute('data-framing', 'body')
+    expect(errors).toEqual([])
+  })
+  test('while time plays, moving bodies move on every animation frame, not in 100ms steps', async ({ page }) => {
+    // Regression test for smooth playback: positions used to be derived in
+    // React render from the simulated date, which was only committed ~10x a
+    // second, so everything moving — and the camera tracking it — moved in
+    // 100ms steps, standing still on the frames in between (at a frame
+    // rate just over 10fps, every other frame). The simulated time is now
+    // advanced, and every position resolved, every frame (see
+    // framePositions.ts). Tracking Earth at maximum speed, zoomed out far
+    // enough to see the Moon go round it, the Moon has to move on screen on
+    // (nearly) every frame.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'Earth')
+    })
+    await setRangeValue(page.locator('input[type=range][title^="Zoom"]'), 500)
+    await setMaxSpeed(page)
+    await play(page)
+
+    const track = await sampleLabelTrack(page, 'Moon', 2000)
+    const pairs = track.slice(1).map((s, i) => ({ prev: track[i]!, next: s }))
+    const located = pairs.filter(({ prev, next }) => prev.x !== null && next.x !== null)
+    const moved = located.filter(({ prev, next }) => Math.hypot(next.x! - prev.x!, next.y! - prev.y!) > 0.01)
+    const intervals = pairs.map(({ prev, next }) => next.t - prev.t).sort((a, b) => a - b)
+    const detail = `${moved.length}/${located.length} moved; frame intervals (ms): ${intervals.map((v) => v.toFixed(0)).join(',')}`
+    // Only meaningful while frames come faster than the old 100ms steps —
+    // slower than that, every frame carried a step anyway, so there is
+    // nothing to tell apart. A software-rendered canvas manages ~12fps on
+    // its own but drops below 10 when many test workers share the CPU;
+    // skipped (not passed) then, and reported as such. CI runs one worker.
+    test.skip(intervals[Math.floor(intervals.length / 2)]! >= 95, `frames too slow to tell per-frame motion from 100ms steps — ${detail}`)
+    expect(located.length, detail).toBeGreaterThan(10)
+    expect(moved.length / located.length, detail).toBeGreaterThan(0.9)
+    expect(errors).toEqual([])
+  })
+  test('the ISS can be framed up close, filling much of the view, without jitter paused or at full speed', async ({ page }) => {
+    // The user's request: "can we have more zoom, we have a lot of small
+    // objects (ISS, Hubble) and no way of seeing them." The camera used to
+    // stop at a float-precision floor (1e-6 world units) that left the ISS
+    // (~5e-8 across) a speck; rendering is now camera-relative and
+    // distance-normalized (see floatingOrigin.ts), the floor is far below
+    // it, and the ISS arrives filling ~40% of the view like any other body.
+    // Its size is read back from its label's offset (see bodyRadiusPx);
+    // jitter or z-fighting at this scale would show as the body or its
+    // pixels moving between frames while nothing else does.
+    const errors = trackErrors(page)
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'ISS')
+    })
+    const box = (await page.locator('canvas').boundingBox())!
+    const region = { cx: 0.5, cy: 0.5, sizeFraction: 0.5 }
+
+    const paused = await sampleFor(page, 800, { bodyName: 'ISS', region })
+    const first = paused[0]!
+    expect(first.bodyRadiusPx, describeSamples(paused)).not.toBeNull()
+    // Diameter at least 30% of the view's height (the target is 40%).
+    expect((2 * first.bodyRadiusPx!) / box.height, describeSamples(paused)).toBeGreaterThan(0.3)
+    expect(bodyStaysCentred(paused, 0.02).ok, describeSamples(paused)).toBe(true)
+    // Paused, nothing moves: every frame identical, to the pixel.
+    for (const sample of paused) {
+      expect(sample.lit, describeSamples(paused)).toBe(first.lit)
+      expect(sample.body, describeSamples(paused)).toEqual(first.body)
+      expect(sample.bodyRadiusPx, describeSamples(paused)).toBe(first.bodyRadiusPx)
+    }
+
+    // Full speed: the ISS laps Earth every ~15 real seconds. The tracking
+    // camera keeps it centred and about the same size, frame after frame —
+    // within tracking smoothing's own allowance (the smoothed target may
+    // sit up to 15% of the viewing distance off the body; see
+    // adaptiveSmoothingRadius), so its distance, and its size, can vary by
+    // that much. (Its background legitimately changes — Earth swings in and
+    // out behind it — so the lit fraction isn't compared here.)
+    await setMaxSpeed(page)
+    await play(page)
+    const playing = await sampleFor(page, 1500, { bodyName: 'ISS', region })
+    expect(bodyStaysCentred(playing, 0.05).ok, describeSamples(playing)).toBe(true)
+    for (let i = 1; i < playing.length; i++) {
+      const [a, b] = [playing[i - 1]!, playing[i]!]
+      expect(Math.hypot(b.body!.dx - a.body!.dx, b.body!.dy - a.body!.dy), describeSamples(playing)).toBeLessThan(0.05)
+      expect(Math.abs(b.bodyRadiusPx! - first.bodyRadiusPx!), describeSamples(playing)).toBeLessThanOrEqual(first.bodyRadiusPx! * 0.2 + 1)
+    }
+    expect(errors).toEqual([])
+  })
+})
+
+// The batched GPU paths (OrbitLines.tsx's OrbitLineBatch, InstancedBodies)
+// have no per-orbit object or DOM element to inspect, so these read the
+// rendered canvas itself (support/canvasPixels.ts).
+test.describe('examples/basic — GPU orbit lines and large systems', () => {
+  const zoomSlider = (page: Page) => page.locator('input[type=range][title^="Zoom"]')
+
+  function median(values: number[]): number {
+    const sorted = [...values].sort((a, b) => a - b)
+    return sorted[Math.floor(sorted.length / 2)] ?? 0
+  }
+
+  /** Mars selected, zoomed out to take in its moons' orbits. */
+  async function marsSystem(page: Page): Promise<void> {
+    await gotoScene(page, URL)
+    await flyAndSettle(page, async () => {
+      await select(page, 'Mars')
+    })
+    await setRangeValue(zoomSlider(page), 330)
+    await expect(page.getByText('Deimos', { exact: true }).and(page.locator('div'))).toBeVisible()
+  }
+
+  test('draws each orbit where its body actually travels', async ({ page }) => {
+    // The camera tracks Mars, so Deimos's orbit stays put on screen while
+    // Deimos (a 1.26-day orbit) runs most of the way round it at full
+    // speed — its label marking every point it passes through.
+    await marsSystem(page)
+    await play(page)
+    await setMaxSpeed(page)
+    const path = await traceBody(page, 'Deimos', 4000)
+    await page.getByRole('button', { name: 'Pause' }).click()
+    // Null when Deimos stopped behind Mars — the Mars check covers it then.
+    const end = await bodyOnScreen(page, 'Deimos')
+    const mars = (await bodyOnScreen(page, 'Mars'))!
+
+    // Points a few px apart along the traced path — not over Mars's disc,
+    // nor where Deimos itself now is — each with a control point 6px off
+    // the path on either side.
+    const points: ScreenPoint[] = []
+    for (const p of path) {
+      const last = points[points.length - 1]
+      if (end && Math.hypot(p.x - end.x, p.y - end.y) < end.radius + 10) continue
+      if (Math.hypot(p.x - mars.x, p.y - mars.y) < mars.radius + 10) continue
+      if (!last || Math.hypot(p.x - last.x, p.y - last.y) >= 4) points.push(p)
+    }
+    expect(points.length).toBeGreaterThan(15)
+    const normals = points.map((p, i) => {
+      const a = points[Math.max(i - 1, 0)]!
+      const b = points[Math.min(i + 1, points.length - 1)]!
+      const length = Math.hypot(b.x - a.x, b.y - a.y) || 1
+      return { x: -(b.y - a.y) / length, y: (b.x - a.x) / length }
+    })
+    const on = await brightnessAt(page, points)
+    const off = await brightnessAt(page, [
+      ...points.map((p, i) => ({ x: p.x + 6 * normals[i]!.x, y: p.y + 6 * normals[i]!.y })),
+      ...points.map((p, i) => ({ x: p.x - 6 * normals[i]!.x, y: p.y - 6 * normals[i]!.y })),
+    ])
+    // The orbit line is drawn under (nearly) every point the body passed
+    // through — the GPU evaluates the ellipse itself, so this checks it
+    // evaluated the right one — and not beside it.
+    expect(on.filter((v) => v > 30).length / on.length).toBeGreaterThan(0.9)
+    expect(median(on)).toBeGreaterThan(2 * Math.max(median(off), 10))
+  })
+
+  test("draws the selected body's orbit brighter", async ({ page }) => {
+    // The same orbit, Deimos's, through Deimos, unselected and then
+    // selected. A line's brightness is set in screen space (its opacity
+    // and pixel width), so the two views compare whatever the zoom.
+    const peakThroughDeimos = async (): Promise<number> => {
+      const deimos = (await bodyOnScreen(page, 'Deimos'))!
+      return radialLinePeak(page, deimos, [deimos.radius + 6, deimos.radius + 10, deimos.radius + 14])
+    }
+    await marsSystem(page)
+    const unselected = await peakThroughDeimos()
+    await flyAndSettle(page, async () => {
+      await select(page, 'Deimos')
+    })
+    await setRangeValue(zoomSlider(page), 330)
+    const selected = await peakThroughDeimos()
+    expect(unselected).toBeGreaterThan(25)
+    expect(selected).toBeGreaterThan(unselected * 1.4)
+  })
+
+  test('a 2,000-body system loads without errors in a handful of draw calls', async ({ page }) => {
+    const errors = trackErrors(page)
+    await gotoScene(page, `${URL}?system=synthetic-2000`)
+    expect(await litFractionAt(page)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
+    // The dev overlay's renderer stats (PerfStats): one draw call per orbit
+    // tier and instanced shape, plus the few full-path bodies — it was
+    // ~1,050 when every body and orbit drew its own.
+    const drawCalls = async (): Promise<number> => Number(/draw calls\s*(\d+)/.exec(await page.locator('body').innerText())?.[1] ?? Number.NaN)
+    await expect.poll(drawCalls).toBeGreaterThan(0)
+    expect(await drawCalls()).toBeLessThanOrEqual(21)
+    await play(page)
+    await flyAndSettle(page, () => page.getByRole('button', { name: 'Planet 1', exact: true }).click())
+    expect(await drawCalls()).toBeLessThanOrEqual(40)
     expect(errors).toEqual([])
   })
 })

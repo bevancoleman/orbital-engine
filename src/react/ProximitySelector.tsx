@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { WorldVec } from '../render'
+import { VERTICAL_FOV_DEG } from '../camera'
 import { computeProximityFrame, pointerPresenceAfter } from './proximityFrame'
-import { ndcToScreenPx, projectCandidatesToScreen } from './screenProjection'
+import { ndcToScreenPx, projectCandidatesToScreen, type DiscMeasure, type ProjectionCandidate } from './screenProjection'
 import type { SceneInteractionStore } from './sceneInteractionStore'
 
 // How far past the viewport edge (px) a body still counts as on screen —
@@ -24,8 +25,10 @@ const POINTER_EVENTS = ['pointerenter', 'pointermove', 'pointerdown', 'pointerle
  * body since both need exactly that. Every frame:
  *
  *  - finds whichever visible body's projected point is nearest the
- *    pointer, within PROXIMITY_SNAP_PX — or the body whose label the
- *    pointer is directly over — and that drives the hover highlight and,
+ *    pointer, within PROXIMITY_SNAP_PX — or, for a body drawn bigger than
+ *    that, whose projected disc the pointer is inside (nearest the camera
+ *    first; see findPointerTarget) — or the body whose label the pointer
+ *    is directly over — and that drives the hover highlight and,
  *    read from the interaction store by OrbitalSystemScene's Canvas
  *    onPointerMissed, what a click selects (no mesh in this scene is
  *    itself raycastable any more — this replaces that entirely). Bodies
@@ -58,7 +61,7 @@ export function ProximitySelector({
   selectedId,
   interaction,
 }: {
-  candidates: { id: string; position: WorldVec; priority: number }[]
+  candidates: ProjectionCandidate[]
   alwaysVisibleIds: ReadonlySet<string>
   selectedId: string | null
   interaction: SceneInteractionStore
@@ -69,6 +72,16 @@ export function ProximitySelector({
   const connected = useThree((s) => s.events.connected) as unknown
   const pointerInside = useRef(false)
   const projected = useRef(new THREE.Vector3())
+  // Reused every frame (no per-frame allocation): sizes each candidate's
+  // projected disc for findPointerTarget's disc hit-test.
+  const discMeasure = useRef<DiscMeasure & { camera: THREE.Camera }>({
+    camera,
+    focalLengthPx: 1,
+    distanceTo(p: WorldVec) {
+      const c = this.camera.position
+      return Math.hypot(p[0] - c.x, p[1] - c.y, p[2] - c.z)
+    },
+  })
 
   // R3F's own state.pointer reads (0, 0) — dead centre — until the first
   // pointer move, and keeps its last value after the mouse leaves, so on
@@ -90,11 +103,16 @@ export function ProximitySelector({
 
   useFrame((state) => {
     const scratch = projected.current
+    const measure = discMeasure.current
+    const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : VERTICAL_FOV_DEG
+    measure.camera = camera
+    measure.focalLengthPx = size.height / 2 / Math.tan((fov * Math.PI) / 360)
     const screen = projectCandidatesToScreen(
       candidates,
       (p) => scratch.set(p[0], p[1], p[2]).project(camera),
       size,
-      OFFSCREEN_MARGIN_PX
+      OFFSCREEN_MARGIN_PX,
+      measure
     )
     const result = computeProximityFrame({
       projected: screen,

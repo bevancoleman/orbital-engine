@@ -9,8 +9,9 @@ import { expect, type Locator, type Page } from '@playwright/test'
 // moved past N and the camera is no longer flying", which holds however
 // slowly the (software-rendered, often heavily loaded) browser is running.
 
-/** Generous: a flight is ~900ms of wall-clock, but a parallel run on a
- *  software-rendered canvas can take several seconds to get there. */
+/** Generous: a flight is 1.2–4s of wall-clock (see camera.ts's
+ *  flightDurationMs), and a parallel run on a software-rendered canvas
+ *  can take several seconds more to get there. */
 const SETTLE_TIMEOUT_MS = 15_000
 
 export function sceneRoot(page: Page): Locator {

@@ -31,11 +31,21 @@ export interface FrameSample {
   /** Where the body named `bodyName` is on screen, relative to the canvas
    *  centre and normalized by the canvas size (±0.5 is the edge), or null
    *  when its label isn't on screen this frame. Read from the body's
-   *  in-canvas label, which drei's <Html> projects from the body's own
+   *  in-canvas label, which BodyLabel projects from the body's own
    *  position with the same camera — minus the label's own upward offset
    *  above the body (BodyLabel's translateY, which grows with the body's
    *  projected radius), so this is the body's centre, not the text's. */
   body: { dx: number; dy: number } | null
+  /** Whether the body named `bodyName` has a label element in the DOM at
+   *  all this frame — even one hidden for sitting behind the camera
+   *  (which `body` reports as null). */
+  bodyLabelMounted: boolean
+  /** The body's projected on-screen radius in CSS px, read back from its
+   *  label's offset above it (BodyLabel's translateY is a fixed 14px gap
+   *  plus the projected radius — see labelLayout.ts's labelOffsetPx, which
+   *  caps the radius part at 220px), or null when the label isn't on
+   *  screen. */
+  bodyRadiusPx: number | null
 }
 
 export interface SampleOptions {
@@ -63,7 +73,7 @@ declare global {
  * via collectFrameSamples. Screenshots cost ~0.5s each on a software-
  * rendered canvas (several frames), so the old approach of screenshotting
  * "mid-flight" at a guessed wall-clock time landed at an arbitrary point
- * of the ~900ms flight, or missed it entirely under parallel load.
+ * of the flight, or missed it entirely under parallel load.
  *
  * Why this isn't stale (an earlier in-page attempt was): the canvas is
  * created without preserveDrawingBuffer, so its pixels are only valid
@@ -100,6 +110,21 @@ export async function startFrameSampler(page: Page, options: SampleOptions = {})
         return lit / (size * size)
       }
 
+      function labelMounted(): boolean {
+        if (bodyName === null) return false
+        for (const el of document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]')) if (el.textContent === bodyName) return true
+        return false
+      }
+
+      function readBodyRadius(): number | null {
+        if (bodyName === null) return null
+        for (const el of document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]')) {
+          if (el.textContent !== bodyName || el.getBoundingClientRect().width === 0) continue
+          return Number(/translateY\((-?[\d.]+)px\)/.exec(el.style.transform)?.[1] ?? '0') * -1 - 14
+        }
+        return null
+      }
+
       function readBody(): { dx: number; dy: number } | null {
         if (bodyName === null) return null
         const box = canvas!.getBoundingClientRect()
@@ -122,7 +147,7 @@ export async function startFrameSampler(page: Page, options: SampleOptions = {})
         const tick = (): void => {
           const cameraState = root.dataset.cameraState ?? ''
           const count = Number(root.dataset.flightCount ?? '0')
-          samples.push({ cameraState, flightCount: count, lit: readLit(), zoom: Number(zoomSlider.value), body: readBody() })
+          samples.push({ cameraState, flightCount: count, lit: readLit(), zoom: Number(zoomSlider.value), body: readBody(), bodyLabelMounted: labelMounted(), bodyRadiusPx: readBodyRadius() })
           const elapsed = performance.now() - start
           const flightPending = count < untilFlightCount || cameraState === 'flying'
           const keepGoing = elapsed < minDurationMs || (untilFlightCount > 0 && flightPending)
@@ -178,19 +203,18 @@ export function bodyNearCentre(sample: FrameSample, maxOffset = 0.15): boolean {
 }
 
 /**
- * Asserts the sampled body stayed centred: on EVERY frame its label was on
- * screen, and with the label on screen for most frames (and the last).
- * Not every frame: the label is observed missing for a few frames at
- * times — just after selection, before drei's <Html> has created it, and
- * occasionally right after a flight lands — which is a label behaviour,
- * not the camera aiming anywhere wrong; the WebGL lit-fraction checks
- * cover "is anything rendered there" on those frames.
+ * Asserts the sampled body stayed centred: its label on screen, near the
+ * centre, on EVERY frame. This used to accept the label missing on up to
+ * half the frames — it was observed missing just after selection and
+ * occasionally right after a flight landed, put down at the time to "a
+ * label behaviour". It was a real bug (drei's <Html> rendered the label
+ * through a separately scheduled React root — see BodyLabel), fixed, so a
+ * missing frame now fails.
  */
 export function bodyStaysCentred(samples: FrameSample[], maxOffset = 0.15): { ok: boolean; detail: string } {
   const located = samples.filter((s) => s.body !== null)
   const offCentre = located.filter((s) => !bodyNearCentre(s, maxOffset))
-  const last = samples[samples.length - 1]
-  const ok = located.length >= samples.length / 2 && offCentre.length === 0 && last !== undefined && last.body !== null
+  const ok = samples.length > 0 && located.length === samples.length && offCentre.length === 0
   return { ok, detail: describeSamples(samples) }
 }
 
@@ -198,8 +222,90 @@ export function bodyStaysCentred(samples: FrameSample[], maxOffset = 0.15): { ok
 export function describeSamples(samples: FrameSample[]): string {
   return samples
     .map((s) => {
-      const body = s.body ? `${s.body.dx.toFixed(3)},${s.body.dy.toFixed(3)}` : '-'
+      const body = s.body ? `${s.body.dx.toFixed(3)},${s.body.dy.toFixed(3)}` : s.bodyLabelMounted ? 'hidden' : '-'
       return `#${s.flightCount} ${s.cameraState} lit=${s.lit.toFixed(3)} zoom=${s.zoom} body=${body}`
     })
     .join('\n')
+}
+
+export interface LabelTrackSample {
+  /** requestAnimationFrame timestamp, ms. */
+  t: number
+  /** The label's centre in CSS px, or null when it isn't on screen. */
+  x: number | null
+  y: number | null
+}
+
+/**
+ * Where `bodyName`'s label is on every animation frame for `durationMs` —
+ * label positions only, no WebGL pixel reads: a readPixels stalls the GPU
+ * pipeline every frame and on a software-rendered canvas roughly halves
+ * the frame rate, which would hide exactly the per-frame-vs-100ms
+ * difference some tests measure. Labels are positioned from the same
+ * per-frame body positions the meshes are drawn from (see BodyLabel).
+ */
+export async function sampleLabelTrack(page: Page, bodyName: string, durationMs: number): Promise<LabelTrackSample[]> {
+  return page.evaluate(
+    ({ bodyName, durationMs }) =>
+      new Promise<LabelTrackSample[]>((resolve) => {
+        const samples: LabelTrackSample[] = []
+        let start: number | null = null
+        const tick = (t: number): void => {
+          start ??= t
+          let x: number | null = null
+          let y: number | null = null
+          for (const el of document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]')) {
+            if (el.textContent !== bodyName) continue
+            const rect = el.getBoundingClientRect()
+            if (rect.width === 0) continue
+            x = rect.left + rect.width / 2
+            y = rect.top + rect.height / 2
+          }
+          samples.push({ t, x, y })
+          if (t - start < durationMs) requestAnimationFrame(tick)
+          else resolve(samples)
+        }
+        requestAnimationFrame(tick)
+      }),
+    { bodyName, durationMs }
+  )
+}
+
+/**
+ * One rendered frame's luminance (0–255, max of R/G/B) for every
+ * `step`-th pixel of `region`, row by row — read in-page from inside a
+ * requestAnimationFrame, for the same reason as startFrameSampler. For
+ * comparing two frames of the same view pixel for pixel (a setting on vs
+ * off), not for "is anything there" (litFractionAt does that).
+ */
+export async function readLuminance(page: Page, region: CanvasRegion = CENTRE, step = 2): Promise<number[]> {
+  return page.evaluate(
+    ({ region, step }) =>
+      new Promise<number[]>((resolve, reject) => {
+        const canvas = document.querySelector('canvas')
+        const gl = canvas?.getContext('webgl2')
+        if (!gl) {
+          reject(new Error('Scene canvas or WebGL2 context missing'))
+          return
+        }
+        requestAnimationFrame(() => {
+          const width = gl.drawingBufferWidth
+          const height = gl.drawingBufferHeight
+          const size = Math.max(4, Math.round(Math.min(width, height) * region.sizeFraction))
+          const x = Math.min(Math.max(0, Math.round(width * region.cx - size / 2)), width - size)
+          const y = Math.min(Math.max(0, Math.round(height * (1 - region.cy) - size / 2)), height - size)
+          const pixels = new Uint8Array(size * size * 4)
+          gl.readPixels(x, y, size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+          const out: number[] = []
+          for (let row = 0; row < size; row += step) {
+            for (let col = 0; col < size; col += step) {
+              const i = (row * size + col) * 4
+              out.push(Math.max(pixels[i]!, pixels[i + 1]!, pixels[i + 2]!))
+            }
+          }
+          resolve(out)
+        })
+      }),
+    { region, step }
+  )
 }

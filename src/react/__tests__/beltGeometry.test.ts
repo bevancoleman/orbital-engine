@@ -1,4 +1,5 @@
-import { compressedOffsets, syntheticBeltOffsets } from '../beltGeometry'
+import * as THREE from 'three'
+import { coOrbitalRotationY, compressedOffsets, syntheticBeltOffsets } from '../beltGeometry'
 import { compressVec } from '../../render'
 import { sampleBeltParticles } from '../../belts'
 import type { BeltRegion } from '../../types'
@@ -60,5 +61,24 @@ describe('syntheticBeltOffsets', () => {
 
   it('is deterministic for the same inputs', () => {
     expect(syntheticBeltOffsets(belt, shape, 0.3)).toEqual(syntheticBeltOffsets(belt, shape, 0.3))
+  })
+})
+
+describe('coOrbitalRotationY', () => {
+  it('rotating the angle-0 scatter by it reproduces the scatter built at that reference angle', () => {
+    const shape = sampleBeltParticles(belt)
+    const base = syntheticBeltOffsets(belt, shape, 0)
+    for (const angle of [0.3, 2.1, -1.2, Math.PI]) {
+      const expected = syntheticBeltOffsets(belt, shape, angle)
+      const rotation = new THREE.Matrix4().makeRotationY(coOrbitalRotationY(angle))
+      const v = new THREE.Vector3()
+      for (let i = 0; i < belt.particleCount; i++) {
+        v.set(base[i * 3]!, base[i * 3 + 1]!, base[i * 3 + 2]!).applyMatrix4(rotation)
+        const scale = Math.max(1, Math.hypot(expected[i * 3]!, expected[i * 3 + 1]!, expected[i * 3 + 2]!))
+        expect(Math.abs(v.x - expected[i * 3]!) / scale).toBeLessThan(1e-5)
+        expect(Math.abs(v.y - expected[i * 3 + 1]!) / scale).toBeLessThan(1e-5)
+        expect(Math.abs(v.z - expected[i * 3 + 2]!) / scale).toBeLessThan(1e-5)
+      }
+    }
   })
 })

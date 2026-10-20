@@ -12,8 +12,10 @@ import { compressDistance, trueRadius } from './scale'
 import { ringOuterRadiusKm } from './rings'
 import { MS_PER_DAY } from './constants'
 import { lookupBody } from './hierarchy'
+import { resolveTruePositionKm } from './truePositions'
 import {
   addVec3,
+  angleBetweenDeg,
   anyPerpendicularUnitVec3,
   dotVec3,
   lengthVec3,
@@ -34,16 +36,37 @@ export const DEFAULT_CAMERA_DISTANCE = 134 // matches the initial camera positio
  *  quite unit length. */
 export const DEFAULT_VIEW_DIRECTION: WorldVec = [0, 1 / Math.sqrt(5), 2 / Math.sqrt(5)]
 
-/** How long a fly-to takes, start to end (CameraRig.tsx's own eased tween —
- *  see sampleFlightPath below). Exported from here, not just kept local to
- *  CameraRig, because OrbitalSystemScene needs the SAME number: computing
- *  a fresh focus for a body that's currently moving has to target where
- *  the body will BE once the flight actually arrives, not where it is at
- *  the moment of selection — see computeFocusForBody's own comment on the
- *  real, reported bug this fixes (violent jumping when flying to a body
- *  whose orbital period is far shorter than the flight itself, e.g. the
- *  ISS at higher simulated time). */
-export const FLY_DURATION_MS = 900
+/** How a fly-to is paced — see flightDurationMs. Every field is optional;
+ *  anything omitted (or non-finite / non-positive) falls back to
+ *  DEFAULT_FLIGHT_PACING. Exposed on OrbitalSystemScene as `flightPacing`. */
+export interface FlightPacing {
+  /** Multiplier on the default travel speed: 2 flies twice as fast (half
+   *  the duration, before clamping), 0.5 half as fast. */
+  speed?: number
+  /** Shortest a fly-to may take, in ms. */
+  minMs?: number
+  /** Longest a fly-to may take, in ms. */
+  maxMs?: number
+}
+
+/** A fly-to's duration is no longer one fixed number. It used to be 900ms
+ *  for every flight (FLY_DURATION_MS), whether it was a hop between two
+ *  stations a few thousand km apart or a 27,000x zoom out from the ISS to
+ *  Mars — and with a front-loaded ease on top, half the look-at travel
+ *  happened in the first 33ms. Reported directly as "the travel time when
+ *  I change what I click on still seems very fast... I want it to be
+ *  smooth." Each flight now takes time proportional to how far it really
+ *  travels in the van Wijk & Nuij metric (see flightPathLength), clamped
+ *  to [minMs, maxMs]. OrbitalSystemScene still needs the SAME number the
+ *  flight will use: computing a fresh focus for a body that's currently
+ *  moving has to target where the body will BE once the flight actually
+ *  arrives, not where it is at the moment of selection — see
+ *  computeFocusForBody's own comment on the real, reported bug this fixes
+ *  (violent jumping when flying to a body whose orbital period is far
+ *  shorter than the flight itself, e.g. the ISS at higher simulated time)
+ *  — so the duration is computed first, from the current endpoints, and
+ *  carried on the focus (FocusTarget.flightDurationMs) into the flight. */
+export const DEFAULT_FLIGHT_PACING: Readonly<Required<FlightPacing>> = Object.freeze({ speed: 1, minMs: 1200, maxMs: 5000 })
 
 // The Canvas's own DEFAULT near clip plane (see OrbitalSystemScene's
 // <Canvas near=... /> mount-time value) — used when nothing meaningfully
@@ -67,14 +90,26 @@ export const MIN_CAMERA_DISTANCE = 0.015
 // value) — the basis MIN_CAMERA_DISTANCE derives its margin from.
 export const DEFAULT_NEAR_PLANE = 0.01
 
-// The one genuinely hard, un-scalable floor left: driven by floating-point
-// precision in the camera's projection matrix (its near/far ratio), not by
-// artistic choice. The logarithmic depth buffer (see OrbitalSystemScene's
-// Canvas gl={{logarithmicDepthBuffer}}) fixes DEPTH-BUFFER precision, not
-// the near plane's own value — shrinking near indefinitely still
-// eventually produces visible z-fighting/flicker regardless. Empirically
-// tunable if that reappears at this value.
-export const ABSOLUTE_MIN_CAMERA_DISTANCE = 1e-6
+// The hard floor on how close the camera can get, and on the near plane.
+//
+// It used to be 1e-6, set by GPU precision: everything was rendered in
+// absolute world coordinates (the camera ~31 units from the origin, near
+// Earth) with three's logarithmic depth buffer, whose depth is log2(1 + w)
+// of the ABSOLUTE view distance w — close to linear for w << 1, which left
+// a depth step of ~1e-6 world units at any distance. The ISS (radius ~5e-8)
+// sat inside a single depth step, and couldn't be framed bigger than a
+// speck — "we have a lot of small objects (ISS, Hubble) and no way of
+// seeing them." The scene is now rendered camera-relative and
+// distance-normalized (see react/floatingOrigin.ts): every object at
+// (world - camera) / viewing distance, computed in float64 on the CPU, so
+// the GPU always works around w ~ 1 whatever the zoom.
+//
+// What's left is float64 itself: world coordinates up to ~100 units carry
+// ~1.4e-14 of absolute precision, and camera-controls keeps its target and
+// position in world coordinates. 1e-10 leaves that ~10^4 steps across the
+// closest possible viewing distance — sub-pixel — and is still 500x below
+// the ISS's own radius.
+export const ABSOLUTE_MIN_CAMERA_DISTANCE = 1e-10
 
 /**
  * Near clip plane sized to whatever's actually selected, rather than one
@@ -108,6 +143,33 @@ export const MAX_CAMERA_DISTANCE = 2000
 // pixel-to-world conversion) agrees with what the camera actually renders.
 export const VERTICAL_FOV_DEG = 50
 
+/** What a fly-to a body frames — see computeFocusForBody. `'body'` is the
+ *  body itself (plus its rings), filling BODY_VIEW_FILL of the view;
+ *  `'system'` is the body together with its whole local moon/station
+ *  system. Exposed on OrbitalSystemScene as `arrivalFraming`. */
+export type BodyFraming = 'body' | 'system'
+
+/** The share of the view's height a body's diameter fills when a fly-to
+ *  arrives in `'body'` framing (see computeFocusForBody). Arrival used to
+ *  always frame the body plus its whole moon system, so a planet landed as
+ *  a small dot and its real surface texture was barely visible — reported
+ *  as wanting to "actually see the planet on arrival". 0.4 is big enough
+ *  to read the surface, small enough to keep the limb, some space around
+ *  it, and (see lookBiasClearanceDeg) a parent beside it all in frame. */
+export const BODY_VIEW_FILL = 0.4
+
+/** The most of the view's height a ring system's outer diameter may fill
+ *  in `'body'` framing. Rings are part of the body (see CelestialBody.
+ *  rings) so they stay in frame; most of their span is horizontal, which
+ *  a landscape view has extra room for. Saturn's rings reach ~2.4 of its
+ *  radii, so Saturn itself still fills about a third of the view. */
+export const RING_VIEW_FILL = 0.8
+
+/** Extra angle kept between the edge of the framed body and the edge of
+ *  its parent on screen when lookBias would otherwise hide the parent
+ *  behind the body — see lookBiasClearanceDeg. */
+export const LOOK_BIAS_CLEARANCE_MARGIN_DEG = 3
+
 export interface FocusTarget {
   position: [number, number, number]
   distance: number
@@ -119,6 +181,18 @@ export interface FocusTarget {
    *  whatever direction the camera happened to arrive from forever — see
    *  computeEndDirection. */
   lookBias: WorldVec | null
+  /** The smallest angle, in degrees, the parent (see `lookBias`) must sit
+   *  off the settled view axis so the framed body doesn't eclipse it —
+   *  see computeEndDirection. 0 (or omitted) means no constraint: there's
+   *  no parent, or the parent already looks bigger than the body and so
+   *  can't hide behind it (a satellite over its planet). */
+  lookBiasClearanceDeg?: number
+  /** Unit direction from the focused body toward the system's star (true
+   *  positions — the direction star lighting shades from), when the scene
+   *  is lit from the star (`lightFromStar`) so the settled view should be
+   *  on the body's day side — see computeEndDirection. Null or omitted:
+   *  no day-side constraint, the unlit behaviour. */
+  starDirection?: WorldVec | null
   /** The nearest shared ancestor of the body just left and the one being
    *  flown to (see findContextBody) — Earth, when switching between the
    *  ISS and Hubble; the Sun, when switching between Earth and Mars; null
@@ -143,6 +217,14 @@ export interface FocusTarget {
    *  "consider future locations" behaviour routeCameraSimulator.ts already
    *  models for the fixed test fixture. */
   predictedTargetAt?: ((t: number) => WorldVec) | null
+  /** How long the flight to this focus will take, when the caller already
+   *  decided — the duration `position` and `predictedTargetAt` were
+   *  predicted for (see useSelectionNavigation, which plans it from the
+   *  live camera pose before predicting the arrival). The flight must use
+   *  this same number, or a moving body's predicted arrival and the
+   *  flight's real arrival happen at different moments. Omitted, the
+   *  flight computes its own from its endpoints (see flightDurationMs). */
+  flightDurationMs?: number
 }
 
 /**
@@ -199,10 +281,17 @@ export function findContextBody(fromBody: CelestialBody, toBody: CelestialBody, 
 /** A smooth "bump": 0 at t=0 and t=1, 1 at t=0.5 — how strongly
  *  applyContextBulge pulls the camera back to keep a context body in
  *  frame mid-flight, fading out completely at both ends so it never
- *  disturbs the flight's own actual start or end framing. */
+ *  disturbs the flight's own actual start or end framing. Squared
+ *  ((4t(1−t))², not 4t(1−t)) so it also fades out with zero SLOPE: the
+ *  plain parabola's slope of ±4 at the ends meant a flight bulged out to
+ *  fit Earth was still zooming in at full rate on its very last frame,
+ *  ~0.35 e-folds of distance per 60fps frame on the review's scenario,
+ *  breaking the ease-in-out's "arrive at rest" (see
+ *  flightSmoothness.test.ts). */
 export function midFlightBump(t: number): number {
   const clamped = Math.min(1, Math.max(0, t))
-  return 4 * clamped * (1 - clamped)
+  const b = 4 * clamped * (1 - clamped)
+  return b * b
 }
 
 /**
@@ -277,13 +366,297 @@ export function resolveContextBody(
   return { position: ancestorPos, radius: ancestorRadius }
 }
 
+/** van Wijk & Nuij's ρ — how far a flight zooms out to pan. √2 is the
+ *  paper's own recommendation (the value their users rated best); larger
+ *  zooms out further and pans faster. */
+export const FLIGHT_ZOOM_RHO = Math.SQRT2
+
+/** Converts a camera distance into the "view width" w the zoom-and-pan
+ *  path is planned in: w = distance · tan(half the vertical FOV), i.e. HALF
+ *  the visible height at the target's depth, not all of it. At the top of
+ *  a long hop the path's own width is about the whole pan (see
+ *  zoomPanPath), which puts the destination half a width from centre —
+ *  right on the frame's edge if w were the full height, but only ~13° off
+ *  centre (well inside the 25° half-FOV) with this narrower width. That
+ *  margin is what "comfortably in view" means here. */
+export const FLIGHT_VIEW_WIDTH_PER_DISTANCE = Math.tan((VERTICAL_FOV_DEG * Math.PI) / 360)
+
+/** Below this pan (relative to the larger view width) the path is a pure
+ *  zoom — the general solution's cosh·tanh − sinh difference cancels
+ *  catastrophically there, while the pan itself is invisible anyway. */
+const PURE_ZOOM_PAN_RATIO = 1e-6
+
+/** One point on a zoomPanPath: how much of the lateral pan has been
+ *  covered (0..1) and the view width there. */
+export interface ZoomPanSample {
+  pan: number
+  width: number
+}
+
+/** The van Wijk & Nuij path between two views; see zoomPanPath. */
+export interface ZoomPanPath {
+  /** Path length S in the paper's metric — "how many view widths of
+   *  visual change" the flight is. Proportional to a flight's duration
+   *  (see flightDurationMs). */
+  length: number
+  /** The point a `fraction` (0..1) of the way along the path by length,
+   *  i.e. at s = fraction · length. Moving `fraction` at a constant rate
+   *  is the paper's perceptually constant speed. */
+  at(fraction: number): ZoomPanSample
+}
+
+/**
+ * The optimal zoom-and-pan path of van Wijk & Nuij (2003, "Smooth and
+ * efficient zooming and panning"): from a view of width `startWidth` to one
+ * of width `endWidth`, `panDistance` away. The camera zooms out until both
+ * ends fit, pans, then zooms in — exactly the "establishing shot" a long
+ * hop needs, and the replacement for this file's old front-loaded target
+ * ease (easeOutSteep), whose job was keeping the destination in view: on
+ * this path the remaining pan measured in view widths only ever shrinks
+ * (with x = ρs + r0 it's R(x) = (cosh x · tanh r1 − sinh x)/ρ², and
+ * dR/dx = cosh x · (tanh x · tanh r1 − 1)/ρ² < 0; pinned down in
+ * flightPath.test.ts), so the destination never leaves the view once
+ * it's in it.
+ *
+ * Closed form, with r_i = −asinh(b_i) (the paper's ln(−b + √(b²+1)),
+ * rewritten so huge true-scale ratios — b ~ 10⁷ for the ISS to Mars —
+ * don't cancel catastrophically):
+ *   b_0 = (w1² − w0² + ρ⁴u1²) / (2 w0 ρ² u1),  b_1 = (w1² − w0² − ρ⁴u1²) / (2 w1 ρ² u1)
+ *   S = (r1 − r0)/ρ,  u(s) = w0/ρ² (cosh r0 · tanh(ρs + r0) − sinh r0),  w(s) = w0 cosh r0 / cosh(ρs + r0)
+ * A negligible pan (see PURE_ZOOM_PAN_RATIO) is the paper's u ≈ 0 special
+ * case: S = |ln(w1/w0)|/ρ with w geometric in s. The w0 ≈ w1 short hop
+ * needs no special case — b_1 = −b_0 there and the general form is exact.
+ */
+export function zoomPanPath(panDistance: number, startWidth: number, endWidth: number, rho: number = FLIGHT_ZOOM_RHO): ZoomPanPath {
+  const w0 = startWidth
+  const w1 = endWidth
+  const u1 = Math.max(0, panDistance)
+  const ends = (fraction: number): ZoomPanSample | null => {
+    if (fraction <= 0) return { pan: 0, width: w0 }
+    if (fraction >= 1) return { pan: 1, width: w1 }
+    return null
+  }
+  if (!(w0 > 0 && w1 > 0)) {
+    return { length: 0, at: (f) => ends(f) ?? { pan: f, width: w0 + (w1 - w0) * f } }
+  }
+  if (u1 <= PURE_ZOOM_PAN_RATIO * Math.max(w0, w1)) {
+    const logRatio = Math.log(w1 / w0)
+    return { length: Math.abs(logRatio) / rho, at: (f) => ends(f) ?? { pan: f, width: w0 * Math.exp(logRatio * f) } }
+  }
+  const rho2 = rho * rho
+  const b0 = (w1 * w1 - w0 * w0 + rho2 * rho2 * u1 * u1) / (2 * w0 * rho2 * u1)
+  const b1 = (w1 * w1 - w0 * w0 - rho2 * rho2 * u1 * u1) / (2 * w1 * rho2 * u1)
+  const r0 = -Math.asinh(b0)
+  const r1 = -Math.asinh(b1)
+  const length = (r1 - r0) / rho
+  const coshR0 = Math.cosh(r0)
+  const sinhR0 = Math.sinh(r0)
+  return {
+    length,
+    at(fraction) {
+      const end = ends(fraction)
+      if (end) return end
+      const x = rho * fraction * length + r0
+      const u = (w0 / rho2) * (coshR0 * Math.tanh(x) - sinhR0)
+      return { pan: Math.min(1, Math.max(0, u / u1)), width: (w0 * coshR0) / Math.cosh(x) }
+    },
+  }
+}
+
+/** The zoomPanPath a flight between two camera/target pairs follows: the
+ *  look-at point's travel is the pan, and each end's camera distance
+ *  (scaled by FLIGHT_VIEW_WIDTH_PER_DISTANCE) its view width. */
+function flightZoomPanPath(startPosition: WorldVec, startTarget: WorldVec, endPosition: WorldVec, endTarget: WorldVec): ZoomPanPath {
+  return zoomPanPath(
+    lengthVec3(subtractVec3(endTarget, startTarget)),
+    lengthVec3(subtractVec3(startPosition, startTarget)) * FLIGHT_VIEW_WIDTH_PER_DISTANCE,
+    lengthVec3(subtractVec3(endPosition, endTarget)) * FLIGHT_VIEW_WIDTH_PER_DISTANCE
+  )
+}
+
+/** Length S of the zoom-and-pan path between two camera/target pairs —
+ *  see zoomPanPath. Dimensionless (view widths), so it means the same
+ *  "amount of visual change" at the ISS's scale as at Neptune's. */
+export function flightPathLength(startPosition: WorldVec, startTarget: WorldVec, endPosition: WorldVec, endTarget: WorldVec): number {
+  return flightZoomPanPath(startPosition, startTarget, endPosition, endTarget).length
+}
+
+/** Default pace: path length (view widths — see flightPathLength) covered
+ *  per second at `speed` 1. Tuned on the Solar System routes in
+ *  flightSmoothness.test.ts: a Moon → ISS dive (S ≈ 14.5) takes ~2.9s,
+ *  Hubble → Mars (S ≈ 23) ~4.5s — longer than before satellites could be
+ *  framed up close (S ≈ 12.7 and 19.8), since the zoom spans more. At this pace the log-distance step per
+ *  60fps frame peaks at ρ · 1.5 · 5 / 60 ≈ 0.18 (≈ 1.2x per frame) for any
+ *  flight between the clamps. */
+export const FLIGHT_PATH_SPEED = 5
+
+/** The view's own turn sets a floor on the duration too: a 180° swing to
+ *  look back at a parent on a flight whose path is short would otherwise
+ *  rotate too fast to follow. At 90°/s average, smoothstep's 1.5x peak is
+ *  2.25° per 60fps frame — under the 3°/frame smoothness ceiling. */
+export const FLIGHT_TURN_DEG_PER_SECOND = 90
+
+/** Endpoints a duration (or a path) is planned from — plus, optionally,
+ *  the flight's context body (see FocusTarget.contextBody), whose bulge
+ *  changes how the view turns mid-flight (see flightDurationMs). */
+export interface FlightEndpointPair {
+  startPosition: WorldVec
+  startTarget: WorldVec
+  endPosition: WorldVec
+  endTarget: WorldVec
+  contextBody?: { position: WorldVec; radius: number } | null
+}
+
+/** The fastest the view may turn at any moment of a flight — 2.75° per
+ *  60fps frame, just under the 3°/frame smoothness ceiling (a little more
+ *  headroom than the end-to-end rule's 2.25° peak: this one is measured on
+ *  the path itself, not inferred from its ends). See flightDurationMs. */
+export const FLIGHT_PEAK_TURN_DEG_PER_SECOND = 165
+
+/** How finely flightDurationMs samples a path for its fastest turn. */
+const TURN_SAMPLES = 96
+
+/** The view's fastest turn along the flight's path, in degrees per unit
+ *  of progress (the whole flight is progress 0 → 1). */
+function peakTurnPerProgress(flight: FlightEndpointPair): number {
+  const endpoints: FlightEndpoints = { ...flight, contextBody: flight.contextBody ?? null, predictedTargetAt: null }
+  let previous = sampleFlightFrame(endpoints, 0)
+  let peak = 0
+  for (let i = 1; i <= TURN_SAMPLES; i++) {
+    const next = sampleFlightFrame(endpoints, i / TURN_SAMPLES)
+    const turn = angleBetweenDeg(subtractVec3(previous.target, previous.position), subtractVec3(next.target, next.position))
+    if (Number.isFinite(turn)) peak = Math.max(peak, turn * TURN_SAMPLES)
+    previous = next
+  }
+  return peak
+}
+
+function positiveOr(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+/**
+ * How long a fly-to between these endpoints takes: proportional to the
+ * zoom-and-pan path length (constant perceived speed — see
+ * FLIGHT_PATH_SPEED), or to the view's turn when that's the bigger job
+ * (see FLIGHT_TURN_DEG_PER_SECOND), divided by `pacing.speed` and clamped
+ * to [minMs, maxMs]. Invalid pacing values fall back to the defaults.
+ *
+ * The turn is measured two ways: end to end, and at its fastest along the
+ * actual path (FLIGHT_PEAK_TURN_DEG_PER_SECOND). The end-to-end angle
+ * alone missed a turn concentrated mid-flight: a flight between two
+ * close-up satellites (ISS ↔ Hubble) zooms out to frame Earth (the
+ * context bulge) and does most of its turning up there — and once the
+ * satellites could be framed up close (see ABSOLUTE_MIN_CAMERA_DISTANCE)
+ * the zoom took a bigger share of the flight, squeezing that turn to
+ * 3.5° a frame, past the 3° ceiling.
+ */
+export function flightDurationMs(flight: FlightEndpointPair, pacing: FlightPacing = {}): number {
+  const speed = positiveOr(pacing.speed, DEFAULT_FLIGHT_PACING.speed)
+  const minMs = positiveOr(pacing.minMs, DEFAULT_FLIGHT_PACING.minMs)
+  const maxMs = Math.max(minMs, positiveOr(pacing.maxMs, DEFAULT_FLIGHT_PACING.maxMs))
+  const length = flightPathLength(flight.startPosition, flight.startTarget, flight.endPosition, flight.endTarget)
+  const turnDeg = angleBetweenDeg(subtractVec3(flight.startPosition, flight.startTarget), subtractVec3(flight.endPosition, flight.endTarget))
+  const seconds =
+    Math.max(
+      length / FLIGHT_PATH_SPEED,
+      turnDeg / FLIGHT_TURN_DEG_PER_SECOND,
+      peakTurnPerProgress(flight) / FLIGHT_PEAK_TURN_DEG_PER_SECOND
+    ) / speed
+  return Math.min(maxMs, Math.max(minMs, seconds * 1000))
+}
+
+/** Where the camera and its look-at point are right now. */
+export interface CameraPose {
+  position: WorldVec
+  target: WorldVec
+}
+
+/**
+ * A fresh focus whose arrival prediction and flight duration agree.
+ * `focusAt(durationMs)` must return the focus as it will be `durationMs`
+ * of real time from now (computeFocusForBody at the advanced simDate, plus
+ * any predicted trajectory over that duration). The duration depends on
+ * where the destination will be, and where it will be depends on the
+ * duration — so: plan the duration from the destination as it is now,
+ * predict the arrival for that duration, re-plan from the predicted
+ * arrival, and predict once more only if that moved the duration
+ * (`toleranceMs`). Returns the focus with `flightDurationMs` set, which
+ * the flight then uses verbatim (see FocusTarget.flightDurationMs). With
+ * no camera pose yet (the very first frame), the duration is planned as
+ * if the camera were already at the destination — i.e. pacing.minMs.
+ */
+export function planFocusFlight(
+  focusAt: (durationMs: number) => FocusTarget,
+  pose: CameraPose | null,
+  pacing: FlightPacing = {},
+  toleranceMs = 50
+): FocusTarget {
+  const durationFor = (focus: FocusTarget): number => {
+    if (!pose) return flightDurationMs({ startPosition: [0, 0, 1], startTarget: [0, 0, 0], endPosition: [0, 0, 1], endTarget: [0, 0, 0] }, pacing)
+    const end = computeFlightEndpoint(pose.position, pose.target, focus, DEFAULT_VIEW_DIRECTION)
+    return flightDurationMs(
+      { startPosition: pose.position, startTarget: pose.target, endPosition: end.position, endTarget: end.target, contextBody: focus.contextBody },
+      pacing
+    )
+  }
+  const firstGuess = durationFor(focusAt(0))
+  let focus = focusAt(firstGuess)
+  let durationMs = durationFor(focus)
+  if (Math.abs(durationMs - firstGuess) > toleranceMs) focus = focusAt(durationMs)
+  else durationMs = firstGuess
+  return { ...focus, flightDurationMs: durationMs }
+}
+
+/** Hermite smoothstep on [0, 1], clamped: zero velocity at both ends, 1.5x
+ *  the average speed at the midpoint — a flight's timing over its path
+ *  (see flightShapeAt). Replaced easeOutCubic (and, for the look-at point,
+ *  the even harder front-loaded easeOutSteep), which spent their fastest
+ *  stretch in the very first frames: with those, half the look-at travel
+ *  happened in 33ms and the destination's on-screen position jumped up to
+ *  39° in one frame. */
+export function smoothstep(t: number): number {
+  const c = Math.min(1, Math.max(0, t))
+  return c * c * (3 - 2 * c)
+}
+
+/** Everything about a flight's shape at time-fraction `t` except where
+ *  the look-at point actually is: the camera's direction and distance
+ *  from it, and how much of the look-at point's travel (`pan`, 0..1) is
+ *  done. Shared by sampleFlightPath and naturalFlightOffset so the pan and
+ *  the zoom always come from the same point on the same path. */
+interface FlightShape {
+  direction: WorldVec
+  distance: number
+  pan: number
+}
+
+function flightShapeAt(
+  startPosition: WorldVec,
+  startTarget: WorldVec,
+  endPosition: WorldVec,
+  endTarget: WorldVec,
+  t: number
+): FlightShape {
+  const startOffset = subtractVec3(startPosition, startTarget)
+  const endOffset = subtractVec3(endPosition, endTarget)
+  const startDirection = normalizeOr(startOffset, [0, 1, 0])
+  const endDirection = normalizeOr(endOffset, [0, 1, 0])
+  const progress = smoothstep(t)
+  const direction = slerpUnitVec3(startDirection, endDirection, progress)
+  if (progress <= 0) return { direction, distance: lengthVec3(startOffset), pan: 0 }
+  if (progress >= 1) return { direction, distance: lengthVec3(endOffset), pan: 1 }
+  const sample = flightZoomPanPath(startPosition, startTarget, endPosition, endTarget).at(progress)
+  return { direction, distance: sample.width / FLIGHT_VIEW_WIDTH_PER_DISTANCE, pan: sample.pan }
+}
+
 /**
  * The camera OFFSET (direction + distance from target) a flight would use
  * at progress `t` if nothing needed keeping in frame — computed from the
  * flight's own FIXED start/end camera/target pairs directly, NOT from
  * sampleFlightPath's own position(t)-minus-target(t), even though the two
  * are mathematically related. That distinction is exactly what fixes a
- * real, reported bug: position(t) and target(t) are each ordinary linear
+ * real, reported bug: position(t) and target(t) used to be ordinary linear
  * blends of two fixed points, which makes their DIFFERENCE just a linear
  * blend of the two endpoints' own offsets too (lerp distributes over
  * subtraction) — fine when both offsets point roughly the same way, but
@@ -294,11 +667,15 @@ export function resolveContextBody(
  * the resulting magnitude toward zero mid-flight with no bulge involved
  * at all, reported directly as the camera reading "too close to Earth"
  * again partway through, well before the bulge's own peak. Direction and
- * distance are interpolated SEPARATELY here to avoid that: nlerp
- * (normalize a blend of two UNIT vectors — this never cancels toward
- * zero) for direction, geometric interpolation for distance (matches this
- * file's own reasoning elsewhere for a quantity perceived
- * logarithmically).
+ * distance are interpolated SEPARATELY here to avoid that: slerp (see
+ * slerpUnitVec3 — this never cancels toward zero) for direction, and for
+ * distance the van Wijk & Nuij zoom-and-pan path (see zoomPanPath), which
+ * replaced plain geometric interpolation: geometric was already right for
+ * a quantity perceived logarithmically (and is still exactly what a pure
+ * zoom does), but it never zoomed OUT to cover a pan, so a hop between two
+ * close-ups had to be front-loaded to keep the destination in view at all.
+ * Both use the same ease-in-out timing (smoothstep), so the view turn is
+ * spread over the whole flight instead of happening in its first frames.
  */
 export function naturalFlightOffset(
   startPosition: WorldVec,
@@ -307,18 +684,7 @@ export function naturalFlightOffset(
   endTarget: WorldVec,
   t: number
 ): { direction: WorldVec; distance: number } {
-  const startOffset = subtractVec3(startPosition, startTarget)
-  const endOffset = subtractVec3(endPosition, endTarget)
-  const startDistance = lengthVec3(startOffset)
-  const endDistance = lengthVec3(endOffset)
-  const startDirection = normalizeOr(startOffset, [0, 1, 0])
-  const endDirection = normalizeOr(endOffset, [0, 1, 0])
-  const easedT = easeOutCubic(Math.min(1, Math.max(0, t)))
-  const direction = slerpUnitVec3(startDirection, endDirection, easedT)
-  const distance =
-    startDistance > 0 && endDistance > 0
-      ? startDistance * Math.pow(endDistance / startDistance, easedT)
-      : startDistance + easedT * (endDistance - startDistance)
+  const { direction, distance } = flightShapeAt(startPosition, startTarget, endPosition, endTarget, t)
   return { direction, distance }
 }
 
@@ -369,11 +735,14 @@ export function keepClearOfContextBody(
  * whenever there's nothing to guard against (`contextBody` null — the
  * vast majority of flights), at the very ends of the flight (bump is
  * exactly 0), or when the context body is already comfortably inside the
- * flight's own natural framing (see naturalFlightOffset, used ONLY once a
- * context body is actually in play — deliberately not the default path
- * for every flight, despite being more broadly robust, to keep this
- * scoped to the narrower case that actually needs it rather than
- * changing already-verified behaviour for every other flight too).
+ * flight's own natural framing (see naturalFlightOffset — the same
+ * zoom-and-pan offset every flight uses). The van Wijk & Nuij zoom-out
+ * already backs a sibling hop out to roughly the pan distance, which often
+ * fits the shared parent on its own; the bulge stays for the case it
+ * doesn't (two stations on opposite sides of a planet bigger than their
+ * separation suggests, whose straight look-at line also needs
+ * keepClearOfContextBody) — flightSmoothness.test.ts and
+ * cameraRouteBulge.test.ts pin both down.
  *
  * Blends toward the needed distance GEOMETRICALLY, not linearly, and
  * blends the DIRECTION toward straight-away-from-the-context-body's-own-
@@ -415,10 +784,11 @@ export function applyContextBulge(
   t: number
 ): WorldVec {
   // Untouched whenever there's no context body to guard for — every
-  // flight WITHOUT one (the vast majority) keeps using sampleFlightPath's
-  // own position(t) exactly as before; naturalFlightOffset's more robust
-  // (but different-shaped) path is deliberately scoped to only the
-  // narrower case that actually needs it.
+  // flight WITHOUT one (the vast majority) uses sampleFlightPath's own
+  // position(t) as-is. (naturalFlightOffset used to be a differently-shaped
+  // path scoped to this case alone; it's now the same zoom-and-pan offset
+  // sampleFlightPath uses for every flight, so the two agree exactly
+  // wherever the bulge adds nothing.)
   if (!contextBody) return pathPosition
   const bump = midFlightBump(t)
   if (bump <= 0) return pathPosition
@@ -441,7 +811,7 @@ export function applyContextBulge(
   // distance needed, is still a real sideways nudge) still holds.
   const shortfall = Math.max(0, Math.log(neededDistance / natural.distance))
   const distance = natural.distance * Math.exp(shortfall * bump)
-  const rotationWeight = bump * smoothstep01(shortfall / CONTEXT_BULGE_ROTATION_RAMP)
+  const rotationWeight = bump * smoothstep(shortfall / CONTEXT_BULGE_ROTATION_RAMP)
   const awayFromContext = normalizeOr(subtractVec3(target, contextBody.position), natural.direction)
   const direction = slerpUnitVec3(natural.direction, awayFromContext, rotationWeight)
   return addVec3(target, scaleVec3(direction, distance))
@@ -450,20 +820,13 @@ export function applyContextBulge(
 /** How large applyContextBulge's log-space shortfall (ln(needed/natural
  *  distance)) has to get before its direction blend reaches the full
  *  `bump` weight. Wide on purpose: a true-scale flight's natural distance
- *  sweeps many orders of magnitude in a fraction of a second, so a narrow
- *  ramp would still rotate the view across only a frame or two — ln(1e4)
+ *  sweeps many orders of magnitude within one flight, so a narrow ramp
+ *  would still rotate the view across only a frame or two — ln(1e4)
  *  spreads the swing outward across the several-orders-of-magnitude
  *  stretch where the context body stops fitting, measured at well under
  *  1° of view change between finely-spaced samples on the same flight
  *  that used to jump ~29° in one frame. */
 const CONTEXT_BULGE_ROTATION_RAMP = Math.log(1e4)
-
-/** Hermite smoothstep on [0, 1], clamped — zero slope at both ends, so a
- *  weight driven by it eases in and out with no kink. */
-function smoothstep01(x: number): number {
-  const c = Math.min(1, Math.max(0, x))
-  return c * c * (3 - 2 * c)
-}
 
 /** A body to steer the camera's flight path away from — see
  *  camera-controls' `colliderMeshes` (wired up in CameraRig.tsx), which
@@ -597,22 +960,93 @@ export function computeArrivalDirection(cameraPos: WorldVec, targetPos: WorldVec
  * Null/zero-length lookBias (nothing to bias toward — the star, a belt)
  * leaves the arrival direction untouched, exactly matching the old
  * always-preserve-current-direction behaviour.
+ *
+ * `clearanceDeg` (FocusTarget.lookBiasClearanceDeg) keeps the parent from
+ * being eclipsed. Looking back toward the parent was harmless while a
+ * fly-to framed the body small, but once 'body' framing filled 40% of the
+ * view (see BODY_VIEW_FILL) the Moon covered ~10° around the view axis —
+ * and with the camera arriving from roughly behind it, a 0.8 blend left
+ * Earth sitting behind the Moon, hidden. When the blended direction is
+ * closer than `clearanceDeg` to straight-away-from-the-parent, it's
+ * rotated out to exactly that angle, toward the side it already leaned
+ * (or the side the camera arrived from, or any side when both are dead
+ * on), so the parent appears beside the body. The parent is treated as
+ * far compared to the camera distance, which holds for any arrival
+ * framing: the angle between this direction and away-from-parent is then
+ * the parent's angle off the view axis on screen.
+ *
+ * `starDirection` (FocusTarget.starDirection, set when the scene is lit
+ * from the star) puts the settled view on the lit side. Looking back at
+ * the parent put the camera on the far side of a body from its parent —
+ * for a planet, the far side from the star: with star lighting on, every
+ * planet arrived as a black disc on its night side (the e2e lighting
+ * checks had to drag the camera round by hand to see anything). The
+ * direction above is turned, the least it can be, until the star is
+ * within DAY_SIDE_PHASE_RANGE_DEG of it, then the parent's clearance is
+ * applied again so the body still doesn't eclipse it. For a planet that
+ * means the star ends up behind the camera, out of frame; for a moon, its
+ * planet usually stays in view beside it. Without it, unchanged.
  */
 export function computeEndDirection(
   arrivalDirection: WorldVec,
   lookBias: WorldVec | null,
-  biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT
+  biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT,
+  clearanceDeg = 0,
+  starDirection: WorldVec | null = null
 ): WorldVec {
-  if (!lookBias) return arrivalDirection
-  const biasLen = lengthVec3(lookBias)
-  if (biasLen <= 1e-9) return arrivalDirection
-  const awayFromParent = scaleVec3(lookBias, -1 / biasLen)
+  const biasLen = lookBias ? lengthVec3(lookBias) : 0
+  const awayFromParent = lookBias && biasLen > 1e-9 ? scaleVec3(lookBias, -1 / biasLen) : null
+  const looking = awayFromParent ? lookBackAtParent(arrivalDirection, awayFromParent, biasWeight, clearanceDeg) : arrivalDirection
+  const sunLength = starDirection ? lengthVec3(starDirection) : 0
+  if (!starDirection || !(sunLength > 1e-9)) return looking
+  const sun = scaleVec3(starDirection, 1 / sunLength)
+  const lit = onDaySide(looking, sun, arrivalDirection)
+  if (!awayFromParent || !(clearanceDeg > 0) || angleBetweenDeg(lit, awayFromParent) >= clearanceDeg) return lit
+  return rotateAwayFrom(awayFromParent, [lit, looking, arrivalDirection], clearanceDeg)
+}
+
+/** computeEndDirection's blend toward looking back at the parent, with
+ *  the parent kept from being eclipsed — see there. */
+function lookBackAtParent(arrivalDirection: WorldVec, awayFromParent: WorldVec, biasWeight: number, clearanceDeg: number): WorldVec {
   const blended: WorldVec = [
     arrivalDirection[0] * (1 - biasWeight) + awayFromParent[0] * biasWeight,
     arrivalDirection[1] * (1 - biasWeight) + awayFromParent[1] * biasWeight,
     arrivalDirection[2] * (1 - biasWeight) + awayFromParent[2] * biasWeight,
   ]
-  return normalizeOr(blended, arrivalDirection)
+  const direction = normalizeOr(blended, arrivalDirection)
+  if (!(clearanceDeg > 0) || angleBetweenDeg(direction, awayFromParent) >= clearanceDeg) return direction
+  return rotateAwayFrom(awayFromParent, [direction, arrivalDirection], clearanceDeg)
+}
+
+/** The phase angles (star–body–camera, degrees) a star-lit arrival settles
+ *  at — see computeEndDirection. Under ~30° the disc is lit almost face-on
+ *  and looks flat; past ~60° the night side starts to take over. */
+export const DAY_SIDE_PHASE_RANGE_DEG: readonly [number, number] = [30, 50]
+
+/** `direction` turned, in the plane it shares with the star direction
+ *  `sun` (the least turn there is), until its phase angle is inside
+ *  DAY_SIDE_PHASE_RANGE_DEG — unchanged when it already is. */
+function onDaySide(direction: WorldVec, sun: WorldVec, arrivalDirection: WorldVec): WorldVec {
+  const [low, high] = DAY_SIDE_PHASE_RANGE_DEG
+  const phase = angleBetweenDeg(direction, sun)
+  if (phase >= low && phase <= high) return direction
+  return rotateAwayFrom(sun, [direction, arrivalDirection], Math.min(Math.max(phase, low), high))
+}
+
+/** The unit vector `angleDeg` from unit `axis`, on the side of the first
+ *  of `sides` that isn't parallel to it (any side when all are). */
+function rotateAwayFrom(axis: WorldVec, sides: readonly WorldVec[], angleDeg: number): WorldVec {
+  let side: WorldVec | null = null
+  for (const candidate of sides) {
+    const rejection = subtractVec3(candidate, scaleVec3(axis, dotVec3(candidate, axis)))
+    if (lengthVec3(rejection) > 1e-9) {
+      side = normalizeOr(rejection, axis)
+      break
+    }
+  }
+  const perpendicular = side ?? anyPerpendicularUnitVec3(axis)
+  const angle = (angleDeg * Math.PI) / 180
+  return addVec3(scaleVec3(axis, Math.cos(angle)), scaleVec3(perpendicular, Math.sin(angle)))
 }
 
 /** Where a new flight to `focus` should end up — camera position, look-at
@@ -630,7 +1064,7 @@ export function computeFlightEndpoint(
   biasWeight: number = DEFAULT_LOOK_BIAS_WEIGHT
 ): { position: WorldVec; target: WorldVec; direction: WorldVec } {
   const arrivalDirection = computeArrivalDirection(currentCameraPos, currentTargetPos, fallbackDirection)
-  const direction = computeEndDirection(arrivalDirection, focus.lookBias, biasWeight)
+  const direction = computeEndDirection(arrivalDirection, focus.lookBias, biasWeight, focus.lookBiasClearanceDeg ?? 0, focus.starDirection ?? null)
   return { position: addVec3(focus.position, scaleVec3(direction, focus.distance)), target: focus.position, direction }
 }
 
@@ -846,67 +1280,6 @@ export function computeSmoothedTrackedPosition(
   return smoothTrajectory(points, effectiveRadius)[windowRadius]!
 }
 
-/**
- * Front-loaded ease — like easeOutCubic but converges much faster near
- * t=0, with NO freeze/kink point anywhere in [0, 1] (unlike an "ease to
- * 1.0 by some fraction, then hold" curve, whose derivative has to bend
- * sharply right at the hold point — see fastTargetLerp's own comment for
- * the real, measured instability that shape caused). Reaches 1-2^-24
- * (>99.9999%) of the way by t=0.5, vs. easeOutCubic's 87.5%, while
- * staying perfectly smooth (still exactly 0 at t=0, exactly 1 at t=1)
- * across the WHOLE domain — the curve keeps easing, it just does almost
- * all of its easing very early. The exponent was tuned directly against
- * the fixed camera-route fixture's own flight-path-bend ceiling (20°/
- * frame), checked across EVERY body in that fixture flown to
- * independently from the default view (not just chained from whatever
- * the previous leg happened to leave the camera facing, which is a less
- * extreme starting angle for some of them) — the worst case (a close,
- * off-axis body) measured ~8.7° at this exponent, comfortable margin
- * below the ceiling; a shallower ease (lower exponent) leaves measurably
- * less room, and 6 already exceeds the ceiling outright for the same
- * body. */
-function easeOutSteep(t: number): number {
-  return 1 - Math.pow(1 - t, 24)
-}
-
-/** The LOOK-AT point uses this much steeper ease than the camera's own
- *  offset (still easeOutCubic, via naturalFlightOffset) — see
- *  sampleFlightPath's own comment for the real bug this fixes (the
- *  destination not staying in view for most of the flight). An earlier
- *  version of this fix used an "ease to 1.0 by some fixed fraction of the
- *  flight, then hold" curve instead: simpler to reason about, but its
- *  forced stop introduces a real kink in the LOOK-AT point's own velocity
- *  right at the hold fraction — measured directly reintroducing a ~29°
- *  single-frame swing in the fixed camera-route fixture (a real flight,
- *  not just the synthetic worst-case test), because the camera's own
- *  (still-moving) offset and the newly-stationary target no longer track
- *  each other smoothly at that exact moment. easeOutSteep has no such
- *  moment — it's smooth (derivative continuous) across the entire [0, 1]
- *  domain, same guarantee naturalFlightOffset's own easeOutCubic already
- *  has, just front-loaded. */
-function fastTargetLerp(startTarget: WorldVec, endTarget: WorldVec, t: number): WorldVec {
-  return lerpVec3(startTarget, endTarget, easeOutSteep(t))
-}
-
-/** Same front-loaded blend as fastTargetLerp, but toward a MOVING
- *  predicted point (`predictedTargetAt(t)` — see predictBodyTrajectory)
- *  instead of a single fixed `endTarget`. Blending toward
- *  `predictedTargetAt(t)` itself, not just `predictedTargetAt(1)`, is
- *  what makes the look-at point track the destination's real trajectory
- *  DURING the flight rather than just arriving at the right final point —
- *  by construction this still lands exactly on predictedTargetAt(1) at
- *  t=1, so the flight's own end-of-flight guarantees are unaffected. */
-function fastTargetLerpToTrajectory(startTarget: WorldVec, predictedTargetAt: (t: number) => WorldVec, t: number): WorldVec {
-  return lerpVec3(startTarget, predictedTargetAt(t), easeOutSteep(t))
-}
-
-/** Ease-out cubic — fast at the start, settling gently into place, rather
- *  than a constant speed that feels abrupt when it stops. Used by
- *  sampleFlightPath below for the fly-to's own eased progress. */
-export function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3)
-}
-
 export interface FlightPathPoint {
   position: WorldVec
   target: WorldVec
@@ -938,41 +1311,44 @@ export interface FlightPathPoint {
  * extrapolating backwards.
  *
  * TARGET and the camera's OFFSET from it (naturalFlightOffset's direction
- * + distance) still use the same decomposition as before — that part was
- * never the problem, and keeps its own well-tested guarantees (slerp'd
- * direction, geometrically-interpolated distance, no near-zero-offset
- * pinch point by construction). The real, reported problem was the PACE
- * the two moved at relative to each other: for a flight whose camera
- * DISTANCE changes by orders of magnitude (true-scale rendering makes
- * this the common case, not an edge case — zooming from a whole-system
- * view into one small body), the offset's fast GEOMETRIC shrink and the
- * target's plain LINEAR lerp reached their own destinations at very
- * different real rates. The camera ended up sitting almost exactly on the
- * straight line between the OLD and NEW look-at points for a long stretch
- * in the middle of the flight — looking at neither body, since its own
- * (already-collapsed) offset from that drifting point was tiny. Measured
- * directly on a real zoom-in flight: the destination was out of frame for
- * the middle ~80% of the flight, only entering view in the last few
- * frames — and the resulting path meandered to roughly 1.5-3x the direct
- * chord length between start and end position, "backing into" the final
- * framing at the very end.
+ * + distance) are still computed separately — that decomposition keeps its
+ * own well-tested guarantees (slerp'd direction, no near-zero-offset pinch
+ * point by construction). What has changed, twice, is the PACE the two
+ * move at relative to each other. First real, reported problem: for a
+ * flight whose camera DISTANCE changes by orders of magnitude (true-scale
+ * rendering makes this the common case, not an edge case — zooming from a
+ * whole-system view into one small body), the offset's fast GEOMETRIC
+ * shrink and the target's plain LINEAR lerp reached their own destinations
+ * at very different real rates. The camera ended up sitting almost exactly
+ * on the straight line between the OLD and NEW look-at points for a long
+ * stretch in the middle of the flight — looking at neither body, since its
+ * own (already-collapsed) offset from that drifting point was tiny.
+ * Measured directly on a real zoom-in flight: the destination was out of
+ * frame for the middle ~80% of the flight, only entering view in the last
+ * few frames — and the resulting path meandered to roughly 1.5-3x the
+ * direct chord length between start and end position, "backing into" the
+ * final framing at the very end.
  *
- * Fixed with fastTargetLerp: `target` now eases via easeOutSteep instead
- * of easeOutCubic — front-loaded much harder, so the look-at point is
- * already at (or very near) the real destination for the great majority
- * of the flight, not just its final few frames, while the offset keeps
- * using its own existing (slower) easeOutCubic pace. An explicit
- * "reshape POSITION into its own independent spline" version of this fix
- * was tried and reverted: it reintroduced the exact class of bug
- * naturalFlightOffset already solves once — a curve that can pass
- * coincidentally close to a now-nearly-stationary target partway through,
- * collapsing the offset toward zero and amplifying noise into a large
- * single-frame swing — just at an unpredictable point that depends on the
- * specific flight's geometry rather than always at the same spot. Only
- * changing the TARGET's pace, while leaving the already-proven offset
- * decomposition alone, gets the same "destination back in view early" and
- * "much shorter path" results (a direct side effect of the destination
- * being correct so much earlier) without that risk.
+ * That was first fixed with fastTargetLerp: the target eased via a
+ * steeply front-loaded easeOutSteep (1 − (1 − t)^24) while the offset kept
+ * easeOutCubic. It kept the destination in view, but it made every fly-to
+ * a lunge — measured: half of the look-at travel in the first 33ms of a
+ * 900ms flight, the destination's on-screen position jumping up to 39° in
+ * one frame, the view turning up to 14° per frame — reported as "the
+ * travel time when I change what I click on still seems very fast... I
+ * want it to be smooth." Now both come from ONE van Wijk & Nuij
+ * zoom-and-pan path (see zoomPanPath/flightShapeAt): the target moves the
+ * path's own pan fraction and the offset its own width, timed together by
+ * smoothstep. The path keeps the destination in view by zooming out far
+ * enough to see it — not by racing the look-at point there — so nothing
+ * needs to be front-loaded. An explicit "reshape POSITION into its own
+ * independent spline" version of the original fix was tried and reverted
+ * back then: it reintroduced the exact class of bug naturalFlightOffset
+ * already solves once — a curve that can pass coincidentally close to a
+ * now-nearly-stationary target partway through, collapsing the offset
+ * toward zero and amplifying noise into a large single-frame swing. The
+ * zoom-and-pan path has no such point: its width never drops below the
+ * smaller of the two endpoint widths.
  *
  * `predictedTargetAt`, when given, refines this further: instead of
  * blending toward the single fixed `endTarget` (where the destination
@@ -986,9 +1362,8 @@ export interface FlightPathPoint {
  * high playback speed) this keeps the look-at point tracking where the
  * body REALLY is throughout, not a straight-line lerp toward a point
  * that's already slightly stale by the time the camera arrives. Omitting
- * it falls back to the plain fastTargetLerp behaviour above (a body
- * that's stationary — or treated as such — for the flight's own short
- * duration).
+ * it falls back to the fixed `endTarget` (a body that's stationary — or
+ * treated as such — for the flight's own duration).
  */
 export function sampleFlightPath(
   startPosition: WorldVec,
@@ -999,10 +1374,9 @@ export function sampleFlightPath(
   predictedTargetAt?: (t: number) => WorldVec
 ): FlightPathPoint {
   const clampedT = Math.min(1, Math.max(0, t))
-  const target = predictedTargetAt
-    ? fastTargetLerpToTrajectory(startTarget, predictedTargetAt, clampedT)
-    : fastTargetLerp(startTarget, endTarget, clampedT)
-  const { direction, distance } = naturalFlightOffset(startPosition, startTarget, endPosition, endTarget, clampedT)
+  const { direction, distance, pan } = flightShapeAt(startPosition, startTarget, endPosition, endTarget, clampedT)
+  const destination = predictedTargetAt ? predictedTargetAt(clampedT) : endTarget
+  const target = clampedT >= 1 ? destination : lerpVec3(startTarget, destination, pan)
   return { position: addVec3(target, scaleVec3(direction, distance)), target }
 }
 
@@ -1089,34 +1463,74 @@ export function distanceToFit(worldRadius: number, marginFactor = 2.2): number {
 }
 
 /**
+ * Camera distance at which a sphere of `worldRadius` fills `fill` of the
+ * view's height — its silhouette, not its bare radius, so the share holds
+ * even close in where perspective makes a sphere look bigger than r/d
+ * suggests. distanceToFit's margin convention can't express "fill 40% of
+ * the view" directly, and 'body' framing (see computeFocusForBody) is
+ * specified exactly that way. Same floor (minCameraDistanceForRadius, so
+ * nothing ever frames inside the near plane) and ceiling as distanceToFit. A fill outside
+ * (0, 1] falls back to BODY_VIEW_FILL.
+ */
+export function distanceToFillView(worldRadius: number, fill: number = BODY_VIEW_FILL): number {
+  const radius = Number.isNaN(worldRadius) ? 0 : Math.max(0, worldRadius)
+  const share = fill > 0 && fill <= 1 ? fill : BODY_VIEW_FILL
+  const halfFovRad = (VERTICAL_FOV_DEG * Math.PI) / 360
+  const raw = radius / Math.sin(Math.atan(share * Math.tan(halfFovRad)))
+  return Math.min(MAX_CAMERA_DISTANCE, Math.max(minCameraDistanceForRadius(radius), raw))
+}
+
+/**
  * Where to fly the camera for a selected body: centred on the body itself,
- * at a distance that fits every real LOCAL child (a body whose parentId is
- * this one AND that actually orbits it nearby — moons, stations, whatever's
- * genuinely close — see CelestialBody.coOrbitalWithParent) rather than a
- * fixed zoom level. A leaf body with nothing orbiting it just frames close
- * on itself. Uses the dataset's own parent/child links directly — no
- * geometric "what's nearby" heuristic needed, because this engine's bodies
- * already carry their real orbital relationship.
+ * at a distance chosen by `framing`:
+ *
+ * - `'body'` (the default — what a fresh selection arrives at): the body's
+ *   own diameter fills BODY_VIEW_FILL of the view, widened just enough to
+ *   keep a ring system in (RING_VIEW_FILL). Moons and stations are
+ *   deliberately ignored. Arriving used to always use the `'system'`
+ *   framing below, which framed a planet together with its whole moon
+ *   system — Jupiter's outer moons put Jupiter itself at a few pixels — so
+ *   planets arrived as small dots and real surface textures were barely
+ *   visible. The moon-system view is still one action away (selecting the
+ *   selected body again — see useSelectionNavigation).
+ * - `'system'`: a distance that fits every real LOCAL child (a body whose
+ *   parentId is this one AND that actually orbits it nearby — moons,
+ *   stations, whatever's genuinely close — see CelestialBody.
+ *   coOrbitalWithParent) rather than a fixed zoom level. A leaf body with
+ *   nothing orbiting it frames at 4x its own radius. Uses the dataset's
+ *   own parent/child links directly — no geometric "what's nearby"
+ *   heuristic needed, because this engine's bodies already carry their
+ *   real orbital relationship. computeFocusForSystem is this framing of
+ *   the star.
  *
  * A child with `coOrbitalWithParent: true` (a Lagrange-point station,
  * grouped under its reference planet for labelling but really orbiting the
  * star independently, millions of km away) is deliberately excluded from
- * this fit — including it would zoom a planet's own view out to
+ * the `'system'` fit — including it would zoom a planet's own view out to
  * interplanetary scale just to fit a station that was never actually
  * "nearby" in the first place, defeating the point of zooming to the planet
  * at all. It's still a real child for every other purpose (selection,
  * dropdown grouping, goDown) — only the camera-framing extent skips it.
  *
+ * Both framings size from trueRadius, the same radius BodyShape renders at
+ * close range — never the pixel floor (see pixelFloor.ts), which is a
+ * screen-space visual aid only. A body loaded from a real model (modelUrl)
+ * is normalised to unit radius and scaled by that same radius (see
+ * BodyShapes.tsx), so it frames the same way as a placeholder sphere —
+ * a true-scale-tiny satellite (the ISS, Hubble) included, now that the
+ * precision floor sits far below it (see ABSOLUTE_MIN_CAMERA_DISTANCE).
+ *
  * `simDate` doesn't have to be "now" — OrbitalSystemScene deliberately
- * passes a date advanced by FLY_DURATION_MS's worth of simulated time
- * (when playing) for a FRESH selection, so this resolves to where the
+ * passes a date advanced by the coming flight's own duration's worth of
+ * simulated time (when playing — see flightDurationMs and
+ * FocusTarget.flightDurationMs) for a FRESH selection, so this resolves to where the
  * body will actually BE once the resulting flight finishes, not where it
  * was at the moment of selection. See CameraRig.tsx's own header comment
  * for the real, reported bug this fixes: re-aiming a flight at a body's
  * live position every frame turns into visible violent jumping once that
  * body's orbital period gets shorter than the flight's own duration (a
  * close, fast orbiter like the ISS, at high simulated time — it can
- * complete dozens of full laps within a single ~900ms flight). Framing a
+ * complete dozens of full laps within a single flight of a second or two). Framing a
  * single, deterministic PREDICTED destination instead needs no per-frame
  * re-aiming at all — it's exactly as accurate (orbital motion is fully
  * deterministic) and cannot alias into jitter no matter how fast the
@@ -1126,9 +1540,52 @@ export function computeFocusForBody(
   body: CelestialBody,
   system: StarSystemData,
   simDate: Date,
-  previousBody: CelestialBody | null = null
+  previousBody: CelestialBody | null = null,
+  framing: BodyFraming = 'body',
+  { daySide = false }: { daySide?: boolean } = {}
 ): FocusTarget {
   const bodyPos = resolveWorldPosition(body, system.bodies, simDate)
+  const distance = framing === 'system' ? systemFramingDistance(body, bodyPos, system, simDate) : bodyFramingDistance(body)
+
+  const parent = body.parentId ? lookupBody(system.bodies, body.parentId) : undefined
+  const lookBias: WorldVec | null = parent ? subtractVec3(resolveWorldPosition(parent, system.bodies, simDate), bodyPos) : null
+  const lookBiasClearanceDeg = parent && lookBias ? parentClearanceDeg(body, distance, parent, lookBias) : 0
+
+  const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
+
+  const starDirection = daySide ? directionToStar(body, system, simDate) : null
+
+  return { position: bodyPos, distance, lookBias, lookBiasClearanceDeg, contextBody, starDirection }
+}
+
+/** Unit direction from `body` to the system's star, from true positions
+ *  (FocusTarget.starDirection), or null for the star itself or a system
+ *  without one. */
+export function directionToStar(body: CelestialBody, system: StarSystemData, date: Date): WorldVec | null {
+  const star = system.bodies.find((b) => b.type === 'star')
+  if (!star || star.id === body.id) return null
+  const cache = new Map<string, WorldVec>()
+  const from = resolveTruePositionKm(body, system, date, cache)
+  const to = resolveTruePositionKm(star, system, date, cache)
+  const offset = subtractVec3(to, from)
+  return lengthVec3(offset) > 0 ? normalizeOr(offset, offset) : null
+}
+
+/** computeFocusForBody's `'body'` framing distance — see there. It used
+ *  to keep distanceToFit(radius) as a lower bound for satellites below the
+ *  old 1e-6 precision floor (arriving AT the floor left the zoom slider no
+ *  room, and made the Hubble → ISS hop turn too fast); with the floor now
+ *  far below them (see ABSOLUTE_MIN_CAMERA_DISTANCE) they frame at the
+ *  fill target like every other body. */
+function bodyFramingDistance(body: CelestialBody): number {
+  const radius = trueRadius(body.radiusKm)
+  const ringOuterKm = ringOuterRadiusKm(body)
+  const ringDistance = ringOuterKm === null ? 0 : distanceToFillView(trueRadius(ringOuterKm), RING_VIEW_FILL)
+  return Math.max(distanceToFillView(radius), ringDistance)
+}
+
+/** computeFocusForBody's `'system'` framing distance — see there. */
+function systemFramingDistance(body: CelestialBody, bodyPos: WorldVec, system: StarSystemData, simDate: Date): number {
   const children = system.bodies.filter((b) => b.parentId === body.id && !b.coOrbitalWithParent)
 
   // Uses the actual rendered (hierarchically-compressed — see render.ts)
@@ -1156,31 +1613,50 @@ export function computeFocusForBody(
     const dist = Math.hypot(childPos[0] - bodyPos[0], childPos[1] - bodyPos[1], childPos[2] - bodyPos[2])
     maxExtent = Math.max(maxExtent, dist + trueRadius(child.radiusKm))
   }
-
-  const parent = body.parentId ? lookupBody(system.bodies, body.parentId) : undefined
-  const lookBias: WorldVec | null = parent ? subtractVec3(resolveWorldPosition(parent, system.bodies, simDate), bodyPos) : null
-
-  const contextBody = previousBody ? resolveContextBody(previousBody, body, system, simDate) : null
-
-  return { position: bodyPos, distance: distanceToFit(maxExtent), lookBias, contextBody }
+  return distanceToFit(maxExtent)
 }
 
-/** Default sample count for predictBodyTrajectory/safePredictFlightTarget —
- *  one sample per rendered frame of a flight at a reasonable 60fps
- *  assumption, not an arbitrary round number. Real, measured consequence of
- *  getting this too low: the previous default (6) let a fast orbiter's real
+/** Angular radius, in degrees, of a sphere of `radius` seen from `distance`
+ *  away (90 from inside it; 0 for no usable radius). */
+function angularRadiusDeg(radius: number, distance: number): number {
+  if (!(radius > 0)) return 0
+  if (distance <= radius) return 90
+  return (Math.asin(radius / distance) * 180) / Math.PI
+}
+
+/** FocusTarget.lookBiasClearanceDeg for `body` framed from `distance`: the
+ *  body's angular radius on screen, plus the parent's (as seen from the
+ *  body), plus a margin — so the two discs sit side by side. 0 when the
+ *  parent already looks at least as big as the body: it can't be hidden
+ *  then, and the body against its planet (the ISS over Earth) is exactly
+ *  the view lookBias is for. */
+function parentClearanceDeg(body: CelestialBody, distance: number, parent: CelestialBody, lookBias: WorldVec): number {
+  const bodyAngle = angularRadiusDeg(trueRadius(body.radiusKm), distance)
+  const parentAngle = angularRadiusDeg(trueRadius(parent.radiusKm), lengthVec3(lookBias))
+  if (parentAngle >= bodyAngle) return 0
+  return bodyAngle + parentAngle + LOOK_BIAS_CLEARANCE_MARGIN_DEG
+}
+
+/** Sample count for predictBodyTrajectory/safePredictFlightTarget over a
+ *  flight of `durationMs` — one sample per rendered frame of THAT flight at
+ *  a reasonable 60fps assumption, not an arbitrary round number (and not a
+ *  number derived from one fixed flight duration any more: a 4s flight
+ *  sampled for a 900ms one would alias exactly the way described next).
+ *  Real, measured consequence of getting this too low: the previous default (6) let a fast orbiter's real
  *  motion alias into a 60°/frame flight-path-bend spike on the fixed
  *  camera-route fixture (see routeCameraSimulator.ts, which now always
  *  passes its own frame-accurate sample count explicitly) — a caller that
  *  omits `samples` entirely should still land somewhere safe, not silently
  *  reproduce that bug. A caller running at a different actual frame rate can
  *  still override this; it's a safe default, not a hard requirement. */
-export const DEFAULT_TRAJECTORY_SAMPLES = Math.round((FLY_DURATION_MS / 1000) * 60)
+export function trajectorySamplesFor(durationMs: number): number {
+  return Math.max(1, Math.round((durationMs / 1000) * 60))
+}
 
 /**
  * Where `body` is predicted to actually be at `samples + 1` evenly-spaced
- * moments across a flight's own real-time span (`durationMs`, i.e.
- * FLY_DURATION_MS), given the playback rate in effect when the flight
+ * moments across a flight's own real-time span (`durationMs` — that
+ * flight's own duration, see flightDurationMs), given the playback rate in effect when the flight
  * starts (`daysPerSecond` — see timeScale.ts) — used by sampleFlightPath's
  * `predictedTargetAt` to make the look-at point track where the
  * destination REALLY will be throughout the flight, not just where it'll
@@ -1199,7 +1675,7 @@ export const DEFAULT_TRAJECTORY_SAMPLES = Math.round((FLY_DURATION_MS / 1000) * 
  * first place) is that these predictions can go stale if the playback
  * speed actually in effect changes mid-flight — a real error, but a small
  * one bounded by how much a speed change could plausibly shift where a
- * body ends up within one ~900ms flight, and no worse than the SAME
+ * body ends up within one flight of at most a few seconds, and no worse than the SAME
  * staleness computeFocusForBody's own single-point prediction already
  * accepts for the endpoint.
  */
@@ -1209,7 +1685,7 @@ export function predictBodyTrajectory(
   startDate: Date,
   daysPerSecond: number,
   durationMs: number,
-  samples: number = DEFAULT_TRAJECTORY_SAMPLES
+  samples: number = trajectorySamplesFor(durationMs)
 ): WorldVec[] {
   // samples=0 used to divide 0/0 into NaN dates (and NaN positions), then
   // crash sampleTrajectory with an out-of-range index — fail loudly and
@@ -1289,8 +1765,8 @@ function trajectoryExceeds(points: readonly WorldVec[], limit: number): boolean 
  *  caller (CameraRig.tsx, or a test) needs to already know the flight's
  *  own start date and the playback rate in effect when it starts.
  *
- * Returns `null` — meaning "don't do this, use the plain fixed-endpoint
- * fastTargetLerp instead" — when the body's own predicted excursion over
+ * Returns `null` — meaning "don't do this, aim the flight at its plain
+ * fixed endpoint instead" — when the body's own predicted excursion over
  * the flight (see trajectoryDiameter) is too large relative to
  * `viewingDistance` (this flight's own final camera distance —
  * FocusTarget.distance): a fast/close orbiter's real orbital curvature,
@@ -1314,8 +1790,8 @@ export function safePredictFlightTarget(
   startDate: Date,
   daysPerSecond: number,
   viewingDistance: number,
-  durationMs: number = FLY_DURATION_MS,
-  samples: number = DEFAULT_TRAJECTORY_SAMPLES,
+  durationMs: number,
+  samples: number = trajectorySamplesFor(durationMs),
   maxExcursionFraction: number = 0.5
 ): ((t: number) => WorldVec) | null {
   const points = predictBodyTrajectory(body, system, startDate, daysPerSecond, durationMs, samples)
@@ -1333,8 +1809,9 @@ export function safePredictFlightTarget(
  * real extent compresses to single-digit world units rendered as an
  * indistinguishable cluster of overlapping labels near the centre of a
  * mostly-empty view. Reusing
- * computeFocusForBody on the star itself scales correctly to whatever
- * system is actually loaded.
+ * computeFocusForBody on the star itself, in its 'system' framing (the
+ * star's own 'body' framing would fill the view with the star alone),
+ * scales correctly to whatever system is actually loaded.
  */
 export function computeFocusForSystem(system: StarSystemData, simDate: Date): FocusTarget {
   // Identified by type, not by "has no parentId" — a body not anchored to
@@ -1343,7 +1820,7 @@ export function computeFocusForSystem(system: StarSystemData, simDate: Date): Fo
   // check alone doesn't reliably pick the star out among other bodies.
   const star = system.bodies.find((b) => b.type === 'star')
   if (!star) return { position: [0, 0, 0], distance: DEFAULT_CAMERA_DISTANCE, lookBias: null, contextBody: null }
-  return computeFocusForBody(star, system, simDate)
+  return computeFocusForBody(star, system, simDate, null, 'system')
 }
 
 /** Where to fly the camera for a selected belt: centred on its parent, at a

@@ -63,7 +63,7 @@ import {
   CAMERA_ROUTE_FIXTURE_SYSTEM,
   CAMERA_ROUTE_FIXTURE_WAYPOINTS,
   CAMERA_ROUTE_START_DATE,
-  CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+  CAMERA_ROUTE_FLIGHT_FPS,
   CAMERA_ROUTE_TRACK_STEPS,
   CAMERA_ROUTE_TRACK_STEP_MS,
   CAMERA_ROUTE_TRACKING_SPEEDS_DPS,
@@ -82,7 +82,7 @@ const ARTIFACTS_DIR = join(ROOT, 'artifacts')
 
 if (process.argv.includes('--update-reference')) {
   const defaultRun = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, CAMERA_ROUTE_FIXTURE_WAYPOINTS, CAMERA_ROUTE_START_DATE, {
-    samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+    framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
     trackSteps: CAMERA_ROUTE_TRACK_STEPS,
     trackStepMs: CAMERA_ROUTE_TRACK_STEP_MS,
   })
@@ -460,7 +460,7 @@ for (const speed of CAMERA_ROUTE_TRACKING_SPEEDS_DPS) {
     // whole route exactly as a real sequential flight would), just not
     // what these comparison images are for.
     const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, [waypointId], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: CAMERA_ROUTE_TRACK_STEPS,
       trackStepMs: daysPerSecondToTrackStepMs(speed),
       // Both new features turned ON for these comparison images: the

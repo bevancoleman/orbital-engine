@@ -9,8 +9,23 @@ import {
 } from '../levelOfDetail'
 import type { CelestialBody } from '../types'
 import { glowSprite } from './textures'
-import { hashSeed, TEXTURABLE_BODY_TYPES } from './bodyTypeStyles'
+import { TEXTURABLE_BODY_TYPES } from './bodyTypeStyles'
+import {
+  ROTATED_PLACEHOLDER_SHAPES,
+  STAR_LIT_PLACEHOLDER_SHAPES,
+  createPlaceholderGeometry,
+  createPlaceholderMaterial,
+  placeholderDetailFor,
+  placeholderParts,
+  placeholderRotation,
+  placeholderShapeFor,
+  type PlaceholderPart,
+  type PlaceholderShape,
+} from './placeholderShapes'
 import { createRefCounter } from './resourceCache'
+import { useSceneLighting } from './sceneLighting'
+import type { StarLightingStore } from './starLighting'
+import { StarLitAtmosphere, StarLitSphere, StarLitSurface } from './StarLitShapes'
 
 /**
  * A soft additive rim just outside the surface, sized from the body's real
@@ -23,10 +38,26 @@ import { createRefCounter } from './resourceCache'
  * sphere and a real-textured one (TexturedSphereBody) so a body doesn't
  * lose its atmosphere just because a real surface photo is available for
  * it.
+ *
+ * With star lighting on (see sceneLighting.ts) the rim is star-lit too:
+ * brighter over the day side, fading past the terminator.
  */
 export function AtmosphereRim({ body, color, sphere }: { body: CelestialBody; color: string; sphere: SphereDetail }) {
+  const { store } = useSceneLighting()
   if (!body.atmosphereHeightKm) return null
   const ratio = 1 + body.atmosphereHeightKm / body.radiusKm
+  if (store) {
+    return (
+      <StarLitAtmosphere
+        store={store}
+        bodyId={body.id}
+        color={color}
+        ratio={ratio}
+        widthSegments={sphere.widthSegments}
+        heightSegments={sphere.heightSegments}
+      />
+    )
+  }
   return (
     <mesh>
       <sphereGeometry args={[ratio, sphere.widthSegments, sphere.heightSegments]} />
@@ -59,6 +90,10 @@ export function AtmosphereRim({ body, color, sphere }: { body: CelestialBody; co
  * with a real `modelUrl` (see BodyShape) falls back to if that model fails
  * to load.
  *
+ * The shapes themselves — everything but the star, comets and jump points,
+ * whose glow and tail sprites are drawn here — are placeholderShapes.ts's,
+ * the same parts the instanced small-body path draws (InstancedBodies).
+ *
  * Built at UNIT radius — BodyShape applies the body's real rendered radius
  * as a `scale` on the wrapping group. The rendered radius is pixel-floored
  * (see pixelFloor.ts), so it changes on practically every zoom frame; when
@@ -80,72 +115,23 @@ export function PlaceholderBodyShape({
    *  it, not as a fixed per-type constant. */
   detailSize: number
 }) {
-  const seed = useMemo(() => hashSeed(body.id), [body.id])
-  const rotation = useMemo(
-    () => [(seed % 620) / 100, ((seed * 7) % 620) / 100, ((seed * 13) % 620) / 100] as [number, number, number],
-    [seed]
-  )
+  const rotation = useMemo(() => placeholderRotation(body.id), [body.id])
   const sphere = sphereDetailFor(detailSize)
   const icosahedronSubdivisions = icosahedronDetailFor(detailSize)
   const torus = torusDetailFor(detailSize)
+  const { tailedCometIds } = useSceneLighting()
+  const shape = placeholderShapeFor(body.type)
+
+  if (shape) {
+    return (
+      <>
+        <PlaceholderShapeMesh bodyId={body.id} shape={shape} color={color} detailSize={detailSize} />
+        {shape === 'planet' && <AtmosphereRim body={body} color={color} sphere={sphere} />}
+      </>
+    )
+  }
 
   switch (body.type) {
-    case 'star':
-      return (
-        <>
-          <mesh>
-            <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
-            <meshBasicMaterial color={color} />
-          </mesh>
-          <sprite scale={[6, 6, 1]}>
-            <spriteMaterial
-              map={glowSprite()}
-              color={color}
-              transparent
-              opacity={0.55}
-              blending={THREE.AdditiveBlending}
-              depthWrite={false}
-            />
-          </sprite>
-        </>
-      )
-
-    case 'planet':
-    case 'dwarf_planet':
-      return (
-        <>
-          <mesh>
-            <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
-            <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
-          </mesh>
-          <AtmosphereRim body={body} color={color} sphere={sphere} />
-        </>
-      )
-
-    case 'moon':
-      return (
-        <mesh>
-          <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
-          <meshStandardMaterial color={color} roughness={0.95} />
-        </mesh>
-      )
-
-    case 'asteroid':
-      // A low-poly, flat-shaded icosahedron has an inherently irregular,
-      // faceted silhouette — an actual rock shape, not a smooth sphere —
-      // for free, with no procedural mesh-deformation cost. Subdivision 0
-      // (the default, everyday case) is a deliberate stylistic choice, not
-      // just cheapness — it only climbs when zoomed in close enough that
-      // "very few polygons" would otherwise be genuinely visible (the
-      // real, reported case: 10 Hygiea at true scale, see
-      // levelOfDetail.ts).
-      return (
-        <mesh rotation={rotation}>
-          <icosahedronGeometry args={[1, icosahedronSubdivisions]} />
-          <meshStandardMaterial color={color} roughness={1} flatShading />
-        </mesh>
-      )
-
     case 'comet':
       return (
         <>
@@ -154,44 +140,23 @@ export function PlaceholderBodyShape({
             <meshStandardMaterial color={color} roughness={0.6} />
           </mesh>
           {/* A faint trailing streak — comets are the one body type whose
-              defining visual feature isn't its own shape at all. Not aimed
-              away from the parent star (this engine has no per-frame "sun
-              direction" concept for a fixed body), just a fixed, recognisable
-              tail rather than omitting the feature entirely. */}
-          <sprite scale={[9, 2.4, 1]} position={[3.5, 0, 0]}>
-            <spriteMaterial
-              map={glowSprite()}
-              color={color}
-              transparent
-              opacity={0.25}
-              blending={THREE.AdditiveBlending}
-              depthWrite={false}
-            />
-          </sprite>
+              defining visual feature isn't its own shape at all. Only drawn
+              when there's no real tail (CometTails, which needs an orbit
+              round the system's star): a fixed, recognisable mark rather
+              than omitting the feature entirely. */}
+          {!tailedCometIds.has(body.id) && (
+            <sprite scale={[9, 2.4, 1]} position={[3.5, 0, 0]}>
+              <spriteMaterial
+                map={glowSprite()}
+                color={color}
+                transparent
+                opacity={0.25}
+                blending={THREE.AdditiveBlending}
+                depthWrite={false}
+              />
+            </sprite>
+          )}
         </>
-      )
-
-    case 'station':
-      // A ring/hab-torus is a recognisable "built structure" silhouette —
-      // clearly artificial against every natural sphere/rock shape nearby.
-      // The tube radius is deliberately purely proportional to the main
-      // radius (0.35 of the unit radius, i.e. radius * 0.35 once scaled),
-      // with no absolute floor — an absolute floor
-      // was the actual bug behind a real, observed one: at true scale (see
-      // scale.ts's trueRadius), the ISS's/Hubble's own radius is ~5×10⁻⁸
-      // world units, vanishingly smaller than a fixed 0.02 floor this used
-      // to have — so the torus's tube (0.02) ended up enormously larger
-      // than its own ring (~5×10⁻⁸), degenerating into a distorted,
-      // oversized blob rather than a thin ring, one roughly 4x Earth's own
-      // true radius — completely swallowing Earth from any zoom level
-      // close enough to also frame the ISS. An absolute floor breaks
-      // proportionality for anything genuinely tiny; letting it shrink
-      // freely is what a real, honest scale requires.
-      return (
-        <mesh rotation={rotation}>
-          <torusGeometry args={[1, 0.35, torus.radialSegments, torus.tubularSegments]} />
-          <meshStandardMaterial color={color} roughness={0.4} metalness={0.6} />
-        </mesh>
       )
 
     case 'jump_point':
@@ -223,50 +188,65 @@ export function PlaceholderBodyShape({
         </>
       )
 
-    case 'nav_point':
-      // The least substantial marker — a wireframe diamond, since a
-      // NavPoint isn't a physical structure at all, just a labelled point.
-      // Deliberately NOT detail-scaled: it's a wireframe symbol, not
-      // something meant to read as smooth/rounded even up close.
-      return (
-        <mesh rotation={rotation}>
-          <octahedronGeometry args={[1, 0]} />
-          <meshBasicMaterial color={color} wireframe transparent opacity={0.9} />
-        </mesh>
-      )
-
-    case 'surface_installation':
-      // A small flat platform + beacon spike — deliberately NOT a floating
-      // torus (that reads as an orbiting station, which this explicitly
-      // isn't — see BodyType.surface_installation's own comment) and NOT a
-      // sphere (nothing here claims to be a whole celestial body). This
-      // component has no access to the parent's own direction to orient a
-      // "planted into the ground" pose exactly (it only ever receives this
-      // body's own radius/color/rotation — world placement is the caller's
-      // job), so the shape itself carries the "built structure, not a
-      // natural or orbiting body" read on its own, via its base+spike
-      // silhouette instead of a real surface-normal orientation.
-      return (
-        <group rotation={rotation}>
-          <mesh>
-            <cylinderGeometry args={[1, 1.1, 0.3, 8]} />
-            <meshStandardMaterial color={color} roughness={0.6} metalness={0.5} />
-          </mesh>
-          <mesh position={[0, 0.75, 0]}>
-            <coneGeometry args={[0.35, 1.2, 8]} />
-            <meshStandardMaterial color={color} roughness={0.5} metalness={0.4} />
-          </mesh>
-        </group>
-      )
-
     default:
+      // The star.
       return (
-        <mesh>
-          <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
-          <meshBasicMaterial color={color} />
-        </mesh>
+        <>
+          <mesh>
+            <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
+            <meshBasicMaterial color={color} />
+          </mesh>
+          <sprite scale={[6, 6, 1]}>
+            <spriteMaterial
+              map={glowSprite()}
+              color={color}
+              transparent
+              opacity={0.55}
+              blending={THREE.AdditiveBlending}
+              depthWrite={false}
+            />
+          </sprite>
+        </>
       )
   }
+}
+
+/**
+ * A placeholder shape's parts (placeholderShapes.ts) at this level of
+ * detail, at the body's fixed orientation. With star lighting on (see
+ * sceneLighting.ts), the natural bodies take the star-lit material: a
+ * real terminator, eclipse and ring shadows. Without it, the original
+ * fixed-light materials, unchanged.
+ */
+function PlaceholderShapeMesh({ bodyId, shape, color, detailSize }: { bodyId: string; shape: PlaceholderShape; color: string; detailSize: number }) {
+  const { store } = useSceneLighting()
+  const detail = placeholderDetailFor(detailSize)
+  const { widthSegments, heightSegments, icosahedronDetail, radialSegments, tubularSegments } = detail
+  const parts = useMemo(
+    () => placeholderParts(shape, { widthSegments, heightSegments, icosahedronDetail, radialSegments, tubularSegments }),
+    [shape, widthSegments, heightSegments, icosahedronDetail, radialSegments, tubularSegments]
+  )
+  const rotation = useMemo(() => (ROTATED_PLACEHOLDER_SHAPES.has(shape) ? placeholderRotation(bodyId) : undefined), [shape, bodyId])
+  const litStore = store && STAR_LIT_PLACEHOLDER_SHAPES.has(shape) ? store : null
+  return (
+    <group rotation={rotation}>
+      {parts.map((part, i) => (
+        <PlaceholderPartMesh key={i} part={part} color={color} bodyId={bodyId} store={litStore} />
+      ))}
+    </group>
+  )
+}
+
+function PlaceholderPartMesh({ part, color, bodyId, store }: { part: PlaceholderPart; color: string; bodyId: string; store: StarLightingStore | null }) {
+  const geometry = useMemo(() => createPlaceholderGeometry(part.geometry), [part.geometry])
+  useEffect(() => () => geometry.dispose(), [geometry])
+  const material = useMemo(() => (store ? null : createPlaceholderMaterial(part.material, color)), [store, part.material, color])
+  useEffect(() => () => material?.dispose(), [material])
+  if (store) {
+    const flat = part.material.kind === 'standard' && part.material.flatShading
+    return <StarLitSurface store={store} bodyId={bodyId} color={color} geometry={geometry} flat={flat} />
+  }
+  return <mesh geometry={geometry} material={material!} />
 }
 
 /** Catches a failed/broken model load (a 404, a corrupt file, an
@@ -360,12 +340,24 @@ function TexturedSphereBody({
     }
   }, [textureUrl, texture])
   const sphere = sphereDetailFor(detailSize)
+  const { store } = useSceneLighting()
   return (
     <>
-      <mesh>
-        <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
-        <meshStandardMaterial map={texture} roughness={0.9} metalness={0.05} />
-      </mesh>
+      {store ? (
+        <StarLitSphere
+          store={store}
+          bodyId={body.id}
+          color={color}
+          map={texture}
+          widthSegments={sphere.widthSegments}
+          heightSegments={sphere.heightSegments}
+        />
+      ) : (
+        <mesh>
+          <sphereGeometry args={[1, sphere.widthSegments, sphere.heightSegments]} />
+          <meshStandardMaterial map={texture} roughness={0.9} metalness={0.05} />
+        </mesh>
+      )}
       <AtmosphereRim body={body} color={color} sphere={sphere} />
     </>
   )

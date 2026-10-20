@@ -6,6 +6,7 @@
  * Vector3.project) so this module has no three.js dependency of its own.
  */
 import type { ScreenCandidate } from '../labelDeclutter'
+import type { ProximityCandidate } from '../proximitySelection'
 import type { WorldVec } from '../render'
 
 /** Normalized device coordinates — x/y in [-1, 1] across the viewport,
@@ -31,12 +32,28 @@ export interface ProjectionCandidate {
   id: string
   position: WorldVec
   priority: number
+  /** The body's RENDERED world radius (pixel floor included — see
+   *  pixelFloor.ts's renderRadius), for its projected disc. */
+  radius?: number
+}
+
+/** A projected candidate: its screen point, plus (when a DiscMeasure was
+ *  given) its on-screen disc radius and camera distance — what
+ *  findPointerTarget hit-tests against. */
+export type ProjectedCandidate = ScreenCandidate & Pick<ProximityCandidate, 'radiusPx' | 'depth'>
+
+/** How to size a candidate's projected disc: px per world unit at unit
+ *  distance (half the viewport height / tan(half the vertical FOV)), and
+ *  each candidate's distance from the camera. */
+export interface DiscMeasure {
+  focalLengthPx: number
+  distanceTo(position: WorldVec): number
 }
 
 export interface ProjectedCandidates {
   /** Candidates genuinely in front of the camera and on (or within the
    *  margin of) the viewport, in input order. */
-  onScreen: ScreenCandidate[]
+  onScreen: ProjectedCandidate[]
   /** Everything else — behind the camera, outside the depth range, or
    *  projected well off the edge of the viewport. */
   offScreenIds: string[]
@@ -64,6 +81,15 @@ export function isInDepthRange(ndc: NdcPoint): boolean {
   return Number.isFinite(ndc.z) && ndc.z >= -1 && ndc.z <= 1
 }
 
+/** Disc radius (px) and camera distance for one candidate — 0/undefined
+ *  without a measure, i.e. a plain point as before discs existed. */
+function measureDisc(candidate: ProjectionCandidate, measure: DiscMeasure | undefined): { radiusPx: number; depth: number | undefined } {
+  if (!measure) return { radiusPx: 0, depth: undefined }
+  const depth = measure.distanceTo(candidate.position)
+  const radius = candidate.radius ?? 0
+  return { radiusPx: radius > 0 && depth > 0 ? (radius * measure.focalLengthPx) / depth : 0, depth }
+}
+
 function isWithinViewport(point: ScreenPoint, size: ViewportSize, marginPx: number): boolean {
   return (
     point.x >= -marginPx &&
@@ -78,27 +104,35 @@ function isWithinViewport(point: ScreenPoint, size: ViewportSize, marginPx: numb
  * label or a neighbouring dot can actually interact with on screen right
  * now, and the ones that can't. `projectToNdc` may return the same scratch
  * object every call — each result is read before the next call.
+ *
+ * With `measure`, each on-screen candidate also carries its projected disc
+ * radius and camera distance (see findPointerTarget), and a body counts as
+ * on screen while any of its disc does — a body framed to fill much of the
+ * view can have its centre past the edge and still be under the pointer.
  */
 export function projectCandidatesToScreen(
   candidates: readonly ProjectionCandidate[],
   projectToNdc: (position: WorldVec) => NdcPoint,
   size: ViewportSize,
-  marginPx: number
+  marginPx: number,
+  measure?: DiscMeasure
 ): ProjectedCandidates {
-  const onScreen: ScreenCandidate[] = []
+  const onScreen: ProjectedCandidate[] = []
   const offScreenIds: string[] = []
-  for (const { id, position, priority } of candidates) {
+  for (const candidate of candidates) {
+    const { id, position, priority } = candidate
     const ndc = projectToNdc(position)
     if (!isInDepthRange(ndc)) {
       offScreenIds.push(id)
       continue
     }
-    const point = ndcToScreenPx(ndc, size)
-    if (!isWithinViewport(point, size, marginPx)) {
+    const { x, y } = ndcToScreenPx(ndc, size)
+    const { radiusPx, depth } = measureDisc(candidate, measure)
+    if (!isWithinViewport({ x, y }, size, marginPx + radiusPx)) {
       offScreenIds.push(id)
       continue
     }
-    onScreen.push({ id, x: point.x, y: point.y, priority })
+    onScreen.push(measure ? { id, x, y, priority, radiusPx, depth } : { id, x, y, priority })
   }
   return { onScreen, offScreenIds }
 }

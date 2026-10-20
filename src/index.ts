@@ -66,11 +66,15 @@ export {
   nearPlaneForRadius,
   minCameraDistanceForRadius,
   distanceToFit,
+  distanceToFillView,
+  BODY_VIEW_FILL,
+  RING_VIEW_FILL,
   computeFocusForBody,
   computeFocusForSystem,
   computeFocusForBelt,
+  DEFAULT_FLIGHT_PACING,
 } from './camera'
-export type { FocusTarget } from './camera'
+export type { BodyFraming, FocusTarget, FlightPacing } from './camera'
 
 // Visibility / level of detail
 export { MAX_VISIBLE_SECONDARY, computeVisibleBodyIds, isAlwaysVisible } from './visibility'
@@ -110,6 +114,23 @@ export type { ProximityCandidate } from './proximitySelection'
 export { computeOrbitalDepth, computeVisibleLabels, thinByScreenProximity } from './labelDeclutter'
 // LabelCandidate is a deprecated alias of ScreenCandidate — removed next major.
 export type { LabelCandidate, ScreenCandidate } from './labelDeclutter'
+
+// Star lighting: true positions, analytic eclipse/ring shadow geometry,
+// and comet tail physics (what OrbitalSystemScene's lightFromStar and
+// cometTails draw)
+export { resolveAllTruePositionsKm, trueOffsetKm } from './truePositions'
+export { discOverlapFraction, sphereShadowFactor, ringShadowTransmission, rankShadowCasters } from './shadows'
+export type { RingShadowBand, ShadowCaster } from './shadows'
+export {
+  ACTIVITY_ONSET_AU,
+  FULL_ACTIVITY_AU,
+  cometActivity,
+  ionTailLengthKm,
+  ionTailDirection,
+  ionTailAberration,
+  cometTailGeometry,
+} from './comets'
+export type { CometTailGeometry, CometTailOptions, DustTrack } from './comets'
 
 // Misc utilities
 export { formatDistanceKm } from './units'

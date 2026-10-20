@@ -86,7 +86,7 @@ export function thinByScreenProximity(
   // exact duplicates (or nothing), which any positive cell size still finds.
   const cellSize = Math.abs(minSeparationPx) || 1
   const cellOf = (v: number) => (Number.isFinite(cellSize) ? Math.floor(v / cellSize) : 0)
-  const grid = new Map<string, ScreenCandidate[]>()
+  const grid = new Map<number | string, ScreenCandidate[]>()
 
   for (const candidate of sorted) {
     const cx = cellOf(candidate.x)
@@ -94,11 +94,11 @@ export function thinByScreenProximity(
     let overlapsKept = false
     for (let dx = -1; dx <= 1 && !overlapsKept; dx++) {
       for (let dy = -1; dy <= 1 && !overlapsKept; dy++) {
-        overlapsKept = grid.get(`${cx + dx},${cy + dy}`)?.some((kept) => overlaps(candidate, kept)) ?? false
+        overlapsKept = grid.get(cellKey(cx + dx, cy + dy))?.some((kept) => overlaps(candidate, kept)) ?? false
       }
     }
     if (overlapsKept) continue
-    const key = `${cx},${cy}`
+    const key = cellKey(cx, cy)
     const cell = grid.get(key)
     if (cell) cell.push(candidate)
     else grid.set(key, [candidate])
@@ -106,6 +106,14 @@ export function thinByScreenProximity(
   }
 
   return visible
+}
+
+// This pass runs every frame: a small-integer key for any cell on or near
+// the screen (no string built per lookup, nine per candidate), a string
+// for the rare far-off one.
+const CELL_KEY_LIMIT = 16384
+function cellKey(cx: number, cy: number): number | string {
+  return Math.abs(cx) < CELL_KEY_LIMIT && Math.abs(cy) < CELL_KEY_LIMIT ? cx * 2 * CELL_KEY_LIMIT + cy : `${cx},${cy}`
 }
 
 /** Label declutter specifically — see thinByScreenProximity, which this

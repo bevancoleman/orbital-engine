@@ -16,5 +16,11 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom', 'three', '@react-three/fiber', '@react-three/drei'],
   },
-  server: { port: 5173, strictPort: true },
+  // preview shares the dev port so e2e (dev locally, preview on CI — see
+  // playwright.config.ts) hits the same URL either way.
+  // fs.allow: the `?system=synthetic-N` route imports the engine repo's
+  // own synthetic test system (src/fixtures/syntheticSystem.ts), outside
+  // this app's root.
+  server: { port: 5173, strictPort: true, fs: { allow: ['.', '../../src/fixtures'] } },
+  preview: { port: 5173, strictPort: true },
 })

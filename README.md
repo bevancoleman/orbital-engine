@@ -19,10 +19,11 @@ This library solves the same true-scale problem spacekit.js didn't attempt, and 
 - **Two position models, one contract.** A body carries either [`OrbitalElements`](./src/types.ts) (animates over time via Kepler propagation) or a single [`FixedPosition`](./src/types.ts) snapshot (for data with no known orbit — a game world, a one-time survey). Both render through the same `<OrbitalSystemScene>`.
 - **Proximity selection and label decluttering.** Clicking snaps to the nearest body within a screen-space radius rather than raycasting, which fails once a body's on-screen size drops below a pixel. Labels that would overlap hide the structurally deeper one (a moon yields to its planet, a planet to its star).
 - **Rings and belts.** A planet's own rings are part of the planet — drawn in its equatorial plane (from its spin pole), moving and selected with it. Belts (round a star, or local clusters) are objects of their own: either plotted from real per-object positions or scattered synthetically within a radius range, with gaps, named sites inside them, and co-orbital clusters that track a reference body's current angle.
-- **Camera fly-to.** Animates to a selected body and keeps tracking it afterward if it's still moving.
+- **Camera fly-to.** Animates to a selected body along a smooth zoom-out, pan, zoom-in path, and keeps tracking it afterward if it's still moving.
 - **Distance-adjusted level of detail.** Polygon count follows how much of the view a body actually fills, not raw camera distance.
 - **Real 3D models and textures, opt-in per body.** `CelestialBody.modelUrl` loads a real glTF model; `textureUrl` wraps a real surface photo around the built-in sphere instead. Both fall back to the placeholder shape if unset or if loading fails. See [`examples/with-models`](./examples/with-models), built entirely from NASA's public-domain 3D Resources collection.
-- **Optional real day/night shading.** `<OrbitalSystemScene lightFromStar>` lights the scene from the system's actual star position instead of a fixed direction — every other body gets a real lit/dark hemisphere split, correct for wherever it currently sits relative to the star. Off by default (a fixed light is simpler and works even for a system with no real star body).
+- **Optional real day/night shading.** `<OrbitalSystemScene lightFromStar>` lights the scene from the system's actual star: planets, moons, ring discs and atmospheres get a true terminator, plus analytic eclipse shadows (a moon's umbra and penumbra on its planet, a planet's on its moons) and ring shadows (Saturn's on its rings and theirs on it) — see Star lighting, below. Off by default (a fixed light is simpler and works even for a system with no real star body).
+- **Comet tails.** Every comet orbiting the star gets an ion tail pointing away from it and a curved dust tail trailing its orbit, growing towards perihelion and gone beyond ~5 AU. On by default (`cometTails={false}` turns them off).
 
 ## Install
 
@@ -30,7 +31,7 @@ This library solves the same true-scale problem spacekit.js didn't attempt, and 
 npm install orbital-engine three @react-three/fiber @react-three/drei react react-dom
 ```
 
-`three` (r152+), `@react-three/fiber` (8.13+ or 9), `@react-three/drei` (9.54+ or 10), `react` and `react-dom` (18 or 19) are peer dependencies — see `peerDependencies` in [`package.json`](./package.json) for the exact ranges. Pair fiber 8 / drei 9 with React 18, fiber 9 / drei 10 with React 19.
+`three` (r152+), `@react-three/fiber` (8.13+ or 9), `@react-three/drei` (9.56.5+ or 10), `react` and `react-dom` (18 or 19) are peer dependencies — see `peerDependencies` in [`package.json`](./package.json) for the exact ranges. Pair fiber 8 / drei 9 with React 18, fiber 9 / drei 10 with React 19.
 
 ## Quickstart
 
@@ -208,6 +209,44 @@ This replaces an earlier fixed distance-ratio cutoff that could hide a body enti
 
 `validateSystemData(system)` returns every data-contract and legibility warning for a system as a `SystemDataWarning[]`, each tagged with a `kind`: `missing-position`, `unrecognized-type`, `unknown-parent`, `parent-cycle`, `invalid-orbit` (non-positive axis or period, eccentricity out of range, non-finite angle, unparseable or offset-less epoch), `invalid-radius`, `periapsis-inside-parent`, `embedded-in-parent`, `embedded-in-sibling`, `invalid-ring`, `invalid-belt`. Malformed data still renders — an unknown parent or a cycle anchors at the system origin — so these are signals, not errors. `<OrbitalSystemScene devMode>` lists them in its dev overlay. `unknown-parent`, `parent-cycle`, `invalid-orbit`, `invalid-radius` and `periapsis-inside-parent` were added in 1.5.0 — a consumer with an exhaustive `switch` over `kind` must add cases for them.
 
+## Arrival framing
+
+A fly-to a body arrives framing the body itself: its diameter fills about 40% of the view's height (`BODY_VIEW_FILL`), so its surface (and a real texture, if it has one) is actually visible, with a ring system kept in frame. Clicking the already-selected body again flies out to its whole local moon/station system, and clicking it once more flies back in. `arrivalFraming="system"` makes the moon-system view the one a selection arrives at instead:
+
+```tsx
+<OrbitalSystemScene system={SOLAR_SYSTEM} arrivalFraming="system" />
+```
+
+That includes true-scale satellites far smaller than a pixel from Earth's distance (the ISS, ~110m across, is ~5×10⁻⁸ world units): the scene is drawn camera-relative and normalized by the viewing distance, so the GPU never sees the tiny numbers, and the camera can get within `ABSOLUTE_MIN_CAMERA_DISTANCE` (1×10⁻¹⁰) of what it's looking at. When the body would hide its parent from the "look back toward the parent" angle a fly-to ends on (Earth behind the Moon), the view is turned just far enough to show the parent beside it. The root element's `data-framing` (`body` / `system`) says which framing the selected body is in.
+
+## Fly-to pacing
+
+Selecting a body flies the camera along van Wijk & Nuij's optimal zoom-and-pan path ("Smooth and efficient zooming and panning", 2003): it zooms out until the start and the destination are both comfortably in view, pans, then zooms in, eased in and out so it starts and ends at rest. A flight's duration is proportional to the length of that path — how much the view really changes — so a hop between neighbouring stations is quick and a dive from a planet to a station across the system takes longer, at the same perceived speed. `flightPacing` tunes it:
+
+```tsx
+<OrbitalSystemScene system={SOLAR_SYSTEM} flightPacing={{ speed: 1.5, minMs: 1000, maxMs: 3000 }} />
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `speed` | `1` | Multiplier on the default pace — `2` flies twice as fast, `0.5` half as fast. |
+| `minMs` | `1200` | Shortest a flight may take. |
+| `maxMs` | `5000` | Longest a flight may take. |
+
+Every field is optional; an invalid value falls back to its default. The scene's root element exposes `data-camera-state` (`flying` / `tracking` / `idle`) if you need to wait for a flight to land.
+
+## Star lighting
+
+With `lightFromStar`, natural spheres (placeholder or textured), ring discs and atmosphere rims use their own shaders rather than three's lights. The star's direction, its angular size and the few bodies that could be shadowing each one right now are computed on the CPU in float64 from **true** km positions (compressed world distances would put shadows in the wrong place and at the wrong size), reduced to each body's own frame, and handed to the shader in the mesh's object space. That makes the result independent of the floating-origin rebase, from the ISS close-up to the whole system. Real glTF models and the other placeholder shapes are still lit by a point light at the star.
+
+| `starLighting` field | Default | What it does |
+| --- | --- | --- |
+| `nightSideBrightness` | `0.04` | Share of full-sun brightness the night side keeps. A legibility floor: an airless night side is really black, so `0` is the physically honest value. |
+| `ringShadows` | `true` | A planet's shadow on its rings, and the rings' on the planet. |
+| `eclipseShadows` | `true` | Moons' shadows on their planets and planets' shadows on their moons (up to four nearest casters per body). |
+
+Changing these at runtime only rewrites uniforms. `initialDate` (a `Date` or ms) starts the clock at a chosen moment, such as Halley's 1986 perihelion or an eclipse. `examples/with-models` reads it from `?date=`, and `?light=1` turns lighting on.
+
 ## API
 
 Types, math, and reference data are exported from the package root (`orbital-engine`) — see [`src/index.ts`](./src/index.ts) for the full list. The R3F component is a separate entry point, `orbital-engine/react` (see [`src/react/index.ts`](./src/react/index.ts)), because it needs a `'use client'` directive for Next.js/RSC bundlers and the plain-data exports don't.
@@ -217,15 +256,22 @@ Types, math, and reference data are exported from the package root (`orbital-eng
 | `OrbitalSystemScene` | `orbital-engine/react` | The whole scene, UI overlays included — it renders its own R3F `<Canvas>`, so place it in a sized container, not inside another `<Canvas>`. |
 | `ExternalFocusRequest` | `orbital-engine/react` | Type for the `externalFocus` prop — flies the camera to a body id from outside the component (see [`examples/basic`](./examples/basic)'s "Fly to" buttons). |
 | `RoutePreview` | `orbital-engine/react` | Type for the `routePreview` prop — draws a line through an ordered chain of body ids. |
+| `FlightPacing` | `orbital-engine/react`, `orbital-engine` | Type for the `flightPacing` prop — see Fly-to pacing, above. |
+| `BodyFraming` | `orbital-engine/react`, `orbital-engine` | Type for the `arrivalFraming` prop (`'body'` / `'system'`) — see Arrival framing, above. |
 | `positionAtTime`, `orbitPath` | `orbital-engine` | Kepler propagation, given `OrbitalElements` and a `Date`. |
 | `resolveAllWorldPositions` | `orbital-engine` | Every body's current world position (orbit or fixed), respecting parent hierarchy. |
 | `poleFromEquatorialJ2000` | `orbital-engine` | IAU pole right ascension/declination → a `PoleDirection` in the J2000 ecliptic frame. |
 | `validateSystemData` | `orbital-engine` | Every data warning for a system — see Validation, above. |
 | `compressDistance`, `trueRadius` | `orbital-engine` | The scale math — km in, render-space units out. |
-| `computeFocusForBody`, `computeFocusForSystem` | `orbital-engine` | Camera framing targets for a fly-to. |
+| `computeFocusForBody`, `computeFocusForSystem` | `orbital-engine` | Camera framing targets for a fly-to (`computeFocusForBody` takes a `BodyFraming`). |
+| `distanceToFillView`, `BODY_VIEW_FILL`, `RING_VIEW_FILL` | `orbital-engine` | The camera distance at which a sphere fills a given share of the view, and the shares arrival framing uses. |
 | `findNearestCandidate` | `orbital-engine` | Proximity selection, given screen-space candidates. |
 | `computeVisibleLabels`, `computeOrbitalDepth`, `thinByScreenProximity` | `orbital-engine` | Label/body declutter, prioritized by structural depth. |
 | `computeVisibleBodyIds`, `MAX_VISIBLE_SECONDARY` | `orbital-engine` | Which bodies render at all at the current zoom — see Visibility, above. |
+| `StarLightingSettings`, `DEFAULT_STAR_LIGHTING` | `orbital-engine/react` | Type and defaults for the `starLighting` prop — see Star lighting, above. |
+| `resolveAllTruePositionsKm` | `orbital-engine` | Every body's true (uncompressed) position in km, in render axes. |
+| `sphereShadowFactor`, `ringShadowTransmission`, `discOverlapFraction`, `rankShadowCasters` | `orbital-engine` | The analytic eclipse and ring-shadow geometry the lighting shaders mirror. |
+| `cometTailGeometry`, `cometActivity`, `ionTailDirection`, `ionTailLengthKm` | `orbital-engine` | Comet tail physics: activity onset, ion tail aberration, dust syndynes. |
 | `SOLAR_SYSTEM` | `orbital-engine` | The reference dataset. |
 
 Generated API reference, every export with parameters: **[bevancoleman.github.io/orbital-engine/docs](https://bevancoleman.github.io/orbital-engine/docs/)**. Live example: [bevancoleman.github.io/orbital-engine](https://bevancoleman.github.io/orbital-engine/).

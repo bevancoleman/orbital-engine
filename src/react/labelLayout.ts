@@ -2,7 +2,6 @@
  * Placement and styling for a body's HTML text label (see BodyMarker) —
  * pure, so it's unit-testable without a renderer.
  */
-import type { CSSProperties } from 'react'
 
 /** Gap between the top of a body's projected disc and its label's centre. */
 export const LABEL_BASE_OFFSET_PX = 14
@@ -38,6 +37,20 @@ export function labelOffsetPx(projectedRadius: number): number {
   return LABEL_BASE_OFFSET_PX + Math.min(Math.max(projectedRadius, 0), LABEL_MAX_RADIUS_OFFSET_PX)
 }
 
+/** The top of the z-index range labels are stacked in — the same range
+ *  drei's <Html> used (labels were <Html> elements before BodyLabel drew
+ *  its own), so nothing else on a consumer's page changes stacking. */
+export const LABEL_Z_INDEX_MAX = 16777271
+
+/** Nearer labels stack above farther ones: linear in camera distance
+ *  across the near→far depth range, LABEL_Z_INDEX_MAX at the near plane
+ *  down to 0 at the far plane. */
+export function labelZIndex(distance: number, near: number, far: number): number {
+  if (!(far > near)) return 0
+  const clamped = Math.min(far, Math.max(near, distance))
+  return Math.round((LABEL_Z_INDEX_MAX * (far - clamped)) / (far - near))
+}
+
 // Selection/hover highlighting is a LABEL-only signal — the body's own
 // shape always renders its real colour, never overridden to white on
 // selection. Label text deliberately does NOT use the body's own render
@@ -47,17 +60,17 @@ export function labelOffsetPx(projectedRadius: number): number {
 // labels that were already all different colours.
 const LABEL_COLOR = { selected: '#ffffff', hovered: '#22d3ee', idle: '#cbd5e1' } as const
 
-const LABEL_BASE_STYLE: CSSProperties = {
-  fontSize: 11,
-  whiteSpace: 'nowrap',
-  textShadow: '0 1px 2px rgba(0,0,0,0.9)',
+/** CSS declarations (property name → value), applied straight to the
+ *  label's DOM element with style.setProperty — see BodyLabel for why the
+ *  label isn't a React-rendered element any more. */
+export type LabelCss = Readonly<Record<string, string>>
+
+const LABEL_BASE_STYLE: LabelCss = {
+  'font-size': '11px',
+  'white-space': 'nowrap',
+  'text-shadow': '0 1px 2px rgba(0,0,0,0.9)',
   cursor: 'pointer',
-  pointerEvents: 'auto',
-  // Only the starting position — BodyMarker's BodyLabel replaces it every
-  // frame with the real, size-aware offset (see labelOffsetPx). Kept
-  // identical across every state below, so React never overwrites that
-  // imperative update when the label's state changes.
-  transform: `translateY(${-LABEL_BASE_OFFSET_PX}px)`,
+  'pointer-events': 'auto',
   // This label exists purely as a click/hover target for body selection
   // (backed up by bubble-cursor proximity selection — see
   // ProximitySelector) — it was never meant to be readable, copyable body
@@ -66,19 +79,18 @@ const LABEL_BASE_STYLE: CSSProperties = {
   // body-select click, which is what "hovering the text stops me selecting
   // it" actually was: the two interactions competing for the same
   // mouse-down.
-  userSelect: 'none',
-  WebkitUserSelect: 'none',
+  'user-select': 'none',
+  '-webkit-user-select': 'none',
 }
 
-// One frozen object per state, not a fresh literal per render: drei's
-// <Html> re-renders its own separate React root whenever its content
-// changes, and a new style object every render counted as a change.
+// One frozen object per state, so BodyLabel can tell "same state" by
+// identity and skip re-applying it.
 const LABEL_STYLES = {
-  selected: { ...LABEL_BASE_STYLE, color: LABEL_COLOR.selected, fontWeight: 700 },
-  hovered: { ...LABEL_BASE_STYLE, color: LABEL_COLOR.hovered, fontWeight: 700 },
-  idle: { ...LABEL_BASE_STYLE, color: LABEL_COLOR.idle, fontWeight: 400 },
-} as const satisfies Record<string, CSSProperties>
+  selected: { ...LABEL_BASE_STYLE, color: LABEL_COLOR.selected, 'font-weight': '700' },
+  hovered: { ...LABEL_BASE_STYLE, color: LABEL_COLOR.hovered, 'font-weight': '700' },
+  idle: { ...LABEL_BASE_STYLE, color: LABEL_COLOR.idle, 'font-weight': '400' },
+} as const satisfies Record<string, LabelCss>
 
-export function bodyLabelStyle(selected: boolean, hovered: boolean): CSSProperties {
+export function bodyLabelStyle(selected: boolean, hovered: boolean): LabelCss {
   return selected ? LABEL_STYLES.selected : hovered ? LABEL_STYLES.hovered : LABEL_STYLES.idle
 }

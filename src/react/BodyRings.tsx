@@ -6,8 +6,9 @@ import { ringPlaneQuaternion, ringWorldRadius } from '../rings'
 import type { CelestialBody, RingBand } from '../types'
 import { glowSprite, ringStreakTexture } from './textures'
 import { PointCloud } from './PointCloud'
-
-const DEFAULT_DISC_OPACITY = 0.35
+import { DEFAULT_RING_DISC_OPACITY } from './starLighting'
+import { useSceneLighting } from './sceneLighting'
+import { StarLitRingDisc } from './StarLitShapes'
 const DEFAULT_RING_PARTICLES = 600
 /** Particle bands are near-flat: a ring of rocks round a moon is thin, not
  *  a thick belt. */
@@ -38,11 +39,18 @@ export function BodyRings({ body, radius, color }: { body: CelestialBody; radius
 }
 
 /** A smooth, translucent band — dust and ice rings, too fine to show as
- *  particles. Lit like the body, so its day side is brighter. */
+ *  particles. Lit like the body, so its day side is brighter; with star
+ *  lighting on (see sceneLighting.ts), lit by the star itself and
+ *  shadowed by the planet (StarLitRingDisc). */
 function RingDisc({ body, band, index, radius, color }: { body: CelestialBody; band: RingBand; index: number; radius: number; color: string }) {
   const inner = ringWorldRadius(band.innerRadiusKm, body, radius)
   const outer = ringWorldRadius(band.outerRadiusKm, body, radius)
   const texture = useMemo(() => ringStreakTexture(`${body.id}:${index}`, inner / outer), [body.id, index, inner, outer])
+  const { store } = useSceneLighting()
+  const opacity = band.opacity ?? DEFAULT_RING_DISC_OPACITY
+  if (store) {
+    return <StarLitRingDisc store={store} bodyId={body.id} color={color} map={texture} opacity={opacity} inner={inner} outer={outer} />
+  }
   return (
     // RingGeometry lies in the XY plane; turn it flat into XZ, the plane
     // the rest of the scene treats as "the reference plane".
@@ -52,7 +60,7 @@ function RingDisc({ body, band, index, radius, color }: { body: CelestialBody; b
         map={texture}
         color={color}
         transparent
-        opacity={band.opacity ?? DEFAULT_DISC_OPACITY}
+        opacity={opacity}
         roughness={1}
         metalness={0}
         side={THREE.DoubleSide}

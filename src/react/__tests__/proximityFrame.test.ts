@@ -34,6 +34,17 @@ describe('computeProximityFrame — hover', () => {
     expect(result.hoverId).toBeNull()
   })
 
+  it('hovers a body filling much of the view anywhere inside its projected disc, nearest the camera first', () => {
+    const planet = { ...c('jupiter', 400, 300), radiusPx: 200, depth: 4 }
+    const moon = { ...c('io', 600, 300), radiusPx: 40, depth: 3 }
+    const far = { ...c('callisto', 650, 300), radiusPx: 1, depth: 9 }
+    const projected = { onScreen: [planet, moon, far], offScreenIds: [] }
+    expect(computeProximityFrame(input({ projected, pointerPx: { x: 260, y: 300 } })).hoverId).toBe('jupiter')
+    expect(computeProximityFrame(input({ projected, pointerPx: { x: 590, y: 310 } })).hoverId).toBe('io')
+    // Past both discs: the ordinary snap radius around the small body.
+    expect(computeProximityFrame(input({ projected, pointerPx: { x: 660, y: 300 } })).hoverId).toBe('callisto')
+  })
+
   it('never hovers an off-screen (e.g. behind-camera) body', () => {
     const result = computeProximityFrame(
       input({ projected: { onScreen: [], offScreenIds: ['sun'] }, pointerPx: { x: 400, y: 300 } })

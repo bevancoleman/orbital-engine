@@ -18,7 +18,11 @@ npm run lint
 npm test          # the unit suite
 npm run test:coverage  # the unit suite plus the core coverage gate CI enforces
 npm run build     # tsup — emits ESM + CJS + .d.ts/.d.cts to dist/
+npm run bench:scene                       # per-frame CPU, draw calls and allocations on 2,000/10,000-body synthetic systems
+npm run bench:scene -- 5000 --alloc-sites # one size, plus where each allocation figure comes from
 ```
+
+For a large system in a browser, open the basic example with `?system=synthetic-2000` (any count); its dev overlay shows the draw-call count.
 
 ## Working on the examples
 
@@ -44,9 +48,19 @@ npx playwright install chromium
 npx playwright test
 ```
 
+Locally, Playwright starts each example's dev server (or reuses one you already have running on its port, 5173 for `basic` and 5174 for `with-models`). CI instead runs the e2e job against production builds: it builds both examples and Playwright serves them with `vite preview` on the same ports, so a bug that only shows up minified or with production React is caught there. To reproduce that locally (stop any dev servers on those ports first, since the ports are strict):
+
+```bash
+E2E_PREVIEW=1 npx playwright test   # vite build + vite preview for each example
+```
+
 A test that fails and is retried records a Playwright trace into `test-results/` (`npx playwright show-trace <trace.zip>`); on CI, the HTML report and traces are uploaded as the `playwright-report` artifact when the e2e job fails.
 
 If you're adding a feature that touches rendering behavior (not just pure math in `src/*.ts`), add or extend an e2e test — the unit tests can't exercise the actual React Three Fiber render path (no real WebGL context in Jest), so that's the only layer that catches a real regression there.
+
+## Minimum supported peers
+
+The `min-peers` CI job checks the oldest versions `peerDependencies` claims to support (three 0.152, @react-three/fiber 8.13, @react-three/drei 9.56.5, React 18), since every other job only sees the newer devDependency versions. It runs the unit suite with those peers swapped in, then installs the packed tarball into a scratch consumer project and runs `.github/min-peers/` there: ESM and CJS imports of both entry points, a scan for `THREE.*` members the oldest three lacks, a check on drei's camera-controls major, and a React 18 typecheck against the published `.d.ts`. The exact versions are at the top of the job in `.github/workflows/ci.yml`. If you raise or lower a peer floor in `package.json`, update them there too.
 
 ## Before opening a PR
 
@@ -57,6 +71,15 @@ If you're adding a feature that touches rendering behavior (not just pure math i
 ## Releasing
 
 Merging changesets into `main` makes the release workflow open/update a "Version Packages" PR (bumps `package.json` and `CHANGELOG.md`, no publish yet). Merging *that* PR is what triggers an actual release — but publishing itself is staged, not automatic: CI runs `npm stage publish`, and a maintainer still has to separately approve the staged version with their own 2FA, either on `npmjs.com/package/orbital-engine/access` or via `npm stage approve <stage-id>` (`npm stage list` shows what's pending). This is deliberate — it means a compromised CI run can stage a bad version but can't make it live unattended.
+
+Every push to `main` re-runs the publish job, so it skips a version that's already published (`npm view`) or already staged. npm can't report the second case to CI (`npm stage list` needs a logged-in user, and the trusted-publisher OIDC token is only accepted for publishing), so after staging, the job uploads an `npm-staged-orbital-engine-<version>` artifact as a marker, and later runs skip that version while the marker exists (90 days). If you reject a staged version and want CI to stage it again, delete its marker first, for example:
+
+```bash
+gh api "repos/bevancoleman/orbital-engine/actions/artifacts?name=npm-staged-orbital-engine-<version>" --jq '.artifacts[].id'
+gh api -X DELETE repos/bevancoleman/orbital-engine/actions/artifacts/<id>
+```
+
+If the job can't tell whether a version is staged (an npm or GitHub API error), it fails instead of guessing.
 
 ## Design principles this codebase holds to
 

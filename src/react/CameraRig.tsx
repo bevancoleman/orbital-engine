@@ -2,8 +2,19 @@ import { useEffect, useMemo, useRef, type MutableRefObject } from 'react'
 import { useThree, useFrame } from '@react-three/fiber'
 import { CameraControls } from '@react-three/drei'
 import * as THREE from 'three'
-import { DEFAULT_VIEW_DIRECTION, MAX_CAMERA_DISTANCE, type CameraObstacle, type FocusTarget } from '../camera'
+import {
+  DEFAULT_VIEW_DIRECTION,
+  MAX_CAMERA_DISTANCE,
+  computeSmoothedTrackedPosition,
+  type CameraObstacle,
+  type CameraPose,
+  type FlightPacing,
+  type FocusTarget,
+} from '../camera'
 import type { WorldVec } from '../render'
+import type { CelestialBody, StarSystemData } from '../types'
+import type { FramePositions } from './framePositions'
+import { clipPlanesFor } from './floatingOrigin'
 import {
   acknowledgeNullFocus,
   advanceCameraFrame,
@@ -14,13 +25,14 @@ import {
   interruptFlight,
   releaseClearedColliders,
   sameCameraActivity,
+  trackingViewingDistance,
   type CameraActivity,
 } from './cameraFlightLifecycle'
 
 /** Smoothing for MANUAL orbit/drag/dolly only — camera-controls' own
  *  transition system still owns that interaction, since a hand gesture has
  *  no "start/end" for our own tween to interpolate between. Not used for
- *  the programmatic fly-to; see FLY_DURATION_MS for that. */
+ *  the programmatic fly-to; see camera.ts's flightDurationMs for that. */
 const MANUAL_SMOOTH_TIME = 0.35
 
 /** Owns the camera-controls instance and smoothly flies the camera to a new
@@ -83,7 +95,8 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  exact, zero-lag rigid-tracking branch (the intended steady-state
  *  behaviour once a flight settles) was never reached at all; the camera
  *  stayed in eased/lagged pursuit of the body indefinitely instead of
- *  locking onto it. Fixed by settling on ELAPSED TIME (FLY_DURATION_MS)
+ *  locking onto it. Fixed by settling on ELAPSED TIME (the flight's own
+ *  durationMs — see cameraFlightLifecycle's FlightState)
  *  instead of waiting on a promise that structurally can't resolve while
  *  the target keeps moving.
  *
@@ -133,8 +146,8 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  transition:false — instant by design, meant only for a body's own tiny
  *  per-frame orbital drift). By the time the stale effect finally ran a
  *  frame later, it read the camera as already AT the destination and
- *  "flew" the remaining, imperceptible fraction of a unit over the next
- *  900ms — indistinguishable, from the outside, from an instant jump.
+ *  "flew" the remaining, imperceptible fraction of a unit over the whole
+ *  flight — indistinguishable, from the outside, from an instant jump.
  *  Whether the effect happened to flush before or after that next tick was
  *  genuinely timing-dependent — the actual coin flip behind "about
  *  50:50." Fixed by detecting a `focus` change atomically INSIDE useFrame
@@ -151,15 +164,15 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  finish pointed at a stale snapshot). The ISS's real orbital period is
  *  ~92 minutes; at this scene's own default 2 simulated days/second, that
  *  compresses to a full lap roughly every 32ms of WALL-CLOCK time — dozens
- *  of complete orbits within one ~900ms flight. Re-sampling "the live
+ *  of complete orbits within one flight of a second or two. Re-sampling "the live
  *  position" every frame during that flight wasn't tracking gradual
  *  drift at all; it was sampling an essentially arbitrary point on a tiny,
  *  fast circle every frame, so the eased tween's own END kept leaping
  *  somewhere new each frame — exactly what "violent jumping" looks like.
  *  Fixed at the source, not by smoothing the symptom: OrbitalSystemScene
  *  now computes a FRESH focus using a simDate advanced by the flight's own
- *  duration (see camera.ts's FLY_DURATION_MS and computeFocusForBody's own
- *  comment), so `focus.position` already IS where the body will be once
+ *  duration (see camera.ts's flightDurationMs, FocusTarget.flightDurationMs
+ *  and computeFocusForBody's own comment), so `focus.position` already IS where the body will be once
  *  the flight actually finishes — computed once, deterministically, from
  *  the same orbital math that positions the body for rendering. The
  *  flight below no longer re-aims at anything live at all; both endpoints
@@ -179,13 +192,16 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  both ends — see applyContextBulge's own comment for why this is a
  *  deliberately simple approximation (centred on the hero, not a genuine
  *  off-centre dual-target frustum fit) rather than the fully general
- *  algorithm.
+ *  algorithm. The flight's own van Wijk & Nuij zoom-and-pan path (see
+ *  camera.ts's zoomPanPath) already backs out to roughly the hop's pan
+ *  distance; the bulge only adds whatever that still leaves short of
+ *  fitting the shared parent.
  *
  *  Seventh real bug (review finding A1): steady tracking used to apply
  *  only the tracked body's frame-to-frame DELTA on top of wherever the
  *  target already sat. Any gap between the flight's predicted endTarget
  *  and the body's real position at the moment of settling — render-to-
- *  frame lag, the settle frame landing a few ms past FLY_DURATION_MS, a
+ *  frame lag, the settle frame landing a few ms past the flight's end, a
  *  smoothed vs. raw position — was then permanent: for the ISS at 2 d/s,
  *  a 1ms mismatch is ~330x its framing distance, the body left off-screen
  *  for good. Tracking now ANCHORS the target on the live position every
@@ -205,26 +221,42 @@ const MANUAL_SMOOTH_TIME = 0.35
  *  on the body. Panning still works while paused.) */
 export function CameraRig({
   focus,
-  trackedPosition,
+  trackedBody,
+  system,
+  frame,
+  daysPerSecond,
   colliderBodies,
   focusedId,
   manualDistance,
   onDistanceChange,
   minDistance,
-  nearPlane,
   onActivityChange,
+  flightPacing,
+  cameraPose,
 }: {
   focus: FocusTarget | null
-  /** The currently-selected body's LIVE world position — recomputed by
-   *  OrbitalSystemScene every time simDate advances — or null when nothing
-   *  real is selected (a belt, or nothing at all). A body with real orbital
-   *  motion (see CelestialBody.orbit) keeps moving after `focus` is
-   *  computed (a one-time snapshot), including while a flight is still in
-   *  progress or after it's long since settled — see the tracking logic in
-   *  useFrame below for how this keeps the camera locked on regardless. */
-  trackedPosition: readonly [number, number, number] | null
-  /** Every body's current position/radius (see camera.ts's
-   *  computeColliderBodies), UNFILTERED — turned into invisible proxy
+  /** The currently-selected body, or null when nothing real is selected
+   *  (a belt, or nothing at all). A body with real orbital motion (see
+   *  CelestialBody.orbit) keeps moving after `focus` is computed (a
+   *  one-time snapshot), including while a flight is still in progress or
+   *  after it's long since settled — see the tracking logic in useFrame
+   *  below for how this keeps the camera locked on regardless. Its
+   *  position is resolved HERE, every frame, at this frame's simulated
+   *  time (`frame`): it used to arrive as a prop recomputed only when the
+   *  React `simDate` state ticked (~10x a second), so the tracking camera
+   *  moved in visible 100ms steps along with everything else. */
+  trackedBody: CelestialBody | null
+  system: StarSystemData
+  /** This frame's simulated time and positions — see framePositions.ts. */
+  frame: FramePositions
+  /** Playback speed — tracking smoothing's sample spacing (see
+   *  computeSmoothedTrackedPosition). Deliberately NOT zeroed while paused:
+   *  that would shift the smoothed point (by up to its lag allowance) the
+   *  moment playback pauses. */
+  daysPerSecond: number
+  /** Every body's position/radius (see framePositions.ts's
+   *  liveColliderBodies — the positions are live arrays, current every
+   *  frame), UNFILTERED — turned into invisible proxy
    *  spheres below; which of them are actually active colliders at any
    *  given moment is this component's own call (see excludedColliderIds
    *  below), not something the caller decides. */
@@ -247,25 +279,22 @@ export function CameraRig({
    *  tiny true-scale body isn't held at arm's length by a floor sized for
    *  a whole solar system. */
   minDistance: number
-  /** The near clip plane to match `minDistance` (see camera.ts's
-   *  nearPlaneForRadius) — applied imperatively to the live camera below,
-   *  since the Canvas's own `camera` prop only sets this once at mount. */
-  nearPlane: number
   /** Called whenever the camera's observable activity (flying / tracking /
    *  idle, plus the flight counter — see describeCameraActivity) changes,
    *  and never on an unchanged frame. OrbitalSystemScene mirrors it onto
    *  its root element as data attributes. */
   onActivityChange?: (activity: CameraActivity) => void
+  /** How fly-tos are paced when the focus doesn't already carry a planned
+   *  duration (see FocusTarget.flightDurationMs and camera.ts's
+   *  flightDurationMs). */
+  flightPacing?: FlightPacing
+  /** Written every frame with the LIVE camera position and target, so a
+   *  new selection can plan its flight's duration (and so its arrival
+   *  prediction) from where the camera really is — see
+   *  useSelectionNavigation. */
+  cameraPose?: MutableRefObject<CameraPose | null>
 }) {
   const { camera } = useThree()
-
-  useEffect(() => {
-    const perspectiveCamera = camera as THREE.PerspectiveCamera
-    if (perspectiveCamera.near !== nearPlane) {
-      perspectiveCamera.near = nearPlane
-      perspectiveCamera.updateProjectionMatrix()
-    }
-  }, [camera, nearPlane])
 
   const controlsRef = useRef<CameraControls | null>(null)
   // Owns everything about whether a flight is in progress, where it's
@@ -314,13 +343,36 @@ export function CameraRig({
   useFrame(() => {
     const controls = controlsRef.current
     if (!controls) return
-    const tracked: WorldVec | null = trackedPosition ? [trackedPosition[0], trackedPosition[1], trackedPosition[2]] : null
+    applyClipPlanes(camera, controls.distance)
+    // The selected body's position at THIS frame's simulated time, routed
+    // through computeSmoothedTrackedPosition rather than a single raw
+    // sample — see that function's own comment: a body whose own PARENT is
+    // also moving (a moon of an orbiting planet) can trace a genuinely
+    // epicyclic path that a plain per-frame backward difference tracks
+    // jerkily, and smoothing there is safe to apply unconditionally (not
+    // behind a toggle) because it already falls back to exact, unsmoothed
+    // tracking on its own whenever smoothing would risk lagging the target
+    // out of frame (a true-scale close orbiter) — the same adaptive-
+    // fallback pattern safePredictFlightTarget uses for the flight side
+    // (see useSelectionNavigation). That fallback is measured against
+    // trackingViewingDistance: the LIVE camera distance, capped by the
+    // focus's own framing distance, since mid-flight the live distance is
+    // still far wider than where the flight is landing (see that function).
+    const tracked: WorldVec | null = trackedBody
+      ? computeSmoothedTrackedPosition(
+          trackedBody,
+          system,
+          frame.date,
+          daysPerSecond,
+          trackingViewingDistance(controls.distance, focus)
+        )
+      : null
 
     let lifecycle = flightLifecycleRef.current
 
     // Starts a new flight the instant `focus` changes — inline here, not
     // in a separate useEffect, and checked FIRST, before anything below
-    // reads trackedPosition. See this file's header comment (fifth bug,
+    // reads the tracked position. See this file's header comment (fifth bug,
     // a real, observed one, confirmed by direct instrumentation): a
     // useEffect is a PASSIVE effect, deferred relative to R3F's own
     // requestAnimationFrame-driven loop, with no guarantee it flushes
@@ -358,6 +410,7 @@ export function CameraRig({
           currentTargetPos: [currentTargetPos.x, currentTargetPos.y, currentTargetPos.z],
           trackedPosition: tracked,
           nowMs: performance.now(),
+          pacing: flightPacing,
         })
       } else {
         lifecycle = acknowledgeNullFocus(lifecycle)
@@ -428,6 +481,15 @@ export function CameraRig({
     }
 
     flightLifecycleRef.current = lifecycle
+
+    if (cameraPose) {
+      const livePosition = controls.getPosition(scratch.position, false)
+      const liveTarget = controls.getTarget(scratch.target, false)
+      cameraPose.current = {
+        position: [livePosition.x, livePosition.y, livePosition.z],
+        target: [liveTarget.x, liveTarget.y, liveTarget.z],
+      }
+    }
 
     // Report the live camera-to-target distance for LOD (see BodyMarker) —
     // epsilon-throttled so a continuous drag/zoom gesture doesn't trigger a
@@ -516,4 +578,23 @@ export function CameraRig({
       {colliderMeshElements}
     </>
   )
+}
+
+/**
+ * The world camera's clip planes for the current viewing distance (see
+ * floatingOrigin.ts's clipPlanesFor) — set every frame before
+ * camera-controls' update, whose collision test casts from the near
+ * plane. They used to be fixed per SELECTION (camera.ts's
+ * nearPlaneForRadius, applied in an effect), which held the near plane at
+ * whatever the selected body allowed however far out the user zoomed; the
+ * render pass rescales them for drawing (see RenderPass). Only touches the
+ * projection matrix when a plane actually moved.
+ */
+function applyClipPlanes(camera: THREE.Camera, viewingDistance: number): void {
+  if (!(camera instanceof THREE.PerspectiveCamera)) return
+  const { near, far } = clipPlanesFor(viewingDistance)
+  if (camera.near === near && camera.far === far) return
+  camera.near = near
+  camera.far = far
+  camera.updateProjectionMatrix()
 }

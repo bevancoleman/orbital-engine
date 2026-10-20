@@ -32,6 +32,77 @@ jobs:
       - run: npx --yes publint@0.3.25 --strict
       - run: npx --yes @arethetypeswrong/cli@0.18.5 --pack .
 
+  # The oldest peers that package.json's peerDependencies claim to support
+  # (latest patch of each minimum minor). Every other job only ever sees
+  # the devDependency versions (React 19, R3F 9, drei 10, three 0.186), so
+  # nothing else would notice a change that quietly needs something newer.
+  #
+  # Two halves:
+  #  1. The unit suite in this checkout, after swapping the minimum peers
+  #     in with `npm install --no-save`. React is 18.3 here, not 18.0: the
+  #     test harness (src/react/__test-utils__/render.ts) imports `act`
+  #     from 'react', which only exists from 18.3 on. Test-only; the
+  #     library itself doesn't use it.
+  #  2. A scratch consumer project with the packed tarball and the true
+  #     floor (React 18.0): imports both entry points as ESM and CJS, scans
+  #     dist/ for THREE.* members three 0.152 lacks, checks drei's
+  #     camera-controls major (.github/min-peers/smoke.*), and typechecks
+  #     a React 18 consumer against the published .d.ts (consumer.tsx).
+  #
+  # Deliberately NOT `npm run typecheck` over src/ (or a dts build) against
+  # the old @types: src/ is written to the React 19 types (useRef(null) is
+  # a mutable RefObject<T | null> there, a read-only `T | null` ref in 18)
+  # and drei 9.56's own useTexture/CameraControls types differ, so it
+  # reports a dozen internal-only errors no consumer ever sees. The
+  # consumer typecheck covers the surface they do see, and the tarball is
+  # built once with the devDependencies, the same way a release is.
+  min-peers:
+    runs-on: ubuntu-latest
+    env:
+      MIN_RENDER_PEERS: three@0.152.2 @react-three/fiber@8.13.9 @react-three/drei@9.56.5
+      MIN_REACT: react@18.0.0 react-dom@18.0.0
+      MIN_PEER_TYPES: "@types/three@0.152.1 @types/react@18.3.31 @types/react-dom@18.3.7"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+      - name: Unit tests against the minimum peers
+        # --legacy-peer-deps: swapping fiber 8 in over this repo's lockfile
+        # makes npm re-resolve fiber 8's optional react-native/expo peers,
+        # whose latest releases want React 19.3 — an ERESOLVE for packages
+        # a web library never installs. check-installed.sh below still
+        # verifies the exact versions, and the consumer project further
+        # down installs the tarball with strict peer resolution.
+        run: |
+          npm install --no-save --ignore-scripts --no-audit --no-fund --legacy-peer-deps \
+            $MIN_RENDER_PEERS react@18.3.1 react-dom@18.3.1 $MIN_PEER_TYPES
+          bash .github/min-peers/check-installed.sh \
+            $MIN_RENDER_PEERS react@18.3.1 react-dom@18.3.1 $MIN_PEER_TYPES
+          npm test
+      - name: Set up a consumer project with the tarball and the minimum peers
+        run: |
+          mkdir "$RUNNER_TEMP/consumer"
+          cp .github/min-peers/* "$RUNNER_TEMP/consumer/"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          npm install --ignore-scripts --no-audit --no-fund \
+            "$RUNNER_TEMP"/orbital-engine-*.tgz $MIN_RENDER_PEERS $MIN_REACT $MIN_PEER_TYPES typescript@5.9.3
+          bash check-installed.sh $MIN_RENDER_PEERS $MIN_REACT $MIN_PEER_TYPES
+      - name: Import both entry points (ESM)
+        working-directory: ${{ runner.temp }}/consumer
+        run: node smoke.mjs
+      - name: Import both entry points (CJS)
+        working-directory: ${{ runner.temp }}/consumer
+        run: node smoke.cjs
+      - name: Typecheck a React 18 consumer against the published types
+        working-directory: ${{ runner.temp }}/consumer
+        run: npx tsc -p .
+
   e2e:
     runs-on: ubuntu-latest
     steps:
@@ -46,6 +117,11 @@ jobs:
       # ignored, its `prepare` doesn't rebuild dist/ a second time.
       - run: npm ci --ignore-scripts --prefix examples/basic
       - run: npm ci --ignore-scripts --prefix examples/with-models
+      # e2e runs against production builds served by `vite preview` (see
+      # playwright.config.ts), so build both examples first. GITHUB_PAGES
+      # stays unset: base '/', matching the root URLs the specs use.
+      - run: npm run build --prefix examples/basic
+      - run: npm run build --prefix examples/with-models
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
       - name: Upload Playwright report and traces

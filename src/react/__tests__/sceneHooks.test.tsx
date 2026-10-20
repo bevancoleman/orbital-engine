@@ -33,10 +33,21 @@ describe('useSimulationClock', () => {
     expect(hook.current.daysPerSecond).toBe(MAX_DAYS_PER_SECOND)
     const start = hook.current.simDate.getTime()
     const advance = hook.current.advance
+    // Advancing moves the authoritative time at once, without a render…
     act(() => hook.current.advance(1000))
-    expect(hook.current.simDate.getTime()).toBe(start + 1000)
+    expect(hook.current.simTimeRef.current).toBe(start + 1000)
     expect(hook.current.simDateRef.current.getTime()).toBe(start + 1000)
+    expect(hook.current.now().getTime()).toBe(start + 1000)
+    expect(hook.current.simDate.getTime()).toBe(start)
+    // …and the UI's date catches up when it's committed.
+    act(() => hook.current.commit())
+    expect(hook.current.simDate.getTime()).toBe(start + 1000)
     expect(hook.current.advance).toBe(advance)
+    // Pausing commits too, so the paused UI shows exactly where time stopped.
+    act(() => hook.current.advance(500))
+    act(() => hook.current.setPlaying(false))
+    expect(hook.current.playing).toBe(false)
+    expect(hook.current.simDate.getTime()).toBe(start + 1500)
     act(() => hook.current.setDaysPerSecond(-5))
     expect(hook.current.daysPerSecond).toBeGreaterThan(0)
     hook.unmount()
@@ -97,12 +108,15 @@ describe('useSelectionNavigation', () => {
       index,
       clock: {
         simDate: new Date('2026-01-01T00:00:00Z'),
+        simTimeRef: { current: Date.parse('2026-01-01T00:00:00Z') },
         simDateRef: { current: new Date('2026-01-01T00:00:00Z') },
+        now: () => new Date('2026-01-01T00:00:00Z'),
         playing: false,
         daysPerSecond: 1,
         setPlaying: jest.fn(),
         setDaysPerSecond: jest.fn(),
         advance: jest.fn(),
+        commit: jest.fn(),
       },
       log: { recordAction, recordDebounced: jest.fn(), startSession: jest.fn() },
       onSelectBody,
@@ -157,6 +171,49 @@ describe('useSelectionNavigation', () => {
     const { hook, onSelectBody } = setup({ externalFocus: { bodyId: 'mars', token: 1 } })
     expect(hook.current.selectedBody?.id).toBe('mars')
     expect(onSelectBody).not.toHaveBeenCalled()
+    hook.unmount()
+  })
+
+  it('arrives framing the body itself, and toggles to its system framing when it is selected again', () => {
+    const { hook } = setup()
+    act(() => hook.current.selectFromDropdown('body:jupiter'))
+    expect(hook.current.framing).toBe('body')
+    const bodyDistance = hook.current.focus!.distance
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    expect(hook.current.framing).toBe('system')
+    expect(hook.current.selectedBody?.id).toBe('jupiter')
+    expect(hook.current.focus!.distance).toBeGreaterThan(bodyDistance * 10)
+    // Recenter keeps the framing the user chose.
+    act(() => hook.current.recenter())
+    expect(hook.current.framing).toBe('system')
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    expect(hook.current.framing).toBe('body')
+    expect(hook.current.focus!.distance).toBeCloseTo(bodyDistance, 9)
+    // A different body arrives in the arrival framing again.
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    act(() => hook.current.goDown())
+    expect(hook.current.framing).toBe('body')
+    act(() => hook.current.reset())
+    expect(hook.current.framing).toBeNull()
+    hook.unmount()
+  })
+
+  it("arrives in the moon-system framing with arrivalFraming: 'system'", () => {
+    const { hook } = setup({ arrivalFraming: 'system' })
+    act(() => hook.current.selectFromDropdown('body:jupiter'))
+    expect(hook.current.framing).toBe('system')
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    expect(hook.current.framing).toBe('body')
+    hook.unmount()
+  })
+
+  it('an external focus request always arrives in the arrival framing, even on the selected body', () => {
+    const { hook, options } = setup({ externalFocus: { bodyId: 'mars', token: 1 } })
+    act(() => hook.current.selectBody(hook.current.selectedBody!))
+    expect(hook.current.framing).toBe('system')
+    options.externalFocus = { bodyId: 'mars', token: 2 }
+    hook.rerender()
+    expect(hook.current.framing).toBe('body')
     hook.unmount()
   })
 

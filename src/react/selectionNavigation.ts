@@ -3,6 +3,7 @@
  * toolbar (the object dropdown and Up/Down) — no React, so it's
  * unit-testable without a renderer.
  */
+import type { BodyFraming } from '../camera'
 import type { BeltRegion, CelestialBody, StarSystemData } from '../types'
 
 export type Selection = { kind: 'body'; id: string } | { kind: 'belt'; id: string } | null
@@ -78,4 +79,26 @@ export function parentTarget(resolved: ResolvedSelection, index: SystemIndex): C
  *  orbits a belt) or a childless body. */
 export function childTarget(resolved: ResolvedSelection, index: SystemIndex): CelestialBody | null {
   return resolved.selectedBody ? (index.firstChildById.get(resolved.selectedBody.id) ?? null) : null
+}
+
+/**
+ * The framing a body selection flies to (see camera.ts's BodyFraming).
+ * Picking a different body arrives in `arrivalFraming` (OrbitalSystemScene's
+ * `arrivalFraming` prop). Picking the body that's already selected — a
+ * click on it in the map, which before this just re-flew to the same
+ * view — toggles between its own close-up and its whole moon system
+ * instead. That keeps the moon-system view one action away now that
+ * arrival frames the body itself, with no new control: the same click
+ * also takes you back in. Up/Down and the dropdown only ever pick a
+ * different body, and an external focus request always arrives in
+ * `arrivalFraming` (see useSelectionNavigation).
+ */
+export function framingForBodySelection(
+  current: Selection,
+  currentFraming: BodyFraming,
+  pickedId: string,
+  arrivalFraming: BodyFraming
+): BodyFraming {
+  if (current?.kind === 'body' && current.id === pickedId) return currentFraming === 'body' ? 'system' : 'body'
+  return arrivalFraming
 }

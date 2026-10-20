@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
 
-import { EMPTY_SPACE_MAX_LIT, litFractionAt } from './support/frameSampler'
-import { flyAndSettle, gotoScene, sceneRoot, trackErrors } from './support/scene'
+import { EMPTY_SPACE_MAX_LIT, litFractionAt, readLuminance, type CanvasRegion } from './support/frameSampler'
+import { flyAndSettle, gotoScene, sceneRoot, setRangeValue, trackErrors } from './support/scene'
 
 // Regression coverage for CelestialBody.modelUrl (real 3D models) and
 // CelestialBody.textureUrl (real surface textures on the built-in sphere) —
@@ -142,5 +142,80 @@ test.describe('examples/with-models — real assets', () => {
     await expect(page.getByText('Selected: ISS')).toBeVisible()
     await expect(sceneRoot(page)).toHaveAttribute('data-camera-state', 'tracking')
     expect(await litFractionAt(page)).toBeGreaterThan(EMPTY_SPACE_MAX_LIT)
+  })
+})
+
+// Star lighting (lightFromStar) and comet tails. Each check compares the
+// same settled, paused view with a setting on and off — toggling it is a
+// uniform write (or a tail hidden), so the camera, and every other pixel,
+// stays put; only what the setting draws changes.
+test.describe('examples/with-models — star lighting, shadows and comet tails', () => {
+  /** Most of the canvas: Saturn's rings reach well beyond the planet. */
+  const WIDE: CanvasRegion = { cx: 0.5, cy: 0.5, sizeFraction: 0.9 }
+
+  /** Pixels that are lit without the setting and at most `ratio` as
+   *  bright with it, as a fraction of the sample. */
+  function darkenedFraction(withSetting: number[], without: number[], ratio: number): number {
+    let darkened = 0
+    for (let i = 0; i < without.length; i++) if (without[i]! > 40 && withSetting[i]! <= without[i]! * ratio) darkened++
+    return darkened / without.length
+  }
+
+  test('Saturn under star lighting shows its ring shadows, with no console errors', async ({ page }) => {
+    const errors = trackErrors(page)
+    // October 2026: the Sun a few degrees off Saturn's ring plane, so the
+    // planet's shadow falls far across the rings behind it.
+    await gotoScene(page, `${URL}?light=1&date=2026-10-20T12:00:00Z`)
+    await flyTo(page, 'Saturn')
+    await expect(page.getByRole('checkbox', { name: 'Light from star (real day/night)' })).toBeChecked()
+    // Let the planet's texture load and the view settle.
+    await expect.poll(() => litFractionAt(page), { timeout: 15_000 }).toBeGreaterThan(0.02)
+    const shadowed = await readLuminance(page, WIDE)
+    await page.getByRole('checkbox', { name: 'Ring and eclipse shadows' }).uncheck()
+    const unshadowed = await readLuminance(page, WIDE)
+    // The planet's shadow on the rings (and theirs on it) is a solid
+    // region, not a few stray pixels: at least 0.3% of this sample went
+    // from lit to under half as bright.
+    expect(darkenedFraction(shadowed, unshadowed, 0.5)).toBeGreaterThan(0.003)
+    // ...and nothing got brighter with shadows on.
+    let brighter = 0
+    for (let i = 0; i < shadowed.length; i++) if (shadowed[i]! > unshadowed[i]! + 8) brighter++
+    expect(brighter / shadowed.length).toBeLessThan(0.001)
+    expect(errors).toEqual([])
+  })
+
+  test("Halley's Comet has a visible tail near perihelion", async ({ page }) => {
+    const errors = trackErrors(page)
+    // Lit from the star, the fly-to settles on the comet's day side, the
+    // Sun 30–50° off the view — so the tail, pointing away from the Sun,
+    // crosses the view. (Unlit, the settled view looks back towards the
+    // Sun, straight down the tail; this test used to drag the camera
+    // round ~90° by hand to see it.)
+    await gotoScene(page, `${URL}?light=1&date=1986-03-10T00:00:00Z`)
+    await flyTo(page, 'Halley')
+    // Back out to ~10⁷ km, where the tail (true scale, ~10⁷–10⁸ km)
+    // spans the view.
+    await setRangeValue(page.locator('input[type=range][title^="Zoom"]'), 720)
+    const withTail = await readLuminance(page, WIDE)
+    await page.getByRole('checkbox', { name: 'Comet tails' }).uncheck()
+    const withoutTail = await readLuminance(page, WIDE)
+    let brightened = 0
+    for (let i = 0; i < withTail.length; i++) if (withTail[i]! > withoutTail[i]! + 20) brightened++
+    // The tail lights a broad band across the view, not a few pixels.
+    expect(brightened / withTail.length).toBeGreaterThan(0.02)
+    expect(errors).toEqual([])
+  })
+
+  test("Halley's Comet has no tail far from the Sun", async ({ page }) => {
+    // October 2026: ~34 AU out, long inert.
+    await gotoScene(page, `${URL}?light=1&date=2026-10-20T00:00:00Z`)
+    await flyTo(page, 'Halley')
+    await setRangeValue(page.locator('input[type=range][title^="Zoom"]'), 720)
+    const tailsOn = await readLuminance(page, WIDE)
+    await page.getByRole('checkbox', { name: 'Comet tails' }).uncheck()
+    const tailsOff = await readLuminance(page, WIDE)
+    let brightened = 0
+    for (let i = 0; i < tailsOn.length; i++) if (tailsOn[i]! > tailsOff[i]! + 20) brightened++
+    expect(brightened / tailsOn.length).toBeLessThan(0.001)
   })
 })

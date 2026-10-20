@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
+import { useFrame } from '@react-three/fiber'
 import { PointMaterial } from '@react-three/drei'
 import * as THREE from 'three'
 import { beltGlowInnerRatio, sampleBeltParticles } from '../belts'
@@ -6,14 +7,17 @@ import { coOrbitalReferenceAngle } from '../resolve'
 import type { WorldVec } from '../render'
 import { compressDistance } from '../scale'
 import type { BeltRegion, BeltSite, StarSystemData } from '../types'
-import { compressedOffsets, syntheticBeltOffsets } from './beltGeometry'
+import { coOrbitalRotationY, compressedOffsets, syntheticBeltOffsets } from './beltGeometry'
+import type { FramePositions } from './framePositions'
+import { FOLLOW_PRIORITY, useFollowPosition } from './useFollowPosition'
 import { PointCloud } from './PointCloud'
 import { glowSprite, ringGlowTexture } from './textures'
 
 // Every component here takes its belt's parent world position from
-// SceneContent (which already resolved every body's position once for
-// this frame) rather than re-resolving the parent itself, and applies it
-// as a group position over PARENT-RELATIVE vertices — see beltGeometry.ts.
+// SceneContent — a live array, updated in place every frame (see
+// framePositions.ts) — rather than re-resolving the parent itself, and
+// follows it every frame as a group position over PARENT-RELATIVE
+// vertices — see beltGeometry.ts.
 
 /**
  * A flat, soft-edged glow disc spanning a belt's full inner-to-outer
@@ -27,9 +31,11 @@ export function BeltGlowRing({ belt, parentWorldPos }: { belt: BeltRegion; paren
   // Shared and cached by ratio (see ringGlowTexture) — not created per
   // mount, so nothing here to dispose.
   const texture = ringGlowTexture(innerRatio)
+  const meshRef = useRef<THREE.Mesh>(null)
+  useFollowPosition(meshRef, parentWorldPos)
 
   return (
-    <mesh position={parentWorldPos} rotation={[-Math.PI / 2, 0, 0]}>
+    <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]}>
       <circleGeometry args={[outerWorldRadius, 64]} />
       <meshBasicMaterial
         map={texture}
@@ -47,12 +53,12 @@ export function BeltGlowRing({ belt, parentWorldPos }: { belt: BeltRegion; paren
 export function BeltPoints({
   belt,
   system,
-  simDate,
+  frame,
   parentWorldPos,
 }: {
   belt: BeltRegion
   system: StarSystemData
-  simDate: Date
+  frame: FramePositions
   parentWorldPos: WorldVec
 }) {
   // Per-particle (radius, angle offset, elevation), generated once per belt
@@ -62,25 +68,33 @@ export function BeltPoints({
   // pattern is also the same on every load.
   const syntheticShape = useMemo(() => sampleBeltParticles(belt), [belt])
 
-  // A co-orbital population (e.g. Jupiter's Trojans) clusters around an
-  // angle measured from its reference body's CURRENT position, not a
-  // fixed spot — this is what makes it visibly travel with Jupiter as time
-  // advances rather than sitting static in space. 0 for every other belt,
-  // so for those the buffer below is built once and never again.
-  const referenceAngle = belt.realPositions ? 0 : coOrbitalReferenceAngle(belt, system, simDate)
-
   const positions = useMemo(
     () =>
       // Real individual positions (see BeltRegion.realPositions) — e.g.
       // Star Citizen's asteroid fields, where every rock's exact position
       // is known from the game's own data. Used directly, not as a radius
       // range to scatter synthetic points across.
-      belt.realPositions ? compressedOffsets(belt.realPositions) : syntheticBeltOffsets(belt, syntheticShape, referenceAngle),
-    [belt, syntheticShape, referenceAngle]
+      belt.realPositions ? compressedOffsets(belt.realPositions) : syntheticBeltOffsets(belt, syntheticShape, 0),
+    [belt, syntheticShape]
   )
 
+  // A co-orbital population (e.g. Jupiter's Trojans) clusters around an
+  // angle measured from its reference body's CURRENT position, not a
+  // fixed spot — this is what makes it visibly travel with Jupiter as time
+  // advances rather than sitting static in space. It used to rebuild (and
+  // re-upload) the whole particle buffer at each new angle, which was only
+  // affordable at the old ~10Hz simulation tick; the buffer is now built
+  // once at angle 0 and the group is ROTATED by the reference angle every
+  // frame (see coOrbitalRotationY — the same placement, exactly).
+  const groupRef = useRef<THREE.Group>(null)
+  useFollowPosition(groupRef, parentWorldPos)
+  const coOrbital = !belt.realPositions && belt.coOrbital !== undefined
+  useFrame(() => {
+    if (coOrbital && groupRef.current) groupRef.current.rotation.y = coOrbitalRotationY(coOrbitalReferenceAngle(belt, system, frame.date))
+  }, FOLLOW_PRIORITY)
+
   return (
-    <group position={parentWorldPos}>
+    <group ref={groupRef}>
       <PointCloud positions={positions}>
         <PointMaterial
           map={glowSprite()}
@@ -108,9 +122,11 @@ export function BeltPoints({
  * "these particular places, in this belt" rather than as another belt.
  */
 export function BeltSites({ belt, parentWorldPos }: { belt: BeltRegion; parentWorldPos: WorldVec }) {
+  const groupRef = useRef<THREE.Group>(null)
+  useFollowPosition(groupRef, parentWorldPos)
   if (!belt.sites?.length) return null
   return (
-    <group position={parentWorldPos}>
+    <group ref={groupRef}>
       {belt.sites.map((site) => (
         <SiteMarkers key={site.name} site={site} fallbackColor={belt.color} />
       ))}

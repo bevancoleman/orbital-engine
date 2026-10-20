@@ -12,6 +12,30 @@ export { MS_PER_DAY }
  *  cheaper than a full state update at 60fps. */
 export const TICK_INTERVAL_SECONDS = 0.1
 
+/**
+ * One frame of playback: the simulated ms this frame advances the
+ * authoritative clock by (every frame, so motion is smooth), and whether
+ * this frame should also commit the date to React state for the UI (every
+ * TICK_INTERVAL_SECONDS of real time — see that constant).
+ */
+export function stepPlayback(
+  accumulatorSeconds: number,
+  deltaSeconds: number,
+  daysPerSecond: number
+): { advanceMs: number; accumulatorSeconds: number; commit: boolean } {
+  const accumulated = accumulatorSeconds + deltaSeconds
+  const commit = accumulated >= TICK_INTERVAL_SECONDS
+  // The remainder carries over (so commits average one per interval), but
+  // never a backlog: a long frame (a background tab) commits once, not a
+  // burst of catch-up commits.
+  const remainder = commit ? accumulated - TICK_INTERVAL_SECONDS : accumulated
+  return {
+    advanceMs: simulatedAdvanceMs(deltaSeconds, daysPerSecond),
+    accumulatorSeconds: remainder >= TICK_INTERVAL_SECONDS ? 0 : remainder,
+    commit,
+  }
+}
+
 /** Simulated ms that `realSeconds` of playback covers at `daysPerSecond`. */
 export function simulatedAdvanceMs(realSeconds: number, daysPerSecond: number): number {
   return realSeconds * daysPerSecond * MS_PER_DAY

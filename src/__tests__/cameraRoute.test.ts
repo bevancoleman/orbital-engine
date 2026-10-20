@@ -14,7 +14,7 @@ import {
   CAMERA_ROUTE_FIXTURE_SYSTEM,
   CAMERA_ROUTE_FIXTURE_WAYPOINTS,
   CAMERA_ROUTE_START_DATE,
-  CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+  CAMERA_ROUTE_FLIGHT_FPS,
   CAMERA_ROUTE_TRACK_STEPS,
   CAMERA_ROUTE_TRACK_STEP_MS,
   CAMERA_ROUTE_ORBITING_BODY_IDS,
@@ -42,29 +42,47 @@ const ANGLE_TOLERANCE_DEG = 1
 const MONOTONICITY_EPSILON = 1e-9
 const FINAL_CONVERGENCE_EPSILON = 1e-9
 const TRACKING_ERROR_BOUND = 1e-6 // world units — a "locked on" camera should have ~zero residual error
-/** Per-frame turn-rate is allowed to grow by this many degrees frame-over-
- *  frame before counting as a real "not smooth" spike, rather than
- *  requiring strict non-increase — easeOutCubic's deceleration makes
- *  turn-rate trend down within a flight, but it isn't a perfectly convex
- *  curve at every step, so a small tolerance avoids flagging harmless
- *  numerical wobble while still catching a genuine whiplash spike (the
- *  naturalFlightOffset near-antipodal bug this fixture originally caught
- *  produced single-frame jumps of 40-70°, an order of magnitude past this). */
+/** Per-frame turn-rate is allowed to change by this many degrees frame-
+ *  over-frame before counting as a real "not smooth" spike — smoothstep's
+ *  ease-in-out makes turn-rate rise from ~0 and fall back to ~0 within a
+ *  flight (it used to only fall, under easeOutCubic), so this bounds the
+ *  change in either direction, while still catching a genuine whiplash
+ *  spike (the naturalFlightOffset near-antipodal bug this fixture
+ *  originally caught produced single-frame jumps of 40-70°, an order of
+ *  magnitude past this). */
 const TURN_RATE_SLACK_DEG = 2
 /** Hard, absolute per-frame ceilings — exceeding these is a failure
  *  regardless of trend, leg, or phase (a sharp turn OR a sharp flight-path
  *  bend is a failure on its own terms, not just relative to its own
  *  neighbours). Measured directly on this fixture at ONE CAMERA UPDATE PER
- *  REAL RENDERED FRAME (see CAMERA_ROUTE_SAMPLES_PER_FLIGHT/
+ *  REAL RENDERED FRAME (see CAMERA_ROUTE_FLIGHT_FPS/
  *  CAMERA_ROUTE_TRACK_STEPS in the fixture — sampling any coarser
  *  manufactures apparent sharpness that was never really there): the
- *  worst legitimate single-frame value across every leg/phase is ~8.8°
- *  (turn-rate) and ~10.8° (flight-path-turn), so 20° leaves real margin
- *  above genuine smooth motion while still catching a regression an order
- *  of magnitude smaller than the bugs this fixture has already caught
- *  (a 70°+ near-antipodal pinch, a 169° cross-phase comparison artifact). */
+ *  worst legitimate single-frame turn-rate across every leg/phase was
+ *  ~8.8° under the old front-loaded 900ms flight and is now ~2°, so 20°
+ *  leaves real margin above genuine smooth motion while still catching a
+ *  regression an order of magnitude smaller than the bugs this fixture has
+ *  already caught (a 70°+ near-antipodal pinch, a 169° cross-phase
+ *  comparison artifact).
+ *
+ *  The flight-path-turn ceiling applies to TRACK frames only now. A van
+ *  Wijk & Nuij flight (see camera.ts's zoomPanPath) backs away from the
+ *  target, pans, then closes in, and at the top of that zoom-out the
+ *  camera's direction of travel swings from "backing out" to "closing in"
+ *  within a few frames — ~58°/frame at 60fps on the moonA → stationA leg,
+ *  a tight but perfectly smooth curve (it shrinks in proportion to frame
+ *  spacing; see FLIGHT_PATH_DENSITY_SHRINK below), not a kink. What the
+ *  viewer sees there — the view's own turn, the zoom rate, the
+ *  destination's on-screen motion — stays small (see
+ *  flightSmoothness.test.ts). Flights are checked for path CONTINUITY
+ *  instead, the same way cameraRouteBulge.test.ts checks its turns. */
 const MAX_TURN_RATE_DEG = 20
 const MAX_FLIGHT_PATH_TURN_DEG = 20
+/** At 10x the frame density, a smooth path's worst per-sample bend shrinks
+ *  roughly tenfold, while a genuine kink (a velocity discontinuity) stays
+ *  just as large. Requiring at least this much shrinkage tells the two
+ *  apart. */
+const FLIGHT_PATH_DENSITY_SHRINK = 5
 /** How close to exactly 0 turnRateDeg must be on a track frame — a rigid
  *  translation applied identically to camera and target can't change the
  *  offset between them, so this should hold at essentially floating-point
@@ -127,13 +145,32 @@ function assertNullnessMatches(frame: CameraRouteFrame, expected: CameraRouteFra
   }
 }
 
+/** Per leg, the worst flight-frame path bend at 10x density must be at
+ *  most 1/FLIGHT_PATH_DENSITY_SHRINK of the worst at the base density
+ *  (or under 1° outright) — see FLIGHT_PATH_DENSITY_SHRINK. */
+function assertFlightPathContinuous(base: CameraRouteFrame[], dense: CameraRouteFrame[]): void {
+  const worstPerLeg = (frames: CameraRouteFrame[]): Map<number, number> => {
+    const worst = new Map<number, number>()
+    for (const f of frames) {
+      if (f.phase !== 'flight' || f.flightPathTurnDeg === null) continue
+      worst.set(f.leg, Math.max(worst.get(f.leg) ?? 0, f.flightPathTurnDeg))
+    }
+    return worst
+  }
+  const baseWorst = worstPerLeg(base)
+  for (const [leg, denseWorst] of worstPerLeg(dense)) {
+    const limit = Math.max(1, (baseWorst.get(leg) ?? 0) / FLIGHT_PATH_DENSITY_SHRINK)
+    assertWithinTolerance(denseWorst, limit, `flight-path kink on leg ${leg} (at 10x density)`)
+  }
+}
+
 describe('simulateCameraRoute — fixed fixture', () => {
   const frames = simulateCameraRoute(
     CAMERA_ROUTE_FIXTURE_SYSTEM,
     CAMERA_ROUTE_FIXTURE_WAYPOINTS,
     CAMERA_ROUTE_START_DATE,
     {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: CAMERA_ROUTE_TRACK_STEPS,
       trackStepMs: CAMERA_ROUTE_TRACK_STEP_MS,
     }
@@ -176,14 +213,12 @@ describe('simulateCameraRoute — fixed fixture', () => {
     })
 
     it('never spikes turn-rate mid-flight (the whiplash this fixture was built to catch)', () => {
-      // Within a single leg's flight phase, turn-rate should trend DOWN
-      // (easeOutCubic decelerates) from its first interior sample onward.
-      // Step 0 of every leg reads ~0 (sampleFlightPath is exactly
-      // continuous with wherever the camera just settled — see
-      // slerpUnitVec3's exact-endpoint handling in camera.ts), and step 1
-      // is the curve's own fastest, largest turn by construction — neither
-      // has a meaningful "previous rate" to compare against, so both are
-      // skipped and monotonic-non-increase is checked from step 2 on.
+      // Within a single leg's flight phase, turn-rate should rise and fall
+      // smoothly (smoothstep's ease-in-out) — no frame may differ from the
+      // previous one by more than the slack. Step 0 of every leg reads ~0
+      // (sampleFlightPath is exactly continuous with wherever the camera
+      // just settled — see slerpUnitVec3's exact-endpoint handling in
+      // camera.ts) and has no meaningful "previous rate", so it's skipped.
       let previousRate: number | null = null
       let previousLeg = -1
       for (const frame of frames) {
@@ -194,7 +229,7 @@ describe('simulateCameraRoute — fixed fixture', () => {
           continue
         }
         if (previousRate !== null) {
-          assertWithinTolerance(frame.turnRateDeg - previousRate, TURN_RATE_SLACK_DEG, `turn-rate spike at ${frameLabel(frame)}`)
+          assertWithinTolerance(Math.abs(frame.turnRateDeg - previousRate), TURN_RATE_SLACK_DEG, `turn-rate spike at ${frameLabel(frame)}`)
         }
         previousRate = frame.turnRateDeg
       }
@@ -207,15 +242,27 @@ describe('simulateCameraRoute — fixed fixture', () => {
       }
     })
 
-    it('never lets any single frame\'s flight-path bend exceed a hard ceiling — a sharp path change is a failure on its own', () => {
+    it('never lets any single track frame\'s path bend exceed a hard ceiling — a sharp path change is a failure on its own', () => {
       // Distinct from turn-rate: this is how much the camera's own
       // TRAJECTORY through space bends, not how much the viewing angle
       // rotates — a route can have one smooth and the other kinked (see
       // flightPathTurnDeg's own comment in routeCameraSimulator.ts).
+      // Flight frames: see the continuity test below, and
+      // MAX_FLIGHT_PATH_TURN_DEG's own comment for why.
       for (const frame of frames) {
-        if (frame.flightPathTurnDeg === null) continue
+        if (frame.flightPathTurnDeg === null || frame.phase !== 'track') continue
         assertWithinTolerance(frame.flightPathTurnDeg, MAX_FLIGHT_PATH_TURN_DEG, `flight-path-turn ceiling at ${frameLabel(frame)}`)
       }
+    })
+
+    it('bends every flight\'s path continuously — no kink that survives denser sampling', () => {
+      // Same track phases, so each flight starts from the same place.
+      const dense = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, CAMERA_ROUTE_FIXTURE_WAYPOINTS, CAMERA_ROUTE_START_DATE, {
+        framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS * 10,
+        trackSteps: CAMERA_ROUTE_TRACK_STEPS,
+        trackStepMs: CAMERA_ROUTE_TRACK_STEP_MS,
+      })
+      assertFlightPathContinuous(frames, dense)
     })
 
     it('keeps the star (no lookBias, same start and end look-at point) framed at a perfect 1.0 for the entire phase', () => {
@@ -365,7 +412,7 @@ describe('tracking accuracy across playback speeds', () => {
 
         it(`stays locked on at ${speedLabel} (${speed.toFixed(5)} d/s)`, () => {
           const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, [bodyId], CAMERA_ROUTE_START_DATE, {
-            samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+            framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
             trackSteps: CAMERA_ROUTE_TRACK_STEPS,
             trackStepMs,
           })
@@ -417,7 +464,7 @@ describe('smoothness ceilings hold for every body flown to INDEPENDENTLY, not ju
   for (const waypointId of CAMERA_ROUTE_FIXTURE_WAYPOINTS) {
     it(`${waypointId}: turn-rate and flight-path-bend ceilings hold when flown to fresh (not chained)`, () => {
       const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, [waypointId], CAMERA_ROUTE_START_DATE, {
-        samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+        framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
         trackSteps: CAMERA_ROUTE_TRACK_STEPS,
         trackStepMs: CAMERA_ROUTE_TRACK_STEP_MS,
       })
@@ -426,10 +473,17 @@ describe('smoothness ceilings hold for every body flown to INDEPENDENTLY, not ju
         if (frame.turnRateDeg !== null) {
           assertWithinTolerance(frame.turnRateDeg, MAX_TURN_RATE_DEG, `turn-rate ceiling (independent start) at ${label}`)
         }
-        if (frame.flightPathTurnDeg !== null) {
+        if (frame.flightPathTurnDeg !== null && frame.phase === 'track') {
           assertWithinTolerance(frame.flightPathTurnDeg, MAX_FLIGHT_PATH_TURN_DEG, `flight-path-turn ceiling (independent start) at ${label}`)
         }
       }
+      const dense = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, [waypointId], CAMERA_ROUTE_START_DATE, {
+        framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS * 10,
+        trackSteps: 0,
+      })
+      // (A single leg starts from the default view either way, so the
+      // track phase doesn't need matching here.)
+      assertFlightPathContinuous(frames, dense)
     })
   }
 })
@@ -442,7 +496,7 @@ describe('flight-phase trajectory prediction (predictedTargetAt)', () => {
   // (flightDaysPerSecond=0) or a single fixed endpoint.
   it('holds the look-at point still when flightDaysPerSecond is 0 (the default — unchanged behaviour)', () => {
     const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['stationA'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: 1,
       trackStepMs: 0,
     })
@@ -466,11 +520,16 @@ describe('flight-phase trajectory prediction (predictedTargetAt)', () => {
     // keep moving (following the real predicted trajectory) through the
     // LATE part of the flight, not settle onto one fixed point the
     // moment the front-loaded ease has mostly finished blending in.
+    //
+    // In its 'system' framing: arriving in the default 'body' framing puts
+    // the camera close enough to planetA that the same guard (correctly)
+    // falls back to the fixed endpoint at this speed too.
     const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['planetA'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: 1,
       trackStepMs: 0,
       flightDaysPerSecond: DEFAULT_DAYS_PER_SECOND,
+      arrivalFraming: 'system',
     })
     const flight = frames.filter((f) => f.phase === 'flight')
     const late = flight.slice(-10)
@@ -496,7 +555,7 @@ describe('flight-phase trajectory prediction (predictedTargetAt)', () => {
     // keep drifting from its arrival point once settled, the same
     // "stationary" signature as the flightDaysPerSecond=0 test above.
     const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['moonA'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: 1,
       trackStepMs: 0,
       flightDaysPerSecond: MAX_DAYS_PER_SECOND,
@@ -508,7 +567,7 @@ describe('flight-phase trajectory prediction (predictedTargetAt)', () => {
 
   it('still reaches exactly the predicted arrival point at the end of the flight (t=1 boundary unaffected)', () => {
     const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['planetA'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: 1,
       trackStepMs: 0,
       flightDaysPerSecond: DEFAULT_DAYS_PER_SECOND,
@@ -543,12 +602,12 @@ describe('track-phase smoothing (smoothTracking)', () => {
   // underlying algorithm still does what it says on a real epicycle.
   it('never makes the realistic worst case (moonA at MAX_DAYS_PER_SECOND) worse than leaving tracking unsmoothed', () => {
     const unsmoothed = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['moonA'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: CAMERA_ROUTE_TRACK_STEPS,
       trackStepMs: daysPerSecondToTrackStepMs(MAX_DAYS_PER_SECOND),
     })
     const smoothed = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['moonA'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: CAMERA_ROUTE_TRACK_STEPS,
       trackStepMs: daysPerSecondToTrackStepMs(MAX_DAYS_PER_SECOND),
       smoothTracking: true,
@@ -596,7 +655,7 @@ describe('track-phase smoothing (smoothTracking)', () => {
 
   it('keeps the resulting tracking error small — the explicit, accepted tradeoff for not spiking', () => {
     const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['moonA'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: CAMERA_ROUTE_TRACK_STEPS,
       trackStepMs: daysPerSecondToTrackStepMs(2),
       smoothTracking: true,
@@ -616,7 +675,7 @@ describe('track-phase smoothing (smoothTracking)', () => {
 
   it('leaves the default (smoothTracking: false) behaviour byte-for-byte unchanged', () => {
     const frames = simulateCameraRoute(CAMERA_ROUTE_FIXTURE_SYSTEM, ['moonA'], CAMERA_ROUTE_START_DATE, {
-      samplesPerFlight: CAMERA_ROUTE_SAMPLES_PER_FLIGHT,
+      framesPerSecond: CAMERA_ROUTE_FLIGHT_FPS,
       trackSteps: CAMERA_ROUTE_TRACK_STEPS,
       trackStepMs: daysPerSecondToTrackStepMs(2),
     })
