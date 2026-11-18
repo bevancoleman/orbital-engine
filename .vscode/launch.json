@@ -31,7 +31,7 @@
       "preLaunchTask": "examples/with-models: dev server"
     },
     {
-      "name": "Attach to running dev server (basic, :5173)",
+      "name": "Attach to Vivaldi (DevTools :9222; basic app :5173)",
       "type": "chrome",
       "request": "attach",
       "port": 9222,
